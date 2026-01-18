@@ -10,6 +10,7 @@
             "includePath": [
                 "c:/PROJEKTY/ZEGAR-ESP32/include",
                 "c:/PROJEKTY/ZEGAR-ESP32/src",
+                "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                 "c:/PROJEKTY/ZEGAR-ESP32/.pio/libdeps/esp32dev/LiquidCrystal_I2C_ESP32",
                 "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                 "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/newlib/platform_include",
@@ -237,7 +238,6 @@
                 "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/USB/src",
                 "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/Update/src",
                 "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src",
-                "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                 "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                 "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
                 ""
@@ -247,6 +247,7 @@
                 "path": [
                     "c:/PROJEKTY/ZEGAR-ESP32/include",
                     "c:/PROJEKTY/ZEGAR-ESP32/src",
+                    "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                     "c:/PROJEKTY/ZEGAR-ESP32/.pio/libdeps/esp32dev/LiquidCrystal_I2C_ESP32",
                     "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                     "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/newlib/platform_include",
@@ -474,7 +475,6 @@
                     "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/USB/src",
                     "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/Update/src",
                     "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src",
-                    "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                     "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                     "C:/Users/PC/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
                     ""

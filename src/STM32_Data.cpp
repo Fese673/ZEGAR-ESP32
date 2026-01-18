@@ -1,3 +1,5 @@
+// To jest bibloteka napisana w celu przesyłu danych dotyczących BPM i SPO2 z stm32
+
 #include "STM32_Data.h"
 
 // Global variables

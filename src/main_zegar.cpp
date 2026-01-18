@@ -5,6 +5,7 @@
 #include <time.h>
 
 // ---- Deklaracje funkcji (dla PlatformIO) ----
+// siema tutaj ja Dominik
 void drawHome();
 void drawMenu();
 void drawSetTime();

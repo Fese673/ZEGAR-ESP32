@@ -22,9 +22,11 @@ void adjustTime(int dir);
 void handleEncoder();
 void handleButton();
 void onClick();
+void onLongPress();  
 
 void tickClock();
 void syncTimeFromWiFi();
+
 
 uint8_t swapNibbles(uint8_t v);
 void slowShiftOut(uint8_t v);
@@ -33,7 +35,12 @@ void initSevenSeg();
 void updateSevenSeg(); //debug
 
 
-
+// ================= DŁUGIE PRZYTRZYMANIE =================
+unsigned long buttonPressStart = 0;
+unsigned long lastButtonAction = 0;  
+bool buttonWasLongPress = false;     
+#define LONG_PRESS_TIME 1000         
+#define DEBOUNCE_TIME 200            
 
 // ================= LCD =================
 LiquidCrystal_I2C lcd(0x27, 20, 4);
@@ -241,6 +248,20 @@ void updateSevenSeg() {
   slowShiftOut(swapNibbles(SS));
   slowShiftOut(swapNibbles(MM));
   slowShiftOut(swapNibbles(HH));
+  digitalWrite(LATCH_PIN, HIGH);
+}
+
+// ================= 7-SEG UPDATE STOPER =================
+void updateSevenSegStoper(int mins, int secs, int centisec) {
+  // Format: MM:SS:CS (minuty:sekundy:centisekundy)
+  uint8_t MM = ((mins / 10) << 4) | (mins % 10);
+  uint8_t SS = ((secs / 10) << 4) | (secs % 10);
+  uint8_t CS = ((centisec / 10) << 4) | (centisec % 10);
+
+  digitalWrite(LATCH_PIN, LOW);
+  slowShiftOut(swapNibbles(CS));  // centisekundy
+  slowShiftOut(swapNibbles(SS));  // sekundy
+  slowShiftOut(swapNibbles(MM));  // minuty
   digitalWrite(LATCH_PIN, HIGH);
 }
 
@@ -464,7 +485,7 @@ void drawStoper() {
 
   int cs = (t / 10) % 100;
   int s  = (t / 1000) % 60;
-  int m  = (t / 60000);
+  int m  = (t / 60000) % 100;  // max 99 minut
 
   LCD_SET(4, 2);
   if (m < 10) LCD_PRINT("0");
@@ -473,6 +494,8 @@ void drawStoper() {
   LCD_PRINT(s); LCD_PRINT(".");
   if (cs < 10) LCD_PRINT("0");
   LCD_PRINT(cs);
+  
+  updateSevenSegStoper(m, s, cs);  // 7 segmenty
 
   LCD_DUMP();
 }
@@ -558,12 +581,53 @@ void handleEncoder() {
 void handleButton() {
   static bool last = true;
   bool now = digitalRead(ENC_SW);
+  unsigned long currentTime = millis();
+  
+  // Przycisk został wciśnięty
   if (last && !now) {
-    onClick();
-    delay(200);
+    buttonPressStart = currentTime;
+    buttonWasLongPress = false;
   }
+  
+  // Przycisk jest trzymany - sprawdź czy długie
+  if (!now && !buttonWasLongPress) {
+    if (currentTime - buttonPressStart >= LONG_PRESS_TIME) {
+      buttonWasLongPress = true;
+      if (currentTime - lastButtonAction >= DEBOUNCE_TIME) {
+        lastButtonAction = currentTime;
+        onLongPress();
+      }
+    }
+  }
+  
+  // Przycisk został puszczony - sprawdź czy to było krótkie kliknięcie
+  if (!last && now && !buttonWasLongPress) {
+    if (currentTime - lastButtonAction >= DEBOUNCE_TIME) {
+      lastButtonAction = currentTime;
+      onClick();
+    }
+  }
+  
   last = now;
 }
+
+// ================= DŁUGIE PRZYTRZYMANIE =================
+void onLongPress() {
+  if (appState == STATE_STOPER) {
+    // Wyjście ze stopera do menu
+    appState = STATE_MENU;
+    updateSevenSeg();  // Przywróć normalny zegar na 7-seg
+    drawMenu();
+  }
+  else if (appState == STATE_DEBUG_STM32) {
+    // Wyjście z debug do menu
+    appState = STATE_MENU;
+    updateSevenSeg();
+    drawMenu();
+  }
+  // Tutaj możemy dodac więcej stanów które obsługują długie przytrzymanie 
+}
+
 
 void onClick() {
   if (appState == STATE_HOME) {
@@ -590,11 +654,13 @@ void onClick() {
     }
     else if (menuIndex == 3) {
       syncTimeFromWiFi();
-      drawHome();
+      updateSevenSeg();
+      drawMenu();  // FIX 
     }
     else if (menuIndex == 4) {                  
       appState = STATE_DEBUG_STM32;
       lastSTM32Update = 0;
+      updateSevenSeg();
       drawDebugSTM32();
     }
     else {
@@ -603,7 +669,7 @@ void onClick() {
     }
   }
 
-   // >>> DODAJEMY TO: obsługa kliknięcia w trybie STOPER <<<
+// ----------------Stoper------------------
   else if (appState == STATE_STOPER) {
     if (!stoperRunning) {
       // START / WZNÓW
@@ -618,6 +684,7 @@ void onClick() {
   }
    else if (appState == STATE_DEBUG_STM32) {    
     appState = STATE_HOME;
+    updateSevenSeg();
     drawHome();
   }
   else if (appState == STATE_SET_TIME) {
@@ -625,6 +692,7 @@ void onClick() {
     if (editState == EDIT_DONE) {
       lastTick = millis();
       appState = STATE_HOME;
+      updateSevenSeg();
       drawHome();
     } else drawSetTime();
   }
@@ -633,6 +701,7 @@ void onClick() {
     if (editState > EDIT_MINUTES) {
       alarmEnabled = true;
       appState = STATE_HOME;
+      updateSevenSeg();
       drawHome();
     } else drawAlarm();
   }

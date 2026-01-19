@@ -3,13 +3,17 @@
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
 #include <time.h>
+#include "STM32_Data.h"  // Nasza bibloteczka
 
 // ---- Deklaracje funkcji (dla PlatformIO) ----
+// siema tutaj ja Dominik
+// elo elo
 void drawHome();
 void drawMenu();
 void drawSetTime();
 void drawAlarm();
 void drawStoper();
+void drawDebugSTM32();  
 
 void printTime(bool edit);
 void printVal(int v, bool sel);
@@ -90,7 +94,8 @@ enum AppState {
   STATE_MENU,
   STATE_SET_TIME,
   STATE_STOPER,
-  STATE_ALARM
+  STATE_ALARM,
+  STATE_DEBUG_STM32
 };
 AppState appState = STATE_HOME;
 
@@ -108,10 +113,19 @@ const char* menuItems[] = {
   "Stoper",
   "Budzik",
   "Czas z WiFi",
+  "Debug STM32",
   "Wyjscie"
 };
-const int menuCount = 5;
+const int menuCount = 6;
 int menuIndex = 0;
+
+// ================= STM32 DANE (UART) =================
+HardwareSerial &uart = Serial2; 
+unsigned long lastSTM32Update = 0;
+unsigned long lastSTM32DataReceived = 0;    
+int displayedBPM = 0;
+int displayedSPO2 = 0;
+bool stm32Connected = false;
 
 
 // ================= UART LCD MIRROR (AUTO) =================
@@ -265,6 +279,9 @@ void setup() {
   noTone(BUZZER_PIN);
 
   initSevenSeg();
+
+  STM32data_begin(uart, 115200, 16, 17);
+
   drawHome();
 }
 
@@ -274,6 +291,28 @@ void loop() {
   handleEncoder();
   handleButton();
   tickClock();
+
+  // ------------------ BLOK STM32-----------------
+  if (appState == STATE_DEBUG_STM32 && millis() - lastSTM32Update >= 500) {
+    lastSTM32Update = millis();
+    
+    STM32data_update();
+    
+    if (stmDataUpdated) {
+      stmDataUpdated = false;
+      displayedBPM = bpmNumber;
+      displayedSPO2 = spo2Number;
+      stm32Connected = true;
+      lastSTM32DataReceived = millis();     //  ZAPISZ CZAS OSTATNICH DANYCH
+    } else if (millis() - lastSTM32DataReceived > 3000) {
+      // Jeśli od ostatniego pakietu minęło więcej niż 3 sekundy wykonaj poprostu zerowanie hi hi
+      stm32Connected = false;
+      displayedBPM = 0;
+      displayedSPO2 = 0;
+    }
+    
+    drawDebugSTM32();
+  }
 
   if (alarmRinging) {
     playAlarmMelody();
@@ -438,6 +477,30 @@ void drawStoper() {
   LCD_DUMP();
 }
 
+void drawDebugSTM32() {
+  LCD_CLEAR();
+  LCD_SET(2, 0);
+  LCD_PRINT("DEBUG STM32");
+  
+  LCD_SET(0, 1);
+  LCD_PRINT("BPM: ");
+  LCD_PRINT(displayedBPM);
+  
+  LCD_SET(0, 2);
+  LCD_PRINT("SPO2: ");
+  LCD_PRINT(displayedSPO2);
+  LCD_PRINT("%");
+  
+  LCD_SET(0, 3);
+  if (stm32Connected) {
+    LCD_PRINT("Status: OK");
+  } else {
+    LCD_PRINT("Status: OFFLINE");
+  }
+  
+  LCD_DUMP();
+}
+
 
 void printTime(bool edit) {
   printVal(hours, edit && editState == EDIT_HOURS);
@@ -529,6 +592,11 @@ void onClick() {
       syncTimeFromWiFi();
       drawHome();
     }
+    else if (menuIndex == 4) {                  
+      appState = STATE_DEBUG_STM32;
+      lastSTM32Update = 0;
+      drawDebugSTM32();
+    }
     else {
       appState = STATE_HOME;
       drawHome();
@@ -548,7 +616,10 @@ void onClick() {
     }
     drawStoper();
   }
-  
+   else if (appState == STATE_DEBUG_STM32) {    
+    appState = STATE_HOME;
+    drawHome();
+  }
   else if (appState == STATE_SET_TIME) {
     editState = (EditState)(editState + 1);
     if (editState == EDIT_DONE) {

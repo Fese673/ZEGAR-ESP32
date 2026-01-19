@@ -6,46 +6,84 @@
 #include "STM32_Data.h"  // Nasza bibloteczka
 #include "LCDMirror.h"   // Okablowanie LCD troche wiecej porządku w main 
 
-// ---- Deklaracje funkcji (dla PlatformIO) ----
-// siema tutaj ja Dominik
-// elo elo
+// ========== Deklaracje funkcji (dla PlatformIO) ==========
+
+// --- UI / LCD ---
 void drawHome();
 void drawMenu();
 void drawSetTime();
 void drawAlarm();
 void drawStoper();
 void drawDebugSTM32();  
-
 void printTime(bool edit);
 void printVal(int v, bool sel);
 
-void adjustTime(int dir);
+// --- Obsługa wejścia ---
 void handleEncoder();
 void handleButton();
 void onClick();
 void onLongPress();  
+void adjustTime(int dir);
 
+// --- Logika zegara ---
 void tickClock();
 void syncTimeFromWiFi();
-
-
 uint8_t swapNibbles(uint8_t v);
 void slowShiftOut(uint8_t v);
-void initSevenSeg();
 
+// ---Nie-wiem---
+void initSevenSeg();
 void updateSevenSeg(); //debug
 
+// ---- ENUMERACJE (stany aplikacji) ----
 
-// ================= DŁUGIE PRZYTRZYMANIE =================
-unsigned long buttonPressStart = 0;
-unsigned long lastButtonAction = 0;  
-bool buttonWasLongPress = false;     
-#define LONG_PRESS_TIME 1000         
-#define DEBOUNCE_TIME 200            
+enum AppState {
+  STATE_HOME,
+  STATE_MENU,
+  STATE_SET_TIME,
+  STATE_STOPER,
+  STATE_ALARM,
+  STATE_DEBUG_STM32
+};
 
-// ================= LCD =================
-// ikona budzika
-byte alarmIcon[8] = {
+enum EditState {
+  EDIT_HOURS,
+  EDIT_MINUTES,
+  EDIT_SECONDS,
+  EDIT_DONE
+};
+
+// ---- KONFIGURACJA SPRZĘTU (PIN + STAŁE) ----
+
+// --- 7-SEG (74HC595) ---
+#define DATA_PIN   23
+#define CLOCK_PIN  18
+#define LATCH_PIN   5
+
+// --- Buzzer ---
+#define BUZZER_PIN 19
+int melodyFreq[] = { 1000, 1400, 1000, 1600 };
+const int melodyLen = 4;
+
+// --- Encoder ---
+#define ENC_CLK 25
+#define ENC_DT  26
+#define ENC_SW  27
+int lastCLK;
+
+// --- UART / Komunikacja ---
+#define UART_BAUD 115200 
+HardwareSerial &uart = Serial2; 
+
+// --- WiFi / NTP ---
+const char* WIFI_SSID = "IPhone";
+const char* WIFI_PASS = "12345678";
+const char* NTP_SERVER = "pool.ntp.org";
+const long GMT_OFFSET = 3600;
+const int DST_OFFSET = 3600;
+
+// --- LCD ---
+byte alarmIcon[8] = { 
   B00100,
   B01110,
   B01110,
@@ -56,37 +94,14 @@ byte alarmIcon[8] = {
   B00000
 };
 
-// ================= ENCODER =================
-#define ENC_CLK 25
-#define ENC_DT  26
-#define ENC_SW  27
-int lastCLK;
+// ========== ZMIENNE GLOBALNE (pogrupowane funkcjonalnie) ==========
 
-// ================= 7-SEG (74HC595) =================
-#define DATA_PIN   23
-#define CLOCK_PIN  18
-#define LATCH_PIN   5
+// --- Stany aplikacji ---
+AppState appState = STATE_HOME;
+EditState editState = EDIT_HOURS;
+int menuIndex = 0;
 
-// ================= BUZZER =================
-#define BUZZER_PIN 19
-
-// ================= WIFI / NTP =================
-const char* WIFI_SSID = "IPhone";
-const char* WIFI_PASS = "12345678";
-const char* NTP_SERVER = "pool.ntp.org";
-const long GMT_OFFSET = 3600;
-const int DST_OFFSET = 3600;
-
-// ================= CZAS =================
-int hours = 12, minutes = 0, seconds = 0;
-unsigned long lastTick = 0;
-
-// ================= STOPER =================
-bool stoperRunning = false;
-unsigned long stoperStart = 0, stoperElapsed = 0;
-unsigned long lastStoperDraw = 0;
-
-// ================= BUDZIK =================
+// --- Budzik ---
 int alarmHour = 7, alarmMinute = 0;
 bool alarmEnabled = false;
 bool alarmRinging = false;
@@ -94,26 +109,14 @@ unsigned long alarmStartTime = 0;
 unsigned long lastMelodyStep = 0;
 int melodyStep = 0;
 
-// ================= STANY =================
-enum AppState {
-  STATE_HOME,
-  STATE_MENU,
-  STATE_SET_TIME,
-  STATE_STOPER,
-  STATE_ALARM,
-  STATE_DEBUG_STM32
-};
-AppState appState = STATE_HOME;
+// --- Przycisk (debouncing + długie przytrzymanie) ---
+unsigned long buttonPressStart = 0;
+unsigned long lastButtonAction = 0;  
+bool buttonWasLongPress = false;     
+#define LONG_PRESS_TIME 1000         
+#define DEBOUNCE_TIME 200      
 
-enum EditState {
-  EDIT_HOURS,
-  EDIT_MINUTES,
-  EDIT_SECONDS,
-  EDIT_DONE
-};
-EditState editState = EDIT_HOURS;
-
-// ================= MENU =================
+// --- MENU ---
 const char* menuItems[] = {
   "Ustaw czas",
   "Stoper",
@@ -123,20 +126,24 @@ const char* menuItems[] = {
   "Wyjscie"
 };
 const int menuCount = 6;
-int menuIndex = 0;
 
-// ================= STM32 DANE (UART) =================
-HardwareSerial &uart = Serial2; 
+// --- STM32 DANE (UART) ---
 unsigned long lastSTM32Update = 0;
 unsigned long lastSTM32DataReceived = 0;    
 int displayedBPM = 0;
 int displayedSPO2 = 0;
 bool stm32Connected = false;
 
+// --- STOPER ---
+bool stoperRunning = false;
+unsigned long stoperStart = 0, stoperElapsed = 0;
+unsigned long lastStoperDraw = 0;
 
+// --- Czas (HH:MM:SS) ---
+int hours = 12, minutes = 0, seconds = 0;
+unsigned long lastTick = 0;
 
-
-// ================= 7-SEG LOW LEVEL (MUSI BYĆ ZDEFINIOWANE) =================
+// ---- IMPLEMENTACJA FUNKCJI - 7-SEGMENT DISPLAY ----
 uint8_t swapNibbles(uint8_t v) { return (v << 4) | (v >> 4); }
 
 static void pulse(int pin) {
@@ -172,8 +179,6 @@ void initSevenSeg() {
   digitalWrite(LATCH_PIN, HIGH);
 }
 
-
-// ================= 7-SEG UPDATE =================
 void updateSevenSeg() {
   uint8_t HH = ((hours / 10) << 4) | (hours % 10);
   uint8_t MM = ((minutes / 10) << 4) | (minutes % 10);
@@ -186,7 +191,6 @@ void updateSevenSeg() {
   digitalWrite(LATCH_PIN, HIGH);
 }
 
-// ================= 7-SEG UPDATE STOPER =================
 void updateSevenSegStoper(int mins, int secs, int centisec) {
   // Format: MM:SS:CS (minuty:sekundy:centisekundy)
   uint8_t MM = ((mins / 10) << 4) | (mins % 10);
@@ -200,164 +204,8 @@ void updateSevenSegStoper(int mins, int secs, int centisec) {
   digitalWrite(LATCH_PIN, HIGH);
 }
 
-// ================= MELODYJKA =================
-int melodyFreq[] = { 1000, 1400, 1000, 1600 };
-const int melodyLen = 4;
+// ========== IMPLEMENTACJA FUNKCJI - UI / LCD ==========
 
-void playAlarmMelody() {
-  if (millis() - lastMelodyStep >= 300) {
-    lastMelodyStep = millis();
-    tone(BUZZER_PIN, melodyFreq[melodyStep]);
-    melodyStep = (melodyStep + 1) % melodyLen;
-  }
-}
-
-//------------UART-------------
-#define UART_BAUD 115200  
-
-// ================= SETUP =================
-void setup() {
- Serial.begin(UART_BAUD);
-  delay(800);
-#if UART_LCD_MIRROR
-  lcdMirror.begin();
-#endif
-
-//  dbgInit(); //debug
-  Wire.begin();
-  lcd.init();
-  lcd.backlight();
-  lcd.createChar(0, alarmIcon);
-
-  pinMode(ENC_CLK, INPUT_PULLUP);
-  pinMode(ENC_DT, INPUT_PULLUP);
-  pinMode(ENC_SW, INPUT_PULLUP);
-  lastCLK = digitalRead(ENC_CLK);
-
-  pinMode(BUZZER_PIN, OUTPUT);
-  noTone(BUZZER_PIN);
-
-  initSevenSeg();
-
-  STM32data_begin(uart, 115200, 16, 17);
-
-  drawHome();
-}
-
-// ================= LOOP =================
-void loop() {
-//  dbgLoop(); // debug
-  handleEncoder();
-  handleButton();
-  tickClock();
-
-  // ------------------ BLOK STM32-----------------
-  if (appState == STATE_DEBUG_STM32 && millis() - lastSTM32Update >= 500) {
-    lastSTM32Update = millis();
-    
-    STM32data_update();
-    
-    if (stmDataUpdated) {
-      stmDataUpdated = false;
-      displayedBPM = bpmNumber;
-      displayedSPO2 = spo2Number;
-      stm32Connected = true;
-      lastSTM32DataReceived = millis();     //  ZAPISZ CZAS OSTATNICH DANYCH
-    } else if (millis() - lastSTM32DataReceived > 3000) {
-      // Jeśli od ostatniego pakietu minęło więcej niż 3 sekundy wykonaj poprostu zerowanie hi hi
-      stm32Connected = false;
-      displayedBPM = 0;
-      displayedSPO2 = 0;
-    }
-    
-    drawDebugSTM32();
-  }
-
-  if (alarmRinging) {
-    playAlarmMelody();
-    if (millis() - alarmStartTime >= 5000) {
-      noTone(BUZZER_PIN);
-      alarmRinging = false;
-      alarmEnabled = false;
-      melodyStep = 0;
-    }
-  }
-
-  if (appState == STATE_STOPER && millis() - lastStoperDraw >= 100) {
-    lastStoperDraw = millis();
-    drawStoper();
-  }
-}
-
-// ================= ZEGAR + BUDZIK =================
-void tickClock() {
-  if (appState == STATE_SET_TIME) return;
-
-  if (millis() - lastTick >= 1000) {
-    lastTick += 1000;
-    seconds++;
-    if (seconds >= 60) {
-      seconds = 0;
-      minutes++;
-      if (minutes >= 60) {
-        minutes = 0;
-        hours = (hours + 1) % 24;
-      }
-    }
-    updateSevenSeg();
-    if (appState == STATE_HOME) drawHome();
-  }
-
-  if (alarmEnabled && !alarmRinging &&
-      hours == alarmHour && minutes == alarmMinute && seconds == 0) {
-    alarmRinging = true;
-    alarmStartTime = millis();
-    lastMelodyStep = 0;
-  }
-}
-
-// ================= WIFI =================
-void syncTimeFromWiFi() {
-  LCD_CLEAR();
-  LCD_SET(0, 1);
-  LCD_PRINT("Laczenie z WiFi");
-  LCD_DUMP();
-
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  int tries = 0;
-  while (WiFi.status() != WL_CONNECTED && tries < 20) {
-    delay(500);
-    LCD_PRINT(".");
-    tries++;
-    LCD_DUMP();
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    LCD_CLEAR();
-    LCD_SET(0, 1);
-    LCD_PRINT("Blad WiFi");
-    LCD_DUMP();
-    delay(2000);
-    return;
-  }
-
-  configTime(GMT_OFFSET, DST_OFFSET, NTP_SERVER);
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
-    hours = timeinfo.tm_hour;
-    minutes = timeinfo.tm_min;
-    seconds = timeinfo.tm_sec;
-    lastTick = millis();
-  }
-
-  LCD_CLEAR();
-  LCD_SET(0, 1);
-  LCD_PRINT("Czas ustawiony");
-  LCD_DUMP();
-  delay(1500);
-}
-
-// ================= LCD =================
 void drawHome() {
   LCD_CLEAR();
   LCD_SET(4, 1);
@@ -417,6 +265,7 @@ void drawAlarm() {
   LCD_DUMP();
 }
 
+
 void drawStoper() {
   unsigned long t = stoperElapsed;
   if (stoperRunning) t += millis() - stoperStart;
@@ -437,6 +286,7 @@ void drawStoper() {
 
   LCD_DUMP();
 }
+
 
 void drawDebugSTM32() {
   LCD_CLEAR();
@@ -471,6 +321,7 @@ void printTime(bool edit) {
   printVal(seconds, edit && editState == EDIT_SECONDS);
 }
 
+
 void printVal(int v, bool sel) {
   if (sel) LCD_PRINT("[");
   if (v < 10) LCD_PRINT("0");
@@ -478,20 +329,9 @@ void printVal(int v, bool sel) {
   if (sel) LCD_PRINT("]");
 }
 
-// ================= SET TIME =================
-void adjustTime(int dir) {
-  if (editState == EDIT_HOURS)
-    hours = (hours + dir + 24) % 24;
-  else if (editState == EDIT_MINUTES)
-    minutes = (minutes + dir + 60) % 60;
-  else if (editState == EDIT_SECONDS)
-    seconds = (seconds + dir + 60) % 60;
+// ========== IMPLEMENTACJA FUNKCJI - OBSŁUGA WEJŚCIA ==========
 
-  drawSetTime();
-  updateSevenSeg();
-}
-
-// ================= ENCODER =================
+// ---  ---
 void handleEncoder() {
   int clk = digitalRead(ENC_CLK);
   if (clk != lastCLK && clk == LOW) {
@@ -515,19 +355,18 @@ void handleEncoder() {
   lastCLK = clk;
 }
 
-// ================= BUTTON =================
+// ---  ---
 void handleButton() {
   static bool last = true;
   bool now = digitalRead(ENC_SW);
   unsigned long currentTime = millis();
   
-  // Przycisk został wciśnięty
+
   if (last && !now) {
     buttonPressStart = currentTime;
     buttonWasLongPress = false;
   }
   
-  // Przycisk jest trzymany - sprawdź czy długie
   if (!now && !buttonWasLongPress) {
     if (currentTime - buttonPressStart >= LONG_PRESS_TIME) {
       buttonWasLongPress = true;
@@ -537,8 +376,7 @@ void handleButton() {
       }
     }
   }
-  
-  // Przycisk został puszczony - sprawdź czy to było krótkie kliknięcie
+
   if (!last && now && !buttonWasLongPress) {
     if (currentTime - lastButtonAction >= DEBOUNCE_TIME) {
       lastButtonAction = currentTime;
@@ -549,7 +387,20 @@ void handleButton() {
   last = now;
 }
 
-// ================= DŁUGIE PRZYTRZYMANIE =================
+// --- SET TIME ---
+void adjustTime(int dir) {
+  if (editState == EDIT_HOURS)
+    hours = (hours + dir + 24) % 24;
+  else if (editState == EDIT_MINUTES)
+    minutes = (minutes + dir + 60) % 60;
+  else if (editState == EDIT_SECONDS)
+    seconds = (seconds + dir + 60) % 60;
+
+  drawSetTime();
+  updateSevenSeg();
+}
+
+// --- DŁUGIE PRZYTRZYMANIE ---
 void onLongPress() {
   if (appState == STATE_STOPER) {
     // Wyjście ze stopera do menu
@@ -566,7 +417,7 @@ void onLongPress() {
   // Tutaj możemy dodac więcej stanów które obsługują długie przytrzymanie 
 }
 
-
+// ---  ---
 void onClick() {
   if (appState == STATE_HOME) {
     appState = STATE_MENU;
@@ -607,7 +458,7 @@ void onClick() {
     }
   }
 
-// ----------------Stoper------------------
+// --- Stoper ---
   else if (appState == STATE_STOPER) {
     if (!stoperRunning) {
       // START / WZNÓW
@@ -644,3 +495,181 @@ void onClick() {
     } else drawAlarm();
   }
 }
+
+// ========== IMPLEMENTACJA FUNKCJI - LOGIKA ZEGARA ==========
+
+// --- ZEGAR + BUDZIK ---
+void tickClock() {
+  if (appState == STATE_SET_TIME) return;
+
+  if (millis() - lastTick >= 1000) {
+    lastTick += 1000;
+    seconds++;
+    if (seconds >= 60) {
+      seconds = 0;
+      minutes++;
+      if (minutes >= 60) {
+        minutes = 0;
+        hours = (hours + 1) % 24;
+      }
+    }
+    updateSevenSeg();
+    if (appState == STATE_HOME) drawHome();
+  }
+
+  if (alarmEnabled && !alarmRinging &&
+      hours == alarmHour && minutes == alarmMinute && seconds == 0) {
+    alarmRinging = true;
+    alarmStartTime = millis();
+    lastMelodyStep = 0;
+  }
+}
+
+// --- WIFI ---
+void syncTimeFromWiFi() {
+  LCD_CLEAR();
+  LCD_SET(0, 1);
+  LCD_PRINT("Laczenie z WiFi");
+  LCD_DUMP();
+
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  int tries = 0;
+  while (WiFi.status() != WL_CONNECTED && tries < 20) {
+    delay(500);
+    LCD_PRINT(".");
+    tries++;
+    LCD_DUMP();
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    LCD_CLEAR();
+    LCD_SET(0, 1);
+    LCD_PRINT("Blad WiFi");
+    LCD_DUMP();
+    delay(2000);
+    return;
+  }
+
+  configTime(GMT_OFFSET, DST_OFFSET, NTP_SERVER);
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    hours = timeinfo.tm_hour;
+    minutes = timeinfo.tm_min;
+    seconds = timeinfo.tm_sec;
+    lastTick = millis();
+  }
+
+  LCD_CLEAR();
+  LCD_SET(0, 1);
+  LCD_PRINT("Czas ustawiony");
+  LCD_DUMP();
+  delay(1500);
+}
+
+// ========== IMPLEMENTACJA FUNKCJI - ALARM / BUZZER ==========
+
+void playAlarmMelody() {
+  if (millis() - lastMelodyStep >= 300) {
+    lastMelodyStep = millis();
+    tone(BUZZER_PIN, melodyFreq[melodyStep]);
+    melodyStep = (melodyStep + 1) % melodyLen;
+  }
+}
+
+// ================= SETUP =================
+
+void setup() {
+ Serial.begin(UART_BAUD);
+  delay(800);
+
+#if UART_LCD_MIRROR
+  lcdMirror.begin();
+#endif
+
+  Wire.begin();
+  lcd.init();
+  lcd.backlight();
+  lcd.createChar(0, alarmIcon);
+
+  // --- Encoder setup ---
+  pinMode(ENC_CLK, INPUT_PULLUP);
+  pinMode(ENC_DT, INPUT_PULLUP);
+  pinMode(ENC_SW, INPUT_PULLUP);
+  lastCLK = digitalRead(ENC_CLK);
+
+  // --- Buzzer setup ---
+  pinMode(BUZZER_PIN, OUTPUT);
+  noTone(BUZZER_PIN);
+  
+  // --- 7-Segment setup ---
+  initSevenSeg();
+
+  // --- STM32 setup ---
+  STM32data_begin(uart, 115200, 16, 17);
+
+  drawHome();
+}
+
+// ================= LOOP =================
+
+void loop() {
+  handleEncoder();
+  handleButton();
+  tickClock();
+
+  // --- STM32 Debug State ---
+  if (appState == STATE_DEBUG_STM32 && millis() - lastSTM32Update >= 500) {
+    lastSTM32Update = millis();
+    
+    STM32data_update();
+    
+    if (stmDataUpdated) {
+      stmDataUpdated = false;
+      displayedBPM = bpmNumber;
+      displayedSPO2 = spo2Number;
+      stm32Connected = true;
+      lastSTM32DataReceived = millis();     //  ZAPISZ CZAS OSTATNICH DANYCH
+    } else if (millis() - lastSTM32DataReceived > 3000) {
+      // Jeśli od ostatniego pakietu minęło więcej niż 3 sekundy wykonaj poprostu zerowanie hi hi
+      stm32Connected = false;
+      displayedBPM = 0;
+      displayedSPO2 = 0;
+    }
+    
+    drawDebugSTM32();
+  }
+
+  // --- Alarm Ringing ---
+  if (alarmRinging) {
+    playAlarmMelody();
+    if (millis() - alarmStartTime >= 5000) {
+      noTone(BUZZER_PIN);
+      alarmRinging = false;
+      alarmEnabled = false;
+      melodyStep = 0;
+    }
+  }
+
+  // --- Stopwatch Drawing ---
+  if (appState == STATE_STOPER && millis() - lastStoperDraw >= 100) {
+    lastStoperDraw = millis();
+    drawStoper();
+  }
+}
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+

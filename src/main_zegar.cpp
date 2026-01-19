@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <time.h>
 #include "STM32_Data.h"  // Nasza bibloteczka
+#include "LCDMirror.h"   // Okablowanie LCD troche wiecej porządku w main 
 
 // ---- Deklaracje funkcji (dla PlatformIO) ----
 // siema tutaj ja Dominik
@@ -43,8 +44,6 @@ bool buttonWasLongPress = false;
 #define DEBOUNCE_TIME 200            
 
 // ================= LCD =================
-LiquidCrystal_I2C lcd(0x27, 20, 4);
-
 // ikona budzika
 byte alarmIcon[8] = {
   B00100,
@@ -135,71 +134,7 @@ int displayedSPO2 = 0;
 bool stm32Connected = false;
 
 
-// ================= UART LCD MIRROR (AUTO) =================
-#define UART_LCD_MIRROR 1  // #define UART_LCD_MIRROR 1 → mirror włączony (bufor + zrzuty na UART).  | #define UART_LCD_MIRROR 0 → mirror wyłączony, wrappery działają jak zwykły LCD (bez UART).
 
-#define UART_BAUD 115200
-
-#if UART_LCD_MIRROR
-class LcdMirror20x4 : public Print {
-public:
-  void begin() { clear(); }
-
-  void clear() {
-    for (int r = 0; r < 4; r++) {
-      for (int c = 0; c < 20; c++) buf[r][c] = ' ';
-      buf[r][20] = '\0';
-    }
-    x = 0; y = 0;
-  }
-
-  void setCursor(uint8_t col, uint8_t row) {
-    x = col; y = row;
-  }
-
-  size_t write(uint8_t ch) override {
-    if (y < 4 && x < 20) {
-      char out = (ch >= 32) ? (char)ch : '?'; // znaki sterujące -> '?'
-      if (ch == 0) out = '*';                 // custom char 0 -> '*'
-      buf[y][x] = out;
-    }
-    if (x < 20) x++;
-    return 1;
-  }
-
-  void dumpUART() {
-    Serial.println();
-    Serial.println("+--------------------+");
-    for (int r = 0; r < 4; r++) {
-      Serial.print("|");
-      Serial.write((const uint8_t*)buf[r], 20);
-      Serial.println("|");
-    }
-    Serial.println("+--------------------+");
-  }
-
-private:
-  char buf[4][21];
-  uint8_t x = 0, y = 0;
-};
-
-LcdMirror20x4 lcdMirror;
-
-
-// Wrappery: LCD + mirror w jednym miejscu
-inline void LCD_CLEAR() { lcd.clear(); lcdMirror.clear(); }
-inline void LCD_SET(uint8_t c, uint8_t r) { lcd.setCursor(c, r); lcdMirror.setCursor(c, r); }
-template<typename T> inline void LCD_PRINT(const T& v) { lcd.print(v); lcdMirror.print(v); }
-inline void LCD_WRITE(uint8_t b) { lcd.write(b); lcdMirror.write(b); }
-inline void LCD_DUMP() { lcdMirror.dumpUART(); }
-
-#else
-inline void LCD_CLEAR() { lcd.clear(); }
-inline void LCD_SET(uint8_t c, uint8_t r) { lcd.setCursor(c, r); }
-template<typename T> inline void LCD_PRINT(const T& v) { lcd.print(v); }
-inline void LCD_WRITE(uint8_t b) { lcd.write(b); }
-inline void LCD_DUMP() {}
-#endif
 
 // ================= 7-SEG LOW LEVEL (MUSI BYĆ ZDEFINIOWANE) =================
 uint8_t swapNibbles(uint8_t v) { return (v << 4) | (v >> 4); }
@@ -276,6 +211,9 @@ void playAlarmMelody() {
     melodyStep = (melodyStep + 1) % melodyLen;
   }
 }
+
+//------------UART-------------
+#define UART_BAUD 115200  
 
 // ================= SETUP =================
 void setup() {

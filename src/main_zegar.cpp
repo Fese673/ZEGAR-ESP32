@@ -513,7 +513,13 @@ void tickClock() {
         hours = (hours + 1) % 24;
       }
     }
-    updateSevenSeg();
+
+    // Aktualizuj wyświetlacz tylko gdy NIE jest aktywny stoper
+    if (appState != STATE_STOPER) {
+    updateSevenSeg(); // tutaj
+
+    }
+    // lub tutaj  updateSevenSeg();
     if (appState == STATE_HOME) drawHome();
   }
 

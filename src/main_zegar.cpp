@@ -51,6 +51,9 @@ const int melodyLen = 4;
 #define ENC_DT 26
 #define ENC_SW 27
 
+// --- Debounce dla enkodera ---
+#define ENCODER_DEBOUNCE_MS 150
+
 // --- UART / Komunikacja ---
 #define UART_BAUD 115200
 HardwareSerial &uart = Serial2;
@@ -111,6 +114,9 @@ bool stm32Connected = false;
 bool stoperRunning = false;
 unsigned long stoperStart = 0, stoperElapsed = 0;
 unsigned long lastStoperDraw = 0;
+
+// --- Debounce Enkodera ---
+unsigned long lastEncoderEvent = 0;
 
 // --- Czas (HH:MM:SS) ---
 int hours = 12, minutes = 0, seconds = 0;
@@ -416,7 +422,11 @@ void loop() {
   // ===== NOWE: Enkoder + UI (zamiast handleEncoder/Button) =====
   EncoderEvent evt = encoder_update();
   if (evt != ENC_NONE) {
-    ui_handleEvent(evt);
+    // Debounce: ignoruj eventy przychodzące zbyt szybko
+    if (millis() - lastEncoderEvent >= ENCODER_DEBOUNCE_MS) {
+      lastEncoderEvent = millis();
+      ui_handleEvent(evt);
+    }
   }
 
   tickClock();

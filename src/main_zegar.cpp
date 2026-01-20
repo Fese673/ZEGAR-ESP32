@@ -3,8 +3,11 @@
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
 #include <time.h>
+
 #include "STM32_Data.h"  // Nasza bibloteczka
 #include "LCDMirror.h"   // Okablowanie LCD troche wiecej porządku w main 
+#include "UI_Controller.h"
+//#include "AppState.h"
 
 // ========== Deklaracje funkcji (dla PlatformIO) ==========
 

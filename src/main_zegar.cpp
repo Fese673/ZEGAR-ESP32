@@ -4,12 +4,13 @@
 #include <WiFi.h>
 #include <time.h>
 
-#include "STM32_Data.h"  // Nasza bibloteczka
-#include "LCDMirror.h"   // Okablowanie LCD troche wiecej porządku w main 
+#include "STM32_Data.h"
+#include "LCDMirror.h"
 #include "UI_Controller.h"
+#include "Encoder.h"
 #include "AppState.h"
 
-// ========== Deklaracje funkcji (dla PlatformIO) ==========
+// ========== DEKLARACJE FUNKCJI (dla PlatformIO) ==========
 
 // --- UI / LCD ---
 void drawHome();
@@ -17,45 +18,42 @@ void drawMenu();
 void drawSetTime();
 void drawAlarm();
 void drawStoper();
-void drawDebugSTM32();  
+void drawDebugSTM32();
 void printTime(bool edit);
 void printVal(int v, bool sel);
-
-
+void updateSevenSegStoper(int mins, int secs, int centisec);
 
 // --- Logika zegara ---
 void tickClock();
 void syncTimeFromWiFi();
+void playAlarmMelody();
+
+// --- 7-Segment ---
 uint8_t swapNibbles(uint8_t v);
 void slowShiftOut(uint8_t v);
-
-// ---Nie-wiem---
 void initSevenSeg();
-void updateSevenSeg(); //debug
-
-
+void updateSevenSeg();
 
 // ---- KONFIGURACJA SPRZĘTU (PIN + STAŁE) ----
 
 // --- 7-SEG (74HC595) ---
-#define DATA_PIN   23
-#define CLOCK_PIN  18
-#define LATCH_PIN   5
+#define DATA_PIN 23
+#define CLOCK_PIN 18
+#define LATCH_PIN 5
 
 // --- Buzzer ---
 #define BUZZER_PIN 19
 int melodyFreq[] = { 1000, 1400, 1000, 1600 };
 const int melodyLen = 4;
 
-// --- Encoder ---
+// --- Encoder (piny dla encoder_begin) ---
 #define ENC_CLK 25
-#define ENC_DT  26
-#define ENC_SW  27
-
+#define ENC_DT 26
+#define ENC_SW 27
 
 // --- UART / Komunikacja ---
-#define UART_BAUD 115200 
-HardwareSerial &uart = Serial2; 
+#define UART_BAUD 115200
+HardwareSerial &uart = Serial2;
 
 // --- WiFi / NTP ---
 const char* WIFI_SSID = "IPhone";
@@ -64,8 +62,8 @@ const char* NTP_SERVER = "pool.ntp.org";
 const long GMT_OFFSET = 3600;
 const int DST_OFFSET = 3600;
 
-// --- LCD ---
-byte alarmIcon[8] = { 
+// --- LCD Custom Character ---
+byte alarmIcon[8] = {
   B00100,
   B01110,
   B01110,
@@ -78,18 +76,12 @@ byte alarmIcon[8] = {
 
 // ========== ZMIENNE GLOBALNE (pogrupowane funkcjonalnie) ==========
 
+// --- AppState (EXTERN z AppState.cpp) ---
+// extern AppState appState;        (jest w AppState.cpp)
+// extern EditState editState;      (jest w AppState.cpp)
 
-
-// --- Budzik ---
-int alarmHour = 7, alarmMinute = 0;
-bool alarmEnabled = false;
-bool alarmRinging = false;
-unsigned long alarmStartTime = 0;
-unsigned long lastMelodyStep = 0;
-int melodyStep = 0;
-
-
-// --- MENU ---
+// --- Menu ---
+int menuIndex = 0;
 const char* menuItems[] = {
   "Ustaw czas",
   "Stoper",
@@ -100,14 +92,22 @@ const char* menuItems[] = {
 };
 const int menuCount = 6;
 
+// --- Budzik ---
+int alarmHour = 7, alarmMinute = 0;
+bool alarmEnabled = false;
+bool alarmRinging = false;
+unsigned long alarmStartTime = 0;
+unsigned long lastMelodyStep = 0;
+int melodyStep = 0;
+
 // --- STM32 DANE (UART) ---
 unsigned long lastSTM32Update = 0;
-unsigned long lastSTM32DataReceived = 0;    
+unsigned long lastSTM32DataReceived = 0;
 int displayedBPM = 0;
 int displayedSPO2 = 0;
 bool stm32Connected = false;
 
-// --- STOPER ---
+// --- Stoper ---
 bool stoperRunning = false;
 unsigned long stoperStart = 0, stoperElapsed = 0;
 unsigned long lastStoperDraw = 0;
@@ -116,8 +116,13 @@ unsigned long lastStoperDraw = 0;
 int hours = 12, minutes = 0, seconds = 0;
 unsigned long lastTick = 0;
 
-// ---- IMPLEMENTACJA FUNKCJI - 7-SEGMENT DISPLAY ----
-uint8_t swapNibbles(uint8_t v) { return (v << 4) | (v >> 4); }
+// ======================================================
+// ========== IMPLEMENTACJA FUNKCJI - 7-SEGMENT ==========
+// ======================================================
+
+uint8_t swapNibbles(uint8_t v) { 
+  return (v << 4) | (v >> 4); 
+}
 
 static void pulse(int pin) {
   digitalWrite(pin, HIGH);
@@ -138,13 +143,10 @@ void initSevenSeg() {
   pinMode(DATA_PIN, OUTPUT);
   pinMode(CLOCK_PIN, OUTPUT);
   pinMode(LATCH_PIN, OUTPUT);
-
   digitalWrite(DATA_PIN, LOW);
   digitalWrite(CLOCK_PIN, LOW);
   digitalWrite(LATCH_PIN, LOW);
-
   delay(50);
-
   digitalWrite(LATCH_PIN, LOW);
   slowShiftOut(0);
   slowShiftOut(0);
@@ -156,7 +158,6 @@ void updateSevenSeg() {
   uint8_t HH = ((hours / 10) << 4) | (hours % 10);
   uint8_t MM = ((minutes / 10) << 4) | (minutes % 10);
   uint8_t SS = ((seconds / 10) << 4) | (seconds % 10);
-
   digitalWrite(LATCH_PIN, LOW);
   slowShiftOut(swapNibbles(SS));
   slowShiftOut(swapNibbles(MM));
@@ -165,36 +166,32 @@ void updateSevenSeg() {
 }
 
 void updateSevenSegStoper(int mins, int secs, int centisec) {
-  // Format: MM:SS:CS (minuty:sekundy:centisekundy)
   uint8_t MM = ((mins / 10) << 4) | (mins % 10);
   uint8_t SS = ((secs / 10) << 4) | (secs % 10);
   uint8_t CS = ((centisec / 10) << 4) | (centisec % 10);
-
   digitalWrite(LATCH_PIN, LOW);
-  slowShiftOut(swapNibbles(CS));  // centisekundy
-  slowShiftOut(swapNibbles(SS));  // sekundy
-  slowShiftOut(swapNibbles(MM));  // minuty
+  slowShiftOut(swapNibbles(CS));
+  slowShiftOut(swapNibbles(SS));
+  slowShiftOut(swapNibbles(MM));
   digitalWrite(LATCH_PIN, HIGH);
 }
 
-// ========== IMPLEMENTACJA FUNKCJI - UI / LCD ==========
+// ======================================================
+// ========== IMPLEMENTACJA FUNKCJI - UI / LCD ===========
+// ======================================================
 
 void drawHome() {
   LCD_CLEAR();
   LCD_SET(4, 1);
   printTime(false);
-
   if (alarmEnabled) {
     LCD_SET(0, 1);
     LCD_WRITE(byte(0));
   }
-
   LCD_SET(2, 3);
   LCD_PRINT("Klik -> MENU");
-
   LCD_DUMP();
 }
-
 
 void drawMenu() {
   LCD_CLEAR();
@@ -208,7 +205,6 @@ void drawMenu() {
   }
   LCD_DUMP();
 }
-
 
 void drawSetTime() {
   LCD_CLEAR();
@@ -224,7 +220,6 @@ void drawAlarm() {
   LCD_SET(3, 0);
   LCD_PRINT("USTAW BUDZIK");
   LCD_SET(4, 2);
-
   if (editState == EDIT_HOURS) LCD_PRINT("[");
   if (alarmHour < 10) LCD_PRINT("0");
   LCD_PRINT(alarmHour);
@@ -234,19 +229,15 @@ void drawAlarm() {
   if (alarmMinute < 10) LCD_PRINT("0");
   LCD_PRINT(alarmMinute);
   if (editState == EDIT_MINUTES) LCD_PRINT("]");
-
   LCD_DUMP();
 }
-
 
 void drawStoper() {
   unsigned long t = stoperElapsed;
   if (stoperRunning) t += millis() - stoperStart;
-
   int cs = (t / 10) % 100;
-  int s  = (t / 1000) % 60;
-  int m  = (t / 60000) % 100;  // max 99 minut
-
+  int s = (t / 1000) % 60;
+  int m = (t / 60000) % 100;
   LCD_SET(4, 2);
   if (m < 10) LCD_PRINT("0");
   LCD_PRINT(m); LCD_PRINT(":");
@@ -254,37 +245,29 @@ void drawStoper() {
   LCD_PRINT(s); LCD_PRINT(".");
   if (cs < 10) LCD_PRINT("0");
   LCD_PRINT(cs);
-  
-  updateSevenSegStoper(m, s, cs);  // 7 segmenty
-
+  updateSevenSegStoper(m, s, cs);
   LCD_DUMP();
 }
-
 
 void drawDebugSTM32() {
   LCD_CLEAR();
   LCD_SET(2, 0);
   LCD_PRINT("DEBUG STM32");
-  
   LCD_SET(0, 1);
   LCD_PRINT("BPM: ");
   LCD_PRINT(displayedBPM);
-  
   LCD_SET(0, 2);
   LCD_PRINT("SPO2: ");
   LCD_PRINT(displayedSPO2);
   LCD_PRINT("%");
-  
   LCD_SET(0, 3);
   if (stm32Connected) {
     LCD_PRINT("Status: OK");
   } else {
     LCD_PRINT("Status: OFFLINE");
   }
-  
   LCD_DUMP();
 }
-
 
 void printTime(bool edit) {
   printVal(hours, edit && editState == EDIT_HOURS);
@@ -294,7 +277,6 @@ void printTime(bool edit) {
   printVal(seconds, edit && editState == EDIT_SECONDS);
 }
 
-
 void printVal(int v, bool sel) {
   if (sel) LCD_PRINT("[");
   if (v < 10) LCD_PRINT("0");
@@ -302,32 +284,12 @@ void printVal(int v, bool sel) {
   if (sel) LCD_PRINT("]");
 }
 
+// ======================================================
+// ========== IMPLEMENTACJA FUNKCJI - LOGIKA ZEGARA ====
+// ======================================================
 
-
-// --- SET TIME ---
-void adjustTime(int dir) {
-  if (editState == EDIT_HOURS)
-    hours = (hours + dir + 24) % 24;
-  else if (editState == EDIT_MINUTES)
-    minutes = (minutes + dir + 60) % 60;
-  else if (editState == EDIT_SECONDS)
-    seconds = (seconds + dir + 60) % 60;
-
-  drawSetTime();
-  updateSevenSeg();
-}
-
-// --- DŁUGIE PRZYTRZYMANIE ---
-
-
-
-
-// ========== IMPLEMENTACJA FUNKCJI - LOGIKA ZEGARA ==========
-
-// --- ZEGAR + BUDZIK ---
 void tickClock() {
   if (appState == STATE_SET_TIME) return;
-
   if (millis() - lastTick >= 1000) {
     lastTick += 1000;
     seconds++;
@@ -339,16 +301,11 @@ void tickClock() {
         hours = (hours + 1) % 24;
       }
     }
-
-    // Aktualizuj wyświetlacz tylko gdy NIE jest aktywny stoper
     if (appState != STATE_STOPER) {
-    updateSevenSeg(); // tutaj
-
+      updateSevenSeg();
     }
-    // lub tutaj  updateSevenSeg();
     if (appState == STATE_HOME) drawHome();
   }
-
   if (alarmEnabled && !alarmRinging &&
       hours == alarmHour && minutes == alarmMinute && seconds == 0) {
     alarmRinging = true;
@@ -357,13 +314,11 @@ void tickClock() {
   }
 }
 
-// --- WIFI ---
 void syncTimeFromWiFi() {
   LCD_CLEAR();
   LCD_SET(0, 1);
   LCD_PRINT("Laczenie z WiFi");
   LCD_DUMP();
-
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   int tries = 0;
   while (WiFi.status() != WL_CONNECTED && tries < 20) {
@@ -372,7 +327,6 @@ void syncTimeFromWiFi() {
     tries++;
     LCD_DUMP();
   }
-
   if (WiFi.status() != WL_CONNECTED) {
     LCD_CLEAR();
     LCD_SET(0, 1);
@@ -381,7 +335,6 @@ void syncTimeFromWiFi() {
     delay(2000);
     return;
   }
-
   configTime(GMT_OFFSET, DST_OFFSET, NTP_SERVER);
   struct tm timeinfo;
   if (getLocalTime(&timeinfo)) {
@@ -390,7 +343,6 @@ void syncTimeFromWiFi() {
     seconds = timeinfo.tm_sec;
     lastTick = millis();
   }
-
   LCD_CLEAR();
   LCD_SET(0, 1);
   LCD_PRINT("Czas ustawiony");
@@ -398,7 +350,9 @@ void syncTimeFromWiFi() {
   delay(1500);
 }
 
-// ========== IMPLEMENTACJA FUNKCJI - ALARM / BUZZER ==========
+// ======================================================
+// ========== IMPLEMENTACJA FUNKCJI - ALARM / BUZZER ====
+// ======================================================
 
 void playAlarmMelody() {
   if (millis() - lastMelodyStep >= 300) {
@@ -408,10 +362,12 @@ void playAlarmMelody() {
   }
 }
 
-// ================= SETUP =================
+// ======================================================
+// ======================== SETUP ======================
+// ======================================================
 
 void setup() {
- Serial.begin(UART_BAUD);
+  Serial.begin(UART_BAUD);
   delay(800);
 
 #if UART_LCD_MIRROR
@@ -423,51 +379,65 @@ void setup() {
   lcd.backlight();
   lcd.createChar(0, alarmIcon);
 
-  // --- Encoder setup ---
-  pinMode(ENC_CLK, INPUT_PULLUP);
-  pinMode(ENC_DT, INPUT_PULLUP);
-  pinMode(ENC_SW, INPUT_PULLUP);
-  lastCLK = digitalRead(ENC_CLK);
+  // --- Encoder init (biblioteka Encoder.cpp) ---
+  encoder_begin(ENC_CLK, ENC_DT, ENC_SW);
 
   // --- Buzzer setup ---
   pinMode(BUZZER_PIN, OUTPUT);
   noTone(BUZZER_PIN);
-  
+
   // --- 7-Segment setup ---
   initSevenSeg();
 
-  // --- STM32 setup ---
+  // --- STM32 setup (biblioteka STM32_Data.cpp) ---
   STM32data_begin(uart, 115200, 16, 17);
 
+  // ===== UI CONTROLLER - WAŻNE! =====
+  UI_Callbacks callbacks;
+  callbacks.drawHome = drawHome;
+  callbacks.drawMenu = drawMenu;
+  callbacks.drawSetTime = drawSetTime;
+  callbacks.drawAlarm = drawAlarm;
+  callbacks.drawStoper = drawStoper;
+  callbacks.drawDebugSTM32 = drawDebugSTM32;
+  callbacks.updateSevenSeg = updateSevenSeg;
+  callbacks.updateSevenSegStoper = updateSevenSegStoper;
+
+  ui_begin(callbacks);
   drawHome();
 }
 
-// ================= LOOP =================
+// ======================================================
+// ======================== LOOP =======================
+// ======================================================
 
 void loop() {
-  handleEncoder();
-  handleButton();
+  // ===== NOWE: Enkoder + UI (zamiast handleEncoder/Button) =====
+  EncoderEvent evt = encoder_update();
+  if (evt != ENC_NONE) {
+    ui_handleEvent(evt);
+  }
+
   tickClock();
 
   // --- STM32 Debug State ---
   if (appState == STATE_DEBUG_STM32 && millis() - lastSTM32Update >= 500) {
     lastSTM32Update = millis();
-    
+
     STM32data_update();
-    
+
     if (stmDataUpdated) {
       stmDataUpdated = false;
       displayedBPM = bpmNumber;
       displayedSPO2 = spo2Number;
       stm32Connected = true;
-      lastSTM32DataReceived = millis();     //  ZAPISZ CZAS OSTATNICH DANYCH
+      lastSTM32DataReceived = millis();
     } else if (millis() - lastSTM32DataReceived > 3000) {
-      // Jeśli od ostatniego pakietu minęło więcej niż 3 sekundy wykonaj poprostu zerowanie hi hi
       stm32Connected = false;
       displayedBPM = 0;
       displayedSPO2 = 0;
     }
-    
+
     drawDebugSTM32();
   }
 
@@ -488,20 +458,3 @@ void loop() {
     drawStoper();
   }
 }
-
-
-
-
-
-
-
-
-
-  
-
-
-
-
-
-
-

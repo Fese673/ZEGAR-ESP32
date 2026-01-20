@@ -34,7 +34,7 @@ static unsigned long s_longPressMs = 1000;
 static unsigned long s_debounceMs = 200;
 static unsigned long s_longPressCooldown = 0;  // ← NOWE: ochrona przed powtarzalnością
 static const unsigned long LONG_PRESS_HOLD_TIME = 500;  // ms - wydłużone na 500ms dla większej ochrony
-static const unsigned long POST_LONG_PRESS_COOLDOWN = 800; // ms - blokada po długim wciśnięciu
+static const unsigned long POST_LONG_PRESS_COOLDOWN = 1000; // ms - blokada po długim wciśnięciu
 
 // ========== INICJALIZACJA ==========
 void encoder_begin(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,

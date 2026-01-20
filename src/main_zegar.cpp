@@ -233,6 +233,7 @@ void drawAlarm() {
 }
 
 void drawStoper() {
+  LCD_CLEAR();
   unsigned long t = stoperElapsed;
   if (stoperRunning) t += millis() - stoperStart;
   int cs = (t / 10) % 100;

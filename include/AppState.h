@@ -16,6 +16,6 @@ enum EditState {
   EDIT_DONE
 };
 
-// 🔑 GLOBALNY STAN APLIKACJI
+//  GLOBALNY STAN APLIKACJI
 extern AppState appState;
 extern EditState editState;

@@ -90,7 +90,7 @@ const char* menuItems[] = {
   "Debug STM32",
   "Wyjscie"
 };
-const int menuCount = 6;
+int menuCount = 6;
 
 // --- Budzik ---
 int alarmHour = 7, alarmMinute = 0;

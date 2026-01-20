@@ -13,10 +13,10 @@ typedef enum {
 // Inicjalizuje enkodera na podanych pinach
 // clkPin, dtPin, swPin - piny enkodera
 // longPressMs - czas do uznania za długie kliknięcie (domyślnie 1000ms)
-// debounceMs - opóźnienie filtrujące szumy (domyślnie 50ms)
+// debounceMs - opóźnienie filtrujące szumy (domyślnie 200ms)
 void encoder_begin(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
                    unsigned long longPressMs = 1000,
-                   unsigned long debounceMs = 50);
+                   unsigned long debounceMs = 200);
 
 // Aktualizuje enkodera i zwraca aktywne zdarzenie
 // Wywoływać w loop() - zwraca ENC_NONE jeśli nic się nie dzieje

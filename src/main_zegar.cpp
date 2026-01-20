@@ -52,7 +52,7 @@ const int melodyLen = 4;
 #define ENC_SW 27
 
 // --- Debounce dla enkodera ---
-#define ENCODER_DEBOUNCE_MS 150
+#define ENCODER_DEBOUNCE_MS 200
 
 // --- UART / Komunikacja ---
 #define UART_BAUD 115200

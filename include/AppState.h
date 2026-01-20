@@ -1,4 +1,3 @@
-// AppState.h
 #pragma once
 
 enum AppState {
@@ -16,3 +15,7 @@ enum EditState {
   EDIT_SECONDS,
   EDIT_DONE
 };
+
+// 🔑 GLOBALNY STAN APLIKACJI
+extern AppState appState;
+extern EditState editState;

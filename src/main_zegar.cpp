@@ -7,7 +7,7 @@
 #include "STM32_Data.h"  // Nasza bibloteczka
 #include "LCDMirror.h"   // Okablowanie LCD troche wiecej porządku w main 
 #include "UI_Controller.h"
-//#include "AppState.h"
+#include "AppState.h"
 
 // ========== Deklaracje funkcji (dla PlatformIO) ==========
 
@@ -21,12 +21,7 @@ void drawDebugSTM32();
 void printTime(bool edit);
 void printVal(int v, bool sel);
 
-// --- Obsługa wejścia ---
-void handleEncoder();
-void handleButton();
-void onClick();
-void onLongPress();  
-void adjustTime(int dir);
+
 
 // --- Logika zegara ---
 void tickClock();
@@ -38,23 +33,7 @@ void slowShiftOut(uint8_t v);
 void initSevenSeg();
 void updateSevenSeg(); //debug
 
-// ---- ENUMERACJE (stany aplikacji) ----
 
-enum AppState {
-  STATE_HOME,
-  STATE_MENU,
-  STATE_SET_TIME,
-  STATE_STOPER,
-  STATE_ALARM,
-  STATE_DEBUG_STM32
-};
-
-enum EditState {
-  EDIT_HOURS,
-  EDIT_MINUTES,
-  EDIT_SECONDS,
-  EDIT_DONE
-};
 
 // ---- KONFIGURACJA SPRZĘTU (PIN + STAŁE) ----
 
@@ -72,7 +51,7 @@ const int melodyLen = 4;
 #define ENC_CLK 25
 #define ENC_DT  26
 #define ENC_SW  27
-int lastCLK;
+
 
 // --- UART / Komunikacja ---
 #define UART_BAUD 115200 
@@ -99,10 +78,7 @@ byte alarmIcon[8] = {
 
 // ========== ZMIENNE GLOBALNE (pogrupowane funkcjonalnie) ==========
 
-// --- Stany aplikacji ---
-AppState appState = STATE_HOME;
-EditState editState = EDIT_HOURS;
-int menuIndex = 0;
+
 
 // --- Budzik ---
 int alarmHour = 7, alarmMinute = 0;
@@ -112,12 +88,6 @@ unsigned long alarmStartTime = 0;
 unsigned long lastMelodyStep = 0;
 int melodyStep = 0;
 
-// --- Przycisk (debouncing + długie przytrzymanie) ---
-unsigned long buttonPressStart = 0;
-unsigned long lastButtonAction = 0;  
-bool buttonWasLongPress = false;     
-#define LONG_PRESS_TIME 1000         
-#define DEBOUNCE_TIME 200      
 
 // --- MENU ---
 const char* menuItems[] = {
@@ -332,63 +302,7 @@ void printVal(int v, bool sel) {
   if (sel) LCD_PRINT("]");
 }
 
-// ========== IMPLEMENTACJA FUNKCJI - OBSŁUGA WEJŚCIA ==========
 
-// ---  ---
-void handleEncoder() {
-  int clk = digitalRead(ENC_CLK);
-  if (clk != lastCLK && clk == LOW) {
-    int dir = (digitalRead(ENC_DT) != clk) ? 1 : -1;
-
-    if (appState == STATE_MENU) {
-      menuIndex = constrain(menuIndex + dir, 0, menuCount - 1);
-      drawMenu();
-    }
-    else if (appState == STATE_SET_TIME) {
-      adjustTime(dir);
-    }
-    else if (appState == STATE_ALARM) {
-      if (editState == EDIT_HOURS)
-        alarmHour = (alarmHour + dir + 24) % 24;
-      else
-        alarmMinute = (alarmMinute + dir + 60) % 60;
-      drawAlarm();
-    }
-  }
-  lastCLK = clk;
-}
-
-// ---  ---
-void handleButton() {
-  static bool last = true;
-  bool now = digitalRead(ENC_SW);
-  unsigned long currentTime = millis();
-  
-
-  if (last && !now) {
-    buttonPressStart = currentTime;
-    buttonWasLongPress = false;
-  }
-  
-  if (!now && !buttonWasLongPress) {
-    if (currentTime - buttonPressStart >= LONG_PRESS_TIME) {
-      buttonWasLongPress = true;
-      if (currentTime - lastButtonAction >= DEBOUNCE_TIME) {
-        lastButtonAction = currentTime;
-        onLongPress();
-      }
-    }
-  }
-
-  if (!last && now && !buttonWasLongPress) {
-    if (currentTime - lastButtonAction >= DEBOUNCE_TIME) {
-      lastButtonAction = currentTime;
-      onClick();
-    }
-  }
-  
-  last = now;
-}
 
 // --- SET TIME ---
 void adjustTime(int dir) {
@@ -404,100 +318,9 @@ void adjustTime(int dir) {
 }
 
 // --- DŁUGIE PRZYTRZYMANIE ---
-void onLongPress() {
-  if (appState == STATE_STOPER) {
-    // Wyjście ze stopera do menu
-    appState = STATE_MENU;
-    updateSevenSeg();  // Przywróć normalny zegar na 7-seg
-    drawMenu();
-  }
-  else if (appState == STATE_DEBUG_STM32) {
-    // Wyjście z debug do menu
-    appState = STATE_MENU;
-    updateSevenSeg();
-    drawMenu();
-  }
-  // Tutaj możemy dodac więcej stanów które obsługują długie przytrzymanie 
-}
 
-// ---  ---
-void onClick() {
-  if (appState == STATE_HOME) {
-    appState = STATE_MENU;
-    drawMenu();
-  }
-  else if (appState == STATE_MENU) {
-    if (menuIndex == 0) {
-      appState = STATE_SET_TIME;
-      editState = EDIT_HOURS;
-      drawSetTime();
-    }
-    else if (menuIndex == 1) {
-      appState = STATE_STOPER;
-      stoperRunning = false;
-      stoperElapsed = 0;
-      LCD_CLEAR();
-      drawStoper();
-    }
-    else if (menuIndex == 2) {
-      appState = STATE_ALARM;
-      editState = EDIT_HOURS;
-      drawAlarm();
-    }
-    else if (menuIndex == 3) {
-      syncTimeFromWiFi();
-      updateSevenSeg();
-      drawMenu();  // FIX 
-    }
-    else if (menuIndex == 4) {                  
-      appState = STATE_DEBUG_STM32;
-      lastSTM32Update = 0;
-      updateSevenSeg();
-      drawDebugSTM32();
-    }
-    else {
-      appState = STATE_HOME;
-      drawHome();
-    }
-  }
 
-// --- Stoper ---
-  else if (appState == STATE_STOPER) {
-    if (!stoperRunning) {
-      // START / WZNÓW
-      stoperRunning = true;
-      stoperStart = millis();
-    } else {
-      // STOP / PAUZA
-      stoperRunning = false;
-      stoperElapsed += millis() - stoperStart;
-    }
-    drawStoper();
-  }
-   else if (appState == STATE_DEBUG_STM32) {    
-    appState = STATE_HOME;
-    updateSevenSeg();
-    drawHome();
-  }
-  else if (appState == STATE_SET_TIME) {
-    editState = (EditState)(editState + 1);
-    if (editState == EDIT_DONE) {
-      lastTick = millis();
-      appState = STATE_HOME;
-      updateSevenSeg();
-      drawHome();
-    } else drawSetTime();
-  }
-  else if (appState == STATE_ALARM) {
-    editState = (EditState)(editState + 1);
-    if (editState > EDIT_MINUTES) {
-      alarmEnabled = true;
-      appState = STATE_HOME;
-      updateSevenSeg();
-      drawHome();
-    } else drawAlarm();
-  }
-}
+
 
 // ========== IMPLEMENTACJA FUNKCJI - LOGIKA ZEGARA ==========
 

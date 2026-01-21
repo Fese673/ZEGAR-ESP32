@@ -8,6 +8,7 @@
 // ---- Deklaracje funkcji (dla PlatformIO) ----
 // siema tutaj ja Dominik
 // elo elo
+// halo 
 void drawHome();
 void drawMenu();
 void drawSetTime();

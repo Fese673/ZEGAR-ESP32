@@ -1,5 +1,41 @@
 #include "UI_Draw.h"
-#include "LCDMirror.h" // for LCD_* macros
+#include "LCDMirror.h"
+#include "StatsManager.h"
+#include <LiquidCrystal_I2C.h>
+
+extern LiquidCrystal_I2C lcd;
+
+#if UART_LCD_MIRROR
+extern LcdMirror20x4 lcdMirror;
+#endif
+
+// ==========================================
+// ZMIENNE GLOBALNE (niezbędne externy!)
+// ==========================================
+extern int menuIndex;
+extern const char* menuItems[];
+extern int menuCount;
+
+// Statystyki
+extern int statsMenuIndex;
+extern const char* statsMenuItems[];
+extern int statsMenuCount;
+
+// Stan aplikacji i inne
+extern enum AppState appState;
+extern enum EditState editState;
+extern int alarmHour;
+extern int alarmMinute;
+extern bool alarmEnabled;
+extern bool stoperRunning;
+extern unsigned long stoperStart;
+extern unsigned long stoperElapsed;
+extern int hours;
+extern int minutes;
+extern int seconds;
+extern int displayedBPM;
+extern int displayedSPO2;
+extern bool stm32Connected;
 
 // ======================================================
 // ========== IMPLEMENTACJA FUNKCJI - 7-SEGMENT ==========
@@ -65,6 +101,7 @@ void updateSevenSegStoper(int mins, int secs, int centisec) {
 // ========== IMPLEMENTACJA FUNKCJI - UI / LCD ===========
 // ======================================================
 
+// --- Ekran główny ---
 void drawHome() {
   LCD_CLEAR();
   LCD_SET(4, 1);
@@ -78,6 +115,7 @@ void drawHome() {
   LCD_DUMP();
 }
 
+// --- Ekran menu ---
 void drawMenu() {
   LCD_CLEAR();
   int first = (menuIndex / 4) * 4;
@@ -91,6 +129,7 @@ void drawMenu() {
   LCD_DUMP();
 }
 
+// --- Ekran ustawiania czasu ---
 void drawSetTime() {
   LCD_CLEAR();
   LCD_SET(2, 1);
@@ -100,6 +139,7 @@ void drawSetTime() {
   LCD_DUMP();
 }
 
+// --- Ekran budzika ---
 void drawAlarm() {
   LCD_CLEAR();
   LCD_SET(3, 0);
@@ -117,6 +157,7 @@ void drawAlarm() {
   LCD_DUMP();
 }
 
+// --- Ekran stopera ---
 void drawStoper() {
   LCD_CLEAR();
   unsigned long t = stoperElapsed;
@@ -135,6 +176,7 @@ void drawStoper() {
   LCD_DUMP();
 }
 
+// --- Ekran debug STM32 ---
 void drawDebugSTM32() {
   LCD_CLEAR();
   LCD_SET(2, 0);
@@ -155,6 +197,7 @@ void drawDebugSTM32() {
   LCD_DUMP();
 }
 
+// --- Pomocnicza do rysowania czasu ---
 void printTime(bool edit) {
   printVal(hours, edit && editState == EDIT_HOURS);
   LCD_PRINT(":");
@@ -163,9 +206,74 @@ void printTime(bool edit) {
   printVal(seconds, edit && editState == EDIT_SECONDS);
 }
 
+// --- Pomocnicza do printTime ---
 void printVal(int v, bool sel) {
   if (sel) LCD_PRINT("[");
   if (v < 10) LCD_PRINT("0");
   LCD_PRINT(v);
   if (sel) LCD_PRINT("]");
+}
+
+// --- Statystyki UI (POPRAWIONE) ---
+void drawStats() {
+    LCD_CLEAR();
+    AppStats stats = statsManager.getStats();
+
+    // === 1. MENU STATYSTYK (LISTA Z LICZBAMI) ===
+    if (appState == STATE_STATS) {
+        LCD_SET(2, 0);
+        LCD_PRINT("MENU STATYSTYK");
+        
+        // Rysujemy 3 opcje
+        for (int i = 0; i < statsMenuCount; i++) {
+            LCD_SET(0, i + 1);
+            
+            // Kursor
+            if (i == statsMenuIndex) {
+                LCD_PRINT("> ");
+            } else {
+                LCD_PRINT("  ");
+            }
+            
+            // Nazwa i Wartość
+            if (i == 0) { // Kliki
+                LCD_PRINT("Kliki     ");
+                LCD_PRINT(stats.totalClicks);
+            } 
+            else if (i == 1) { // Kroki
+                LCD_PRINT("Kroki     ");
+                LCD_PRINT(statsManager.getTotalSteps());
+            } 
+            else if (i == 2) { // Wyjscie
+                LCD_PRINT("Wyjscie");
+            }
+        }
+    }
+    
+    // === 2. WIDOK KLIKNIĘĆ ===
+    else if (appState == STATE_STATS_CLICKS) {
+        LCD_SET(0, 0);
+        LCD_PRINT("LICZNIK KLIKNIEC");
+        LCD_SET(0, 1);
+        LCD_PRINT("Razem: ");
+        LCD_PRINT(stats.totalClicks);
+        LCD_SET(0, 3);
+        LCD_PRINT("Dlugi -> Powrot");
+    }
+    
+    // === 3. WIDOK KROKÓW (Szczegóły) ===
+    else if (appState == STATE_STATS_STEPS) {
+        LCD_SET(0, 0);
+        LCD_PRINT("LICZNIK KROKOW");
+        LCD_SET(0, 1);
+        LCD_PRINT("L: "); LCD_PRINT(stats.stepsLeft);
+        LCD_SET(10, 1);
+        LCD_PRINT("R: "); LCD_PRINT(stats.stepsRight);
+        LCD_SET(0, 2);
+        LCD_PRINT("Suma: "); LCD_PRINT(statsManager.getTotalSteps());
+        LCD_SET(0, 3);
+        LCD_PRINT("Dlugi -> Powrot");
+    }
+
+    LCD_DUMP();
 }

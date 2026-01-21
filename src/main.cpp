@@ -10,6 +10,8 @@
 #include "Encoder.h"
 #include "AppState.h"
 #include "UI_Draw.h"
+#include "WiFiSync.h"
+#include "StatsManager.h" 
 
 // komentarz testowy 
 // ========== STAŁE CZASOWE (zamiast magic numbers) ==========
@@ -32,6 +34,10 @@ void tickClock();
 void syncTimeFromWiFi();
 void playAlarmMelody();
 
+// --- Wrapper dla kompatybilności ---
+void syncTimeFromWiFi() {
+  WiFiSync::startSync();
+}
 
 // ---- KONFIGURACJA SPRZĘTU (PIN + STAŁE) ----
 
@@ -79,6 +85,7 @@ byte alarmIcon[8] = {
 // extern AppState appState;        (jest w AppState.cpp)
 // extern EditState editState;      (jest w AppState.cpp)
 
+
 // --- Menu ---
 int menuIndex = 0;
 const char* menuItems[] = {
@@ -86,10 +93,20 @@ const char* menuItems[] = {
   "Stoper",
   "Budzik",
   "Czas z WiFi",
+  "Statystyki", 
   "Debug STM32",
   "Wyjscie"
 };
-int menuCount = 6;
+int menuCount = 7;
+
+// --- Statystyki Menu ---
+int statsMenuIndex = 0;
+const char* statsMenuItems[] = {
+  "Kliki",      // Index 0 -> Widok kliknięć
+  "Kroki",      // Index 1 -> Widok kroków (szczegóły)
+  "Wyjscie"     // Index 2 -> Powrót
+};
+int statsMenuCount = 3;
 
 // --- Budzik ---
 int alarmHour = 7, alarmMinute = 0;
@@ -145,41 +162,6 @@ void tickClock() {
   }
 }
 
-void syncTimeFromWiFi() {
-  LCD_CLEAR();
-  LCD_SET(0, 1);
-  LCD_PRINT("Laczenie z WiFi");
-  LCD_DUMP();
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  int tries = 0;
-  while (WiFi.status() != WL_CONNECTED && tries < 20) {
-    delay(500);
-    LCD_PRINT(".");
-    tries++;
-    LCD_DUMP();
-  }
-  if (WiFi.status() != WL_CONNECTED) {
-    LCD_CLEAR();
-    LCD_SET(0, 1);
-    LCD_PRINT("Blad WiFi");
-    LCD_DUMP();
-    delay(2000);
-    return;
-  }
-  configTime(GMT_OFFSET, DST_OFFSET, NTP_SERVER);
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
-    hours = timeinfo.tm_hour;
-    minutes = timeinfo.tm_min;
-    seconds = timeinfo.tm_sec;
-    lastTick = millis();
-  }
-  LCD_CLEAR();
-  LCD_SET(0, 1);
-  LCD_PRINT("Czas ustawiony");
-  LCD_DUMP();
-  delay(1500);
-}
 
 // ======================================================
 // ========== IMPLEMENTACJA FUNKCJI - ALARM / BUZZER ====
@@ -198,55 +180,84 @@ void playAlarmMelody() {
 // ======================================================
 
 void setup() {
-Serial.begin(UART_BAUD);
-delay(SETUP_DELAY_MS);
+    Serial.begin(UART_BAUD);
+    delay(SETUP_DELAY_MS);
 
 #if UART_LCD_MIRROR
-  lcdMirror.begin();
+    lcdMirror.begin();
 #endif
 
-  Wire.begin();
-  lcd.init();
-  lcd.backlight();
-  lcd.createChar(0, alarmIcon);
+    Wire.begin();
+    lcd.init();
+    lcd.backlight();
+    lcd.createChar(0, alarmIcon);
 
-  // --- Encoder init (biblioteka Encoder.cpp) ---
-  encoder_begin(ENC_CLK, ENC_DT, ENC_SW);
+    // --- Encoder init ---
+    encoder_begin(ENC_CLK, ENC_DT, ENC_SW);
 
-  // --- Buzzer setup ---
-  pinMode(BUZZER_PIN, OUTPUT);
-  noTone(BUZZER_PIN);
+    // --- Buzzer setup ---
+    pinMode(BUZZER_PIN, OUTPUT);
+    noTone(BUZZER_PIN);
 
-  // --- 7-Segment setup ---
-  initSevenSeg();
+    // --- 7-Segment setup ---
+    initSevenSeg();
 
-  // --- STM32 setup (biblioteka STM32_Data.cpp) ---
-  STM32data_begin(uart, 115200, 16, 17);
+    // --- Inicjalizacja statystyk setup --- 
+    statsManager.begin();
 
-  // ===== UI CONTROLLER - WAŻNE! =====
-  UI_Callbacks callbacks;
-  callbacks.drawHome = drawHome;
-  callbacks.drawMenu = drawMenu;
-  callbacks.drawSetTime = drawSetTime;
-  callbacks.drawAlarm = drawAlarm;
-  callbacks.drawStoper = drawStoper;
-  callbacks.drawDebugSTM32 = drawDebugSTM32;
-  callbacks.updateSevenSeg = updateSevenSeg;
-  callbacks.updateSevenSegStoper = updateSevenSegStoper;
+    // --- STM32 setup ---
+    STM32data_begin(uart, 115200, 16, 17);
 
-  ui_begin(callbacks);
-  drawHome();
+    // ===== UI CONTROLLER =====
+    UI_Callbacks callbacks;
+    callbacks.drawHome = drawHome;
+    callbacks.drawMenu = drawMenu;
+    callbacks.drawSetTime = drawSetTime;
+    callbacks.drawAlarm = drawAlarm;
+    callbacks.drawStoper = drawStoper;
+    callbacks.drawDebugSTM32 = drawDebugSTM32;
+    callbacks.updateSevenSeg = updateSevenSeg;
+    callbacks.updateSevenSegStoper = updateSevenSegStoper;
+    callbacks.drawStats = drawStats; //Callbacki do UI statystyk
+
+    ui_begin(callbacks);
+    drawHome();
+
+    // ===== WiFi / NTP Sync =====
+    WiFiSync::setTimeRefs(hours, minutes, seconds, lastTick); // referencje do zmiennych czasu
+    WiFiSync::setAppStatePtr(&appState);                     // wskaźnik do appState
+    WiFiSync::setOnDone([](){ drawHome(); });               // callback po zakończeniu sync
+    WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER, GMT_OFFSET, DST_OFFSET); // inicjalizacja
+    WiFiSync::startSync();                                   // rozpoczęcie synchronizacji
 }
 
-// ================= LOOP =================
+
+// ======================================================
+// ======================== LOOP ======================
+// ======================================================
 
 void loop() {
   EncoderEvent evt = encoder_update();
   if (evt != ENC_NONE) {
-    ui_handleEvent(evt);
+    // === REJESTRACJA STATYSTYK ===
+    if (evt == ENC_CLICK || evt == ENC_LONG) statsManager.registerClick();
+    else if (evt == ENC_LEFT) statsManager.registerStepLeft();
+    else if (evt == ENC_RIGHT) statsManager.registerStepRight();
+    // =============================
+
+    if (!WiFiSync::isBusy()) {
+      ui_handleEvent(evt);
+    } 
   }
 
+
+  // --- Aktualizacja statystyk (zapis do NVS jeśli potrzeba)  ---
+  statsManager.update(); // -> Jeśli minął czas, zapisz RAM do FLASH teraz 120s (ogólnie ten cały zapis jest jeszcze do sprawdzenia i ewentualnej optymalizacji)
+
   tickClock();
+  // zamiast updateWiFiSync() -> używamy biblioteki
+  WiFiSync::update();
+  
 
   // --- STM32 Debug State ---
   if (appState == STATE_DEBUG_STM32 && 

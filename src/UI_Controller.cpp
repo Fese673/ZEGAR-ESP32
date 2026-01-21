@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include "AppState.h"
 
-// Zmienne globalne z main.cpp (stan aplikacji)
+// Zmienne globalne z main.cpp
 extern int menuIndex;
 extern const int menuCount;
 extern enum AppState appState;
@@ -25,6 +25,10 @@ extern int minutes;
 extern int seconds;
 extern unsigned long lastTick;
 
+// info nowe 
+extern int statsMenuIndex;
+extern int statsMenuCount;
+
 // Funkcje z main.cpp
 extern void syncTimeFromWiFi();
 extern void updateSevenSeg();
@@ -35,6 +39,7 @@ extern void drawSetTime();
 extern void drawAlarm();
 extern void drawStoper();
 extern void drawDebugSTM32();
+extern void drawStats();
 
 static UI_Callbacks s_callbacks;
 
@@ -43,8 +48,7 @@ void ui_begin(const UI_Callbacks &callbacks) {
   if (s_callbacks.drawHome) s_callbacks.drawHome();
 }
 
-// Pomocnicza: zmiana czasu (godzina/minuta/sekunda)
-// dir: +1 do góry, -1 do dołu
+// Pomocnicza: zmiana czasu
 static void adjustTime_internal(int dir) {
   if (editState == EDIT_HOURS) {
     hours = (hours + dir + 24) % 24;
@@ -60,21 +64,26 @@ static void adjustTime_internal(int dir) {
 void ui_handleEvent(EncoderEvent e) {
   if (e == ENC_NONE) return;
 
-  // OBRÓT ENKODERA (lewo/prawo)
+  // ========================================================================
+  // 1. OBRÓT ENKODERA (lewo/prawo)
+  // ========================================================================
   if (e == ENC_LEFT || e == ENC_RIGHT) {
     int dir = (e == ENC_RIGHT) ? 1 : -1;
 
     if (appState == STATE_MENU) {
-      // Przewijanie menu górą/dołem
       menuIndex = constrain(menuIndex + dir, 0, menuCount - 1);
       if (s_callbacks.drawMenu) s_callbacks.drawMenu();
     }
+    // --- Przewijanie MENU STATYSTYK ---
+    else if (appState == STATE_STATS) {
+      statsMenuIndex = constrain(statsMenuIndex + dir, 0, statsMenuCount - 1);
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+    }
+    // ----------------------------------
     else if (appState == STATE_SET_TIME) {
-      // Edycja czasu (hours/minutes/seconds)
       adjustTime_internal(dir);
     }
     else if (appState == STATE_ALARM) {
-      // Edycja alarmu (godzina/minuta)
       if (editState == EDIT_HOURS) {
         alarmHour = (alarmHour + dir + 24) % 24;
       } else {
@@ -85,56 +94,82 @@ void ui_handleEvent(EncoderEvent e) {
     return;
   }
 
-  // KRÓTKIE KLIKNIĘCIE (enter/select)
+  // ========================================================================
+  // 2. KRÓTKIE KLIKNIĘCIE (enter/select)
+  // ========================================================================
   if (e == ENC_CLICK) {
+    
+    // --- HOME -> MENU ---
     if (appState == STATE_HOME) {
-      // Wejście do menu
       appState = STATE_MENU;
       if (s_callbacks.drawMenu) s_callbacks.drawMenu();
       return;
     }
 
+    // --- GŁÓWNE MENU (Wybór opcji) ---
     if (appState == STATE_MENU) {
-      // Wybór opcji z menu
-      if (menuIndex == 0) {
-        appState = STATE_SET_TIME;
-        editState = EDIT_HOURS;
-        if (s_callbacks.drawSetTime) s_callbacks.drawSetTime();
-      }
-      else if (menuIndex == 1) {
-        // Stoper: start z zerowym czasem
-        appState = STATE_STOPER;
-        stoperRunning = false;
-        stoperElapsed = 0;
-        if (s_callbacks.drawStoper) s_callbacks.drawStoper();
-      }
-      else if (menuIndex == 2) {
-        // Alarm: edycja
-        appState = STATE_ALARM;
-        editState = EDIT_HOURS;
-        if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
-      }
-      else if (menuIndex == 3) {
-        // Sync: synchronizacja czasu z WiFi
-        syncTimeFromWiFi();
-        if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
-      }
-      else if (menuIndex == 4) {
-        // Debug STM32
-        appState = STATE_DEBUG_STM32;
-        if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
-        if (s_callbacks.drawDebugSTM32) s_callbacks.drawDebugSTM32();
-      }
-      else {
-        appState = STATE_HOME;
-        if (s_callbacks.drawHome) s_callbacks.drawHome();
-      }
-      return;
+       if (menuIndex == 0) {
+         appState = STATE_SET_TIME;
+         editState = EDIT_HOURS;
+         if (s_callbacks.drawSetTime) s_callbacks.drawSetTime();
+       }
+       else if (menuIndex == 1) {
+         appState = STATE_STOPER;
+         stoperRunning = false;
+         stoperElapsed = 0;
+         if (s_callbacks.drawStoper) s_callbacks.drawStoper();
+       }
+       else if (menuIndex == 2) {
+         appState = STATE_ALARM;
+         editState = EDIT_HOURS;
+         if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
+       }
+       else if (menuIndex == 3) {
+         syncTimeFromWiFi();
+         if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
+         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+       }
+       else if (menuIndex == 4) {
+           // Wejście w Menu Statystyk
+           appState = STATE_STATS;
+           statsMenuIndex = 0; // Reset na pierwszą pozycję
+           if (s_callbacks.drawStats) s_callbacks.drawStats();
+       }
+       else if (menuIndex == 5) {
+         appState = STATE_DEBUG_STM32;
+         if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
+         if (s_callbacks.drawDebugSTM32) s_callbacks.drawDebugSTM32();
+       }
+       else { // Wyjście
+         appState = STATE_HOME;
+         if (s_callbacks.drawHome) s_callbacks.drawHome();
+       }
+       return;
     }
 
+    // --- LOGIKA MENU STATYSTYK ---
+    if (appState == STATE_STATS) {
+        if (statsMenuIndex == 0) {
+            // Wybrano "Kliki"
+            appState = STATE_STATS_CLICKS;
+            if (s_callbacks.drawStats) s_callbacks.drawStats();
+        }
+        else if (statsMenuIndex == 1) {
+            // Wybrano "Kroki"
+            appState = STATE_STATS_STEPS;
+            if (s_callbacks.drawStats) s_callbacks.drawStats();
+        }
+        else if (statsMenuIndex == 2) {
+            // Wybrano "Wyjscie" -> Wracamy do MENU GŁÓWNEGO
+            appState = STATE_MENU;
+            if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        }
+        return;
+    }
+
+    // --- LOGIKA POZOSTAŁYCH STANÓW ---
+    
     if (appState == STATE_STOPER) {
-      // Play/Pause stopera
       if (!stoperRunning) {
         stoperRunning = true;
         stoperStart = millis();
@@ -147,7 +182,6 @@ void ui_handleEvent(EncoderEvent e) {
     }
 
     if (appState == STATE_DEBUG_STM32) {
-      // Wyjście z debug
       appState = STATE_HOME;
       if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
       if (s_callbacks.drawHome) s_callbacks.drawHome();
@@ -155,7 +189,6 @@ void ui_handleEvent(EncoderEvent e) {
     }
 
     if (appState == STATE_SET_TIME) {
-      // Następny krok edycji (hours → minutes → seconds → done)
       editState = (EditState)(editState + 1);
       if (editState == EDIT_DONE) {
         lastTick = millis();
@@ -169,7 +202,6 @@ void ui_handleEvent(EncoderEvent e) {
     }
 
     if (appState == STATE_ALARM) {
-      // Następny krok edycji alarmu (hours → minutes → enable i powrót)
       editState = (EditState)(editState + 1);
       if (editState > EDIT_MINUTES) {
         alarmEnabled = true;
@@ -181,24 +213,34 @@ void ui_handleEvent(EncoderEvent e) {
       }
       return;
     }
-
+    
     return;
   }
 
-  // DŁUGIE KLIKNIĘCIE (back/escape)
+  // ========================================================================
+  // 3. DŁUGIE KLIKNIĘCIE (back/escape)
+  // ========================================================================
   if (e == ENC_LONG) {
+      
+    // Z głębokich statystyk -> do MENU STATYSTYK
+    if (appState == STATE_STATS_CLICKS || appState == STATE_STATS_STEPS) {
+        appState = STATE_STATS;
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        return;
+    }
+
+    // Z MENU STATYSTYK -> do MENU GŁÓWNEGO
+    if (appState == STATE_STATS) {
+        appState = STATE_MENU;
+        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        return;
+    }
+
+    // Inne wyjścia
     if (appState == STATE_STOPER || appState == STATE_DEBUG_STM32) {
-      // Powrót do menu z stopera/debug
       appState = STATE_MENU;
-      if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
       if (s_callbacks.drawMenu) s_callbacks.drawMenu();
     }
-    // Można dodać więcej akcji dla długiego przycisku w innych stanach
     return;
   }
-}
-
-void ui_tick() {
-  // Periodyczne zadania UI (animacje, migania, itp)
-  // Pole do rozwoju - na razie pusty, logika główna w main.cpp
 }

@@ -17,6 +17,7 @@ typedef struct {
   DrawFn drawDebugSTM32;                   // Debug panel
   Update7SegFn updateSevenSeg;             // Odśwież wyświetlacz 7-seg
   Update7SegStoperFn updateSevenSegStoper; // Odśwież 7-seg dla stopera (min, sec, centisec)
+  DrawFn drawStats; // UI statystyk
 } UI_Callbacks;
 
 // Inicjalizacja kontrolera UI

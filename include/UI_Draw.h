@@ -65,6 +65,8 @@ void drawStoper();
 void drawDebugSTM32();
 void printTime(bool edit);
 void printVal(int v, bool sel);
+void drawStats();  // UI statystyk
+
 
 
 // 7-seg

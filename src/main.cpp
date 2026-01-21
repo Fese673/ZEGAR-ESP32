@@ -11,6 +11,7 @@
 #include "AppState.h"
 #include "UI_Draw.h"
 
+// komentarz testowy 
 // ========== STAŁE CZASOWE (zamiast magic numbers) ==========
 constexpr unsigned long CLOCK_TICK_MS        = 1000;  // tykanie zegara co 1s
 constexpr unsigned long MELODY_STEP_MS       = 300;   // krok melodii alarmu

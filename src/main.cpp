@@ -11,6 +11,18 @@
 #include "AppState.h"
 #include "UI_Draw.h"
 
+// ========== STAŁE CZASOWE (zamiast magic numbers) ==========
+constexpr unsigned long CLOCK_TICK_MS        = 1000;  // tykanie zegara co 1s
+constexpr unsigned long MELODY_STEP_MS       = 300;   // krok melodii alarmu
+constexpr unsigned long ALARM_DURATION_MS    = 5000;  // jak długo gra alarm
+constexpr unsigned long STM32_UPDATE_MS      = 500;   // odświeżanie danych STM32
+constexpr unsigned long STM32_TIMEOUT_MS     = 3000;  // timeout połączenia STM32
+constexpr unsigned long STOPER_DRAW_MS       = 100;   // odświeżanie stopera
+constexpr unsigned long WIFI_RETRY_DELAY_MS  = 500;   // próba połączenia WiFi
+constexpr int           WIFI_MAX_RETRIES     = 20;    // max prób połączenia
+constexpr unsigned long MSG_DISPLAY_MS       = 1500;  // wyświetlanie komunikatów
+constexpr unsigned long SETUP_DELAY_MS       = 800;   // opóźnienie w setup()
+
 // ========== DEKLARACJE FUNKCJI (dla PlatformIO) ==========
 
 
@@ -108,8 +120,8 @@ unsigned long lastTick = 0;
 
 void tickClock() {
   if (appState == STATE_SET_TIME) return;
-  if (millis() - lastTick >= 1000) {
-    lastTick += 1000;
+  if (millis() - lastTick >= CLOCK_TICK_MS) {
+  lastTick += CLOCK_TICK_MS;
     seconds++;
     if (seconds >= 60) {
       seconds = 0;
@@ -173,7 +185,7 @@ void syncTimeFromWiFi() {
 // ======================================================
 
 void playAlarmMelody() {
-  if (millis() - lastMelodyStep >= 300) {
+  if (millis() - lastMelodyStep >= MELODY_STEP_MS) {
     lastMelodyStep = millis();
     tone(BUZZER_PIN, melodyFreq[melodyStep]);
     melodyStep = (melodyStep + 1) % melodyLen;
@@ -185,8 +197,8 @@ void playAlarmMelody() {
 // ======================================================
 
 void setup() {
-  Serial.begin(UART_BAUD);
-  delay(800);
+Serial.begin(UART_BAUD);
+delay(SETUP_DELAY_MS);
 
 #if UART_LCD_MIRROR
   lcdMirror.begin();
@@ -236,7 +248,8 @@ void loop() {
   tickClock();
 
   // --- STM32 Debug State ---
-  if (appState == STATE_DEBUG_STM32 && millis() - lastSTM32Update >= 500) {
+  if (appState == STATE_DEBUG_STM32 && 
+    millis() - lastSTM32Update >= STM32_UPDATE_MS) {
     lastSTM32Update = millis();
 
     STM32data_update();
@@ -247,7 +260,7 @@ void loop() {
       displayedSPO2 = spo2Number;
       stm32Connected = true;
       lastSTM32DataReceived = millis();
-    } else if (millis() - lastSTM32DataReceived > 3000) {
+   } else if (millis() - lastSTM32DataReceived > STM32_TIMEOUT_MS) {
       stm32Connected = false;
       displayedBPM = 0;
       displayedSPO2 = 0;
@@ -259,7 +272,7 @@ void loop() {
   // --- Alarm Ringing ---
   if (alarmRinging) {
     playAlarmMelody();
-    if (millis() - alarmStartTime >= 5000) {
+    if (millis() - alarmStartTime >= ALARM_DURATION_MS) {
       noTone(BUZZER_PIN);
       alarmRinging = false;
       alarmEnabled = false;
@@ -268,7 +281,8 @@ void loop() {
   }
 
   // --- Stopwatch Drawing ---
-  if (appState == STATE_STOPER && millis() - lastStoperDraw >= 100) {
+if (appState == STATE_STOPER && 
+    millis() - lastStoperDraw >= STOPER_DRAW_MS) {
     lastStoperDraw = millis();
     drawStoper();
   }

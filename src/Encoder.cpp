@@ -16,7 +16,7 @@ static uint8_t s_sequenceStep = 0;          // Krok w sekwencji (0-3)
 static int s_sequenceDirection = 0;         // 1=CW, -1=CCW, 0=idle
 static unsigned long s_sequenceTimeout = 0; // Timeout dla sekwencji
 
-// Sekwencje Gray-code (dokładnie jak w KY040)
+// Sekwencje Gray-code 
 static const uint8_t s_signalSequenceCW[4] = {0b01, 0b00, 0b10, 0b11};
 static const uint8_t s_signalSequenceCCW[4] = {0b10, 0b00, 0b01, 0b11};
 
@@ -32,7 +32,7 @@ static unsigned long s_lastButtonAction = 0;
 // Konfiguracja czasów
 static unsigned long s_longPressMs = 1000;
 static unsigned long s_debounceMs = 200;
-static unsigned long s_longPressCooldown = 0;  // ← NOWE: ochrona przed powtarzalnością
+static unsigned long s_longPressCooldown = 0;  //  ochrona przed powtarzalnością
 static const unsigned long LONG_PRESS_HOLD_TIME = 500;  // ms - wydłużone na 500ms dla większej ochrony
 static const unsigned long POST_LONG_PRESS_COOLDOWN = 1000; // ms - blokada po długim wciśnięciu
 
@@ -124,7 +124,7 @@ static EncoderEvent rotationCheck() {
       if (s_sequenceStep >= 4) {  // Sekwencja UKOŃCZONA!
         s_sequenceStep = 0;
         s_sequenceDirection = 0;
-        return ENC_RIGHT;  // ✅ Pełny krok clockwise
+        return ENC_RIGHT;  //  Pełny krok clockwise
       }
       s_sequenceTimeout = now;  // Aktualizuj timeout
       return ENC_NONE;
@@ -146,7 +146,7 @@ static EncoderEvent rotationCheck() {
       if (s_sequenceStep >= 4) {  // Sekwencja UKOŃCZONA!
         s_sequenceStep = 0;
         s_sequenceDirection = 0;
-        return ENC_LEFT;  // ✅ Pełny krok counter-clockwise
+        return ENC_LEFT;  // Pełny krok counter-clockwise
       }
       s_sequenceTimeout = now;  // Aktualizuj timeout
       return ENC_NONE;
@@ -186,7 +186,7 @@ static EncoderEvent buttonCheck(unsigned long now) {
         now - s_lastButtonAction >= s_debounceMs) {
       s_buttonWasLongPress = true;
       s_lastButtonAction = now;
-      s_longPressCooldown = now;  // ← Zapamiętaj moment ENC_LONG
+      s_longPressCooldown = now;  // Zapamiętaj moment ENC_LONG
       s_lastSWRaw = swRaw;
       return ENC_LONG;  // Zwróć event TYLKO RAZ
     }

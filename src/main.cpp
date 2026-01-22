@@ -13,6 +13,7 @@
 #include "WiFiSync.h"
 #include "StatsManager.h" 
 #include "AudioBT.h" 
+#include <DHT.h>
 
 // komentarz testowy 
 // ========== STAŁE CZASOWE (zamiast magic numbers) ==========
@@ -80,6 +81,19 @@ byte alarmIcon[8] = {
   B00000
 };
 
+// --- DHT Sensor ---
+// --- DHT11 ---
+#define DHT_PIN 4
+#define DHT_TYPE DHT11
+
+// --- DHT11 ---
+void updateDHT();
+void drawTemperature();
+void drawHumidity();
+void showTemperature7Seg();
+void showHumidity7Seg();
+
+
 // ========== ZMIENNE GLOBALNE (pogrupowane funkcjonalnie) ==========
 
 // --- AppState (EXTERN z AppState.cpp) ---
@@ -96,9 +110,11 @@ const char* menuItems[] = {
   "Czas z WiFi",
   "Statystyki", 
   "Debug STM32",
+  "Temperatura",
+  "Wilgotnosc",
   "Wyjscie"
 };
-int menuCount = 7;
+int menuCount = 9;
 
 // --- Statystyki Menu ---
 int statsMenuIndex = 0;
@@ -132,6 +148,26 @@ unsigned long lastStoperDraw = 0;
 // --- Czas (HH:MM:SS) ---
 int hours = 12, minutes = 0, seconds = 0;
 unsigned long lastTick = 0;
+
+// === DHT Sensor ===
+
+DHT dht(DHT_PIN, DHT_TYPE);
+bool dhtScreenDirty = true;
+int savedHours = 0;
+int savedMinutes = 0;
+int savedSeconds = 0;
+bool timeSaved = false;
+
+
+// Odczyty
+float dhtTemperature = 0.0;
+float dhtHumidity = 0.0;
+
+// Stabilizacja odczytów
+bool dhtReady = false;
+unsigned long dhtLastRead = 0;
+constexpr unsigned long DHT_READ_INTERVAL_MS = 2000;
+
 
 // ======================================================
 // ========== IMPLEMENTACJA FUNKCJI - LOGIKA ZEGARA ====
@@ -184,7 +220,9 @@ void setup() {
     Serial.begin(UART_BAUD);
     delay(SETUP_DELAY_MS);
 
-     
+    // --- DHT Sensor Init ---
+    dht.begin();
+
     // ========== BLUETOOTH AUDIO ==========
     Serial.println("Inicjalizacja Bluetooth...");
     audioBT_init();
@@ -314,4 +352,131 @@ if (appState == STATE_STOPER &&
         Serial.print("BT Connected: ");
         Serial.println(audioBT_isConnected() ? "TAK" : "NIE");
     }
+    //=== DHT SENSOR UPDATE ===
+    updateDHT();
+
+    if (appState == STATE_TEMPERATURE) {
+  drawTemperature();
+  showTemperature7Seg();
+}
+
+if (appState == STATE_HUMIDITY) {
+  drawHumidity();
+  showHumidity7Seg();
+}
+
+}
+
+//=== KOD DO DHT (MOŻESZ PRZENIEŚĆ DO INNEGO PLIKU) (ja nie wiem jak XD)===
+
+ // --- Funkcja do odczytu DHT z stabilizacją ---
+ void updateDHT() {
+  if (millis() - dhtLastRead < DHT_READ_INTERVAL_MS) return;
+  dhtLastRead = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+
+  if (!isnan(t) && !isnan(h)) {
+    dhtTemperature = t;
+    dhtHumidity = h;
+
+    if (!dhtReady) dhtScreenDirty = true;
+    dhtReady = true;
+  }
+}
+
+// --- Rysowanie ekranu temperatury ---
+void drawTemperature() {
+  static float lastTemp = -1000;
+
+  if (!dhtReady) {
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Temperatura");
+    lcd.setCursor(0,1);
+    lcd.print("Odczyt...");
+    return;
+  }
+
+  if (!dhtScreenDirty && dhtTemperature == lastTemp) return;
+
+  dhtScreenDirty = false;
+  lastTemp = dhtTemperature;
+
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Temperatura");
+
+  lcd.setCursor(0,1);
+  lcd.print(dhtTemperature, 1);
+  lcd.print((char)223);
+  lcd.print("C");
+}
+
+
+void drawHumidity() {
+  static float lastHum = -1000;
+
+  if (!dhtReady) {
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Wilgotnosc");
+    lcd.setCursor(0,1);
+    lcd.print("Odczyt...");
+    return;
+  }
+
+  if (!dhtScreenDirty && dhtHumidity == lastHum) return;
+
+  dhtScreenDirty = false;
+  lastHum = dhtHumidity;
+
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Wilgotnosc");
+
+  lcd.setCursor(0,1);
+  lcd.print(dhtHumidity, 0);
+  lcd.print(" %");
+}
+
+// --- temperatura i wilgotnosc na 7segmentowych ---
+void showTemperature7Seg() {
+  if (!dhtReady) return;
+
+  if (!timeSaved) {
+    savedHours = hours;
+    savedMinutes = minutes;
+    savedSeconds = seconds;
+    timeSaved = true;
+  }
+
+  int tempInt = constrain((int)dhtTemperature, 0, 99);
+  int tempDec = constrain((int)((dhtTemperature - tempInt) * 100), 0, 99);
+
+  hours = 0;
+  minutes = tempInt;
+  seconds = tempDec;
+
+  updateSevenSeg();
+}
+
+void showHumidity7Seg() {
+  if (!dhtReady) return;
+
+  if (!timeSaved) {
+    savedHours = hours;
+    savedMinutes = minutes;
+    savedSeconds = seconds;
+    timeSaved = true;
+  }
+
+  int hum = constrain((int)dhtHumidity, 0, 99);
+
+  hours = 0;
+  minutes = hum;
+  seconds = 0;
+
+  updateSevenSeg();
 }

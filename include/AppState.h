@@ -8,6 +8,8 @@ enum AppState {
   STATE_STOPER,
   STATE_DEBUG_STM32,
   STATE_WIFI_SYNC,
+  STATE_TEMPERATURE,
+  STATE_HUMIDITY,
   
    // --- Statystyki ---
     STATE_STATS,          // Menu statystyk (lista z >)

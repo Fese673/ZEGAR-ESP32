@@ -40,6 +40,15 @@ extern void drawAlarm();
 extern void drawStoper();
 extern void drawDebugSTM32();
 extern void drawStats();
+extern void drawTemperature();
+extern void drawHumidity();
+extern void showTemperature7Seg();
+extern void showHumidity7Seg();
+
+// potrzebne do DHT
+extern int savedHours, savedMinutes, savedSeconds;
+extern bool timeSaved;
+
 
 static UI_Callbacks s_callbacks;
 
@@ -140,6 +149,17 @@ void ui_handleEvent(EncoderEvent e) {
          if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
          if (s_callbacks.drawDebugSTM32) s_callbacks.drawDebugSTM32();
        }
+       else if (menuIndex == 6) {   // TEMPERATURA
+       appState = STATE_TEMPERATURE;
+       drawTemperature();
+       showTemperature7Seg();
+       }
+       else if (menuIndex == 7) {   // WILGOTNOSC
+       appState = STATE_HUMIDITY;
+       drawHumidity();
+       showHumidity7Seg();
+       }
+
        else { // Wyjście
          appState = STATE_HOME;
          if (s_callbacks.drawHome) s_callbacks.drawHome();
@@ -221,7 +241,22 @@ void ui_handleEvent(EncoderEvent e) {
   // 3. DŁUGIE KLIKNIĘCIE (back/escape)
   // ========================================================================
   if (e == ENC_LONG) {
-      
+    // --- wyjście z temperatury/wilgotności ---
+    if (appState == STATE_TEMPERATURE || appState == STATE_HUMIDITY) {
+
+    if (timeSaved) {
+    hours = savedHours;
+    minutes = savedMinutes;
+    seconds = savedSeconds;
+    timeSaved = false;
+    }
+
+    appState = STATE_MENU;
+    if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+    return;
+    }
+
+  
     // Z głębokich statystyk -> do MENU STATYSTYK
     if (appState == STATE_STATS_CLICKS || appState == STATE_STATS_STEPS) {
         appState = STATE_STATS;

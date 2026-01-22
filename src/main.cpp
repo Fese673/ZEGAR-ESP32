@@ -12,6 +12,7 @@
 #include "UI_Draw.h"
 #include "WiFiSync.h"
 #include "StatsManager.h" 
+#include "AudioBT.h" 
 
 // komentarz testowy 
 // ========== STAŁE CZASOWE (zamiast magic numbers) ==========
@@ -183,6 +184,13 @@ void setup() {
     Serial.begin(UART_BAUD);
     delay(SETUP_DELAY_MS);
 
+     
+    // ========== BLUETOOTH AUDIO ==========
+    Serial.println("Inicjalizacja Bluetooth...");
+    audioBT_init();
+    Serial.println("Bluetooth gotowy - nazwa: ESP32_AUDIO");
+    // =================================================
+
 #if UART_LCD_MIRROR
     lcdMirror.begin();
 #endif
@@ -298,4 +306,12 @@ if (appState == STATE_STOPER &&
     lastStoperDraw = millis();
     drawStoper();
   }
+
+      // TEST: wyświetl stan co 5s (potem usuń)
+    static unsigned long lastBtCheck = 0;
+    if (millis() - lastBtCheck > 5000) {
+        lastBtCheck = millis();
+        Serial.print("BT Connected: ");
+        Serial.println(audioBT_isConnected() ? "TAK" : "NIE");
+    }
 }

@@ -48,6 +48,16 @@ extern int displayedBPM;
 extern int displayedSPO2;
 extern bool stm32Connected;
 
+// === Zmienne dla DHT ===
+extern float dhtTemperature;
+extern float dhtHumidity;
+extern bool dhtReady;
+extern bool dhtScreenDirty;
+
+// Zmienne do triku z zamrażaniem czasu na 7-seg
+extern int savedHours, savedMinutes, savedSeconds;
+extern bool timeSaved;
+
 
 // LCD object (your main must define it, e.g. LiquidCrystal_I2C lcd(...))
 extern LiquidCrystal_I2C lcd;
@@ -66,6 +76,12 @@ void drawDebugSTM32();
 void printTime(bool edit);
 void printVal(int v, bool sel);
 void drawStats();  // UI statystyk
+
+// === Funkcje DHT ===
+void drawTemperature();
+void drawHumidity();
+void showTemperature7Seg();
+void showHumidity7Seg();
 
 
 

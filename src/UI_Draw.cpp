@@ -277,3 +277,125 @@ void drawStats() {
 
     LCD_DUMP();
 }
+
+
+// ======================================================
+// ========== IMPLEMENTACJA DHT (TEMPERATURA/WILGOTNOŚĆ) =
+// ======================================================
+
+void drawTemperature() {
+    static float lastTemp = -1000;
+
+    // Jeśli czujnik nie gotowy
+    if (!dhtReady) {
+        LCD_CLEAR();
+        LCD_SET(0, 0);
+        LCD_PRINT("Temperatura");
+        LCD_SET(0, 1);
+        LCD_PRINT("Odczyt...");
+        LCD_DUMP();
+        return;
+    }
+
+    // Optymalizacja: nie rysuj jeśli nic się nie zmieniło
+    if (!dhtScreenDirty && dhtTemperature == lastTemp) return;
+    
+    dhtScreenDirty = false;
+    lastTemp = dhtTemperature;
+
+    LCD_CLEAR();
+    LCD_SET(0, 0);
+    LCD_PRINT("Temperatura");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT(dhtTemperature); 
+    // Ręczna obsługa formatowania (float, 1 miejsce po przecinku) nie jest wprost w makrze,
+    // ale LCD_PRINT(float) zazwyczaj drukuje 2 miejsca.
+    // Jeśli potrzebujesz dokładnie 1 miejsca, możesz użyć lcd.print, ale wtedy mirror nie zadziała dla tej liczby.
+    // Najlepiej zostawić domyślne print lub sformatować do String/buffer.
+    
+    LCD_WRITE(223); // Znak stopnia
+    LCD_PRINT("C");
+
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Wyjscie");
+    
+    LCD_DUMP();
+}
+
+void drawHumidity() {
+    static float lastHum = -1000;
+
+    if (!dhtReady) {
+        LCD_CLEAR();
+        LCD_SET(0, 0);
+        LCD_PRINT("Wilgotnosc");
+        LCD_SET(0, 1);
+        LCD_PRINT("Odczyt...");
+        LCD_DUMP();
+        return;
+    }
+
+    if (!dhtScreenDirty && dhtHumidity == lastHum) return;
+    
+    dhtScreenDirty = false;
+    lastHum = dhtHumidity;
+
+    LCD_CLEAR();
+    LCD_SET(0, 0);
+    LCD_PRINT("Wilgotnosc");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT((int)dhtHumidity); // Rzutowanie na int dla ładniejszego wyglądu
+    LCD_PRINT(" %");
+
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Wyjscie");
+    
+    LCD_DUMP();
+}
+
+// --- Obsługa 7-segmentowego wyświetlacza dla DHT ---
+
+void showTemperature7Seg() {
+    if (!dhtReady) return;
+
+    // Zapisz aktualny czas tylko raz przy wejściu
+    if (!timeSaved) {
+        savedHours = hours;
+        savedMinutes = minutes;
+        savedSeconds = seconds;
+        timeSaved = true;
+    }
+
+    // Formatowanie: np. 24.5 stopnia -> 24 : 50 (jako sekundy) lub inne
+    int tempInt = constrain((int)dhtTemperature, 0, 99);
+    int tempDec = constrain((int)((dhtTemperature - tempInt) * 10), 0, 99); // Jedno miejsce po przecinku
+
+    // Nadpisujemy zmienne globalne czasu, aby updateSevenSeg() wyświetlił temperaturę
+    // UWAGA: To trik wizualny. Prawdziwy czas przywracamy przy wyjściu z menu (w UI_Controller).
+    hours = 0;       // Puste pole godzin (lub np. 0)
+    minutes = tempInt; 
+    seconds = tempDec * 10; // Żeby wyglądało np. 24:50
+
+    updateSevenSeg();
+}
+
+void showHumidity7Seg() {
+    if (!dhtReady) return;
+
+    if (!timeSaved) {
+        savedHours = hours;
+        savedMinutes = minutes;
+        savedSeconds = seconds;
+        timeSaved = true;
+    }
+
+    int hum = constrain((int)dhtHumidity, 0, 99);
+
+    hours = 0;
+    minutes = hum;
+    seconds = 0;
+
+    updateSevenSeg();
+}

@@ -8,6 +8,14 @@ struct AppStats {
     uint32_t stepsRight;
 };
 
+struct EnvStats {
+    float tempMin;
+    float tempMax;
+    float humMin;
+    float humMax;
+};
+
+
 class StatsManager {
 private:
     Preferences prefs;
@@ -17,16 +25,38 @@ private:
     const unsigned long SAVE_INTERVAL_MS = 120000; // Zmiana interwału zapisu na 120s
     const char* PREFS_NAMESPACE = "app_stats";
 
+    EnvStats envStats;
+    bool envDirty;
+    unsigned long lastEnvSaveTime;
+    const unsigned long ENV_SAVE_INTERVAL_MS = 300000; // 5 minut
+
 public:
+      // do statystyk temperatury i wilgotności
+      void updateTemperature(float t);
+      void updateHumidity(float h);
+      EnvStats getEnvStats() const;
+
     void begin() {
-        prefs.begin(PREFS_NAMESPACE, true); // Read-only mode first
+       prefs.begin(PREFS_NAMESPACE, true);
+
+      // Kliknięcia / kroki
         currentStats.totalClicks = prefs.getUInt("clicks", 0);
-        currentStats.stepsLeft = prefs.getUInt("left", 0);
+        currentStats.stepsLeft  = prefs.getUInt("left", 0);
         currentStats.stepsRight = prefs.getUInt("right", 0);
-        prefs.end();
-        
-        isDirty = false;
-        lastSaveTime = millis();
+
+      // ENV
+      envStats.tempMin = prefs.getFloat("tmin",  1000.0);
+      envStats.tempMax = prefs.getFloat("tmax", -1000.0);
+      envStats.humMin  = prefs.getFloat("hmin",  1000.0);
+      envStats.humMax  = prefs.getFloat("hmax", -1000.0);
+
+     prefs.end();
+
+     isDirty = false;
+     envDirty = false;
+     lastSaveTime = millis();
+     lastEnvSaveTime = millis();
+
     }
 
     void registerClick() {
@@ -45,10 +75,26 @@ public:
     }
 
     // Wywoływać w loop()
-    void update() {
-        if (isDirty && (millis() - lastSaveTime > SAVE_INTERVAL_MS)) {
-            saveStats();
-        }
+        void update() {
+ 
+    // zapis klików/kroków
+    if (isDirty && (millis() - lastSaveTime > SAVE_INTERVAL_MS)) {
+        saveStats();
+    }
+
+    // zapis ENV
+    if (envDirty && (millis() - lastEnvSaveTime > ENV_SAVE_INTERVAL_MS)) {
+        prefs.begin(PREFS_NAMESPACE, false);
+        prefs.putFloat("tmin", envStats.tempMin);
+        prefs.putFloat("tmax", envStats.tempMax);
+        prefs.putFloat("hmin", envStats.humMin);
+        prefs.putFloat("hmax", envStats.humMax);
+        prefs.end();
+
+        envDirty = false;
+        lastEnvSaveTime = millis();
+    }
+
     }
 
     // Wymuszenie zapisu (np. przy wyłączaniu lub resecie)
@@ -81,6 +127,5 @@ public:
     uint32_t getTotalSteps() const {
         return currentStats.stepsLeft + currentStats.stepsRight;
     }
-};
-
+    };
 extern StatsManager statsManager;

@@ -168,24 +168,36 @@ void ui_handleEvent(EncoderEvent e) {
     }
 
     // --- LOGIKA MENU STATYSTYK ---
-    if (appState == STATE_STATS) {
-        if (statsMenuIndex == 0) {
-            // Wybrano "Kliki"
-            appState = STATE_STATS_CLICKS;
-            if (s_callbacks.drawStats) s_callbacks.drawStats();
-        }
-        else if (statsMenuIndex == 1) {
-            // Wybrano "Kroki"
-            appState = STATE_STATS_STEPS;
-            if (s_callbacks.drawStats) s_callbacks.drawStats();
-        }
-        else if (statsMenuIndex == 2) {
-            // Wybrano "Wyjscie" -> Wracamy do MENU GŁÓWNEGO
-            appState = STATE_MENU;
-            if (s_callbacks.drawMenu) s_callbacks.drawMenu();
-        }
-        return;
+if (appState == STATE_STATS) {
+
+    if (statsMenuIndex == 0) {
+        // Kliki
+        appState = STATE_STATS_CLICKS;
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
     }
+    else if (statsMenuIndex == 1) {
+        // Kroki
+        appState = STATE_STATS_STEPS;
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+    }
+    else if (statsMenuIndex == 2) {
+        // Temp min/max
+        appState = STATE_STATS_TEMP;
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+    }
+    else if (statsMenuIndex == 3) {
+        // Wilg min/max
+        appState = STATE_STATS_HUM;
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+    }
+    else if (statsMenuIndex == 4) {
+        // Wyjscie -> MENU GŁÓWNE
+        appState = STATE_MENU;
+        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+    }
+
+    return;
+}
 
     // --- LOGIKA POZOSTAŁYCH STANÓW ---
     
@@ -241,20 +253,43 @@ void ui_handleEvent(EncoderEvent e) {
   // 3. DŁUGIE KLIKNIĘCIE (back/escape)
   // ========================================================================
   if (e == ENC_LONG) {
-    // --- wyjście z temperatury/wilgotności ---
-    if (appState == STATE_TEMPERATURE || appState == STATE_HUMIDITY) {
+    // =====================================================
+// STATYSTYKI ENV -> powrót do MENU STATYSTYK
+// =====================================================
+if (appState == STATE_STATS_TEMP || appState == STATE_STATS_HUM) {
+    appState = STATE_STATS;
 
+    // ustaw kursor na odpowiedniej pozycji
+    statsMenuIndex = (appState == STATE_STATS_TEMP) ? 2 : 3;
+
+    if (s_callbacks.drawStats) s_callbacks.drawStats();
+    return;
+}
+
+// =====================================================
+// DHT (Temperatura / Wilgotność) -> powrót do MENU
+// =====================================================
+if (appState == STATE_TEMPERATURE || appState == STATE_HUMIDITY) {
+
+    // przywróć czas na 7-seg
     if (timeSaved) {
-    hours = savedHours;
-    minutes = savedMinutes;
-    seconds = savedSeconds;
-    timeSaved = false;
+        hours = savedHours;
+        minutes = savedMinutes;
+        seconds = savedSeconds;
+        timeSaved = false;
     }
 
     appState = STATE_MENU;
     if (s_callbacks.drawMenu) s_callbacks.drawMenu();
     return;
+}
+
+
+    appState = STATE_MENU;
+    if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+    return;
     }
+
 
   
     // Z głębokich statystyk -> do MENU STATYSTYK
@@ -278,4 +313,4 @@ void ui_handleEvent(EncoderEvent e) {
     }
     return;
   }
-}
+

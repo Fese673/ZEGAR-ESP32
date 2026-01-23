@@ -223,31 +223,47 @@ void drawStats() {
     if (appState == STATE_STATS) {
         LCD_SET(2, 0);
         LCD_PRINT("MENU STATYSTYK");
-        
-        // Rysujemy 3 opcje
-        for (int i = 0; i < statsMenuCount; i++) {
-            LCD_SET(0, i + 1);
-            
-            // Kursor
-            if (i == statsMenuIndex) {
-                LCD_PRINT("> ");
-            } else {
-                LCD_PRINT("  ");
-            }
-            
-            // Nazwa i Wartość
-            if (i == 0) { // Kliki
-                LCD_PRINT("Kliki     ");
-                LCD_PRINT(stats.totalClicks);
-            } 
-            else if (i == 1) { // Kroki
-                LCD_PRINT("Kroki     ");
-                LCD_PRINT(statsManager.getTotalSteps());
-            } 
-            else if (i == 2) { // Wyjscie
-                LCD_PRINT("Wyjscie");
-            }
-        }
+
+    // ile pozycji mieści się na ekranie (bez nagłówka)
+const int ITEMS_PER_PAGE = 3;
+
+// obliczamy pierwszą pozycję strony
+int first = (statsMenuIndex / ITEMS_PER_PAGE) * ITEMS_PER_PAGE;
+
+for (int row = 0; row < ITEMS_PER_PAGE; row++) {
+    int i = first + row;
+    if (i >= statsMenuCount) break;
+
+    LCD_SET(0, row + 1);
+
+    // kursor
+    if (i == statsMenuIndex) {
+        LCD_PRINT("> ");
+    } else {
+        LCD_PRINT("  ");
+    }
+
+    // zawartość
+    if (i == 0) {
+        LCD_PRINT("Kliki ");
+        LCD_PRINT(stats.totalClicks);
+    }
+    else if (i == 1) {
+        LCD_PRINT("Kroki ");
+        LCD_PRINT(statsManager.getTotalSteps());
+    }
+    else if (i == 2) {
+        LCD_PRINT("Temp min/max");
+    }
+    else if (i == 3) {
+        LCD_PRINT("Wilg min/max");
+    }
+    else if (i == 4) {
+        LCD_PRINT("Wyjscie");
+    }
+
+    }
+
     }
     
     // === 2. WIDOK KLIKNIĘĆ ===
@@ -274,8 +290,50 @@ void drawStats() {
         LCD_SET(0, 3);
         LCD_PRINT("Dlugi -> Powrot");
     }
+    // === 4. WIDOK TEMPERATURY MIN/MAX ===
+    else if (appState == STATE_STATS_TEMP) {
+    EnvStats e = statsManager.getEnvStats();
+    LCD_SET(0,0);
+    LCD_PRINT("TEMPERATURA");
+    LCD_SET(0,1);
 
-    LCD_DUMP();
+    char buf[10];
+    LCD_PRINT("MIN: ");
+    dtostrf(e.tempMin, 4, 1, buf);
+    LCD_PRINT(buf);
+
+    LCD_SET(0,2);
+
+    LCD_PRINT("MAX: ");
+    dtostrf(e.tempMax, 4, 1, buf);
+    LCD_PRINT(buf);
+
+    LCD_SET(0,3);
+    LCD_PRINT("Dlugi -> Powrot");
+    }
+   
+    else if (appState == STATE_STATS_HUM) {
+    EnvStats e = statsManager.getEnvStats();
+    LCD_SET(0,0);
+    LCD_PRINT("WILGOTNOSC");
+    LCD_SET(0,1);
+
+    char buf[10];
+    LCD_PRINT("MIN: ");
+    dtostrf(e.humMin, 4, 1, buf);
+    LCD_PRINT(buf);
+
+    LCD_SET(0,2);
+
+    LCD_PRINT("MAX: ");
+    dtostrf(e.humMax, 4, 1, buf);
+    LCD_PRINT(buf);
+
+    LCD_SET(0,3);
+    LCD_PRINT("Dlugi -> Powrot");
+    }
+
+   LCD_DUMP();
 }
 
 

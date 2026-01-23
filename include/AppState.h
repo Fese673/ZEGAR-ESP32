@@ -14,7 +14,10 @@ enum AppState {
    // --- Statystyki ---
     STATE_STATS,          // Menu statystyk (lista z >)
     STATE_STATS_CLICKS,   // Nowy: Widok samych kliknięć
-    STATE_STATS_STEPS     // (Dawniej DETAIL): Widok kroków L/R
+    STATE_STATS_STEPS,    // (Dawniej DETAIL): Widok kroków L/R
+    STATE_STATS_TEMP,     // Nowy: Widok min/max temperatury
+    STATE_STATS_HUM       // Nowy: Widok min/max wilgotności
+
 };
 
 enum EditState {

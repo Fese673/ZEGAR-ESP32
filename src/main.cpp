@@ -119,11 +119,13 @@ int menuCount = 9;
 // --- Statystyki Menu ---
 int statsMenuIndex = 0;
 const char* statsMenuItems[] = {
-  "Kliki",      // Index 0 -> Widok kliknięć
-  "Kroki",      // Index 1 -> Widok kroków (szczegóły)
-  "Wyjscie"     // Index 2 -> Powrót
+  "Kliki",
+  "Kroki",
+  "Temp min/max",
+  "Wilg min/max",
+  "Wyjscie"
 };
-int statsMenuCount = 3;
+int statsMenuCount = 5;
 
 // --- Budzik ---
 int alarmHour = 7, alarmMinute = 0;
@@ -380,6 +382,8 @@ if (appState == STATE_HUMIDITY) {
   if (!isnan(t) && !isnan(h)) {
     dhtTemperature = t;
     dhtHumidity = h;
+    statsManager.updateTemperature(t);
+    statsManager.updateHumidity(h);
 
     if (!dhtReady) dhtScreenDirty = true;
     dhtReady = true;

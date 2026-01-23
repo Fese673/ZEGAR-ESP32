@@ -76,6 +76,7 @@ void drawDebugSTM32();
 void printTime(bool edit);
 void printVal(int v, bool sel);
 void drawStats();  // UI statystyk
+void drawSystemResources(); // UI zasobów systemu (RAM/FLASH)
 
 // === Funkcje DHT ===
 void drawTemperature();

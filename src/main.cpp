@@ -39,6 +39,10 @@ void playAlarmMelody();
 // --- Wrapper dla kompatybilności ---
 void syncTimeFromWiFi() {
   WiFiSync::startSync();
+
+// --- zasoby systemu ---
+void drawSystemResources(); 
+
 }
 
 // ---- KONFIGURACJA SPRZĘTU (PIN + STAŁE) ----
@@ -123,9 +127,10 @@ const char* statsMenuItems[] = {
   "Kroki",
   "Temp min/max",
   "Wilg min/max",
+  "Zasoby",  
   "Wyjscie"
 };
-int statsMenuCount = 5;
+int statsMenuCount = 6;
 
 // --- Budzik ---
 int alarmHour = 7, alarmMinute = 0;
@@ -266,7 +271,8 @@ void setup() {
     callbacks.drawDebugSTM32 = drawDebugSTM32;
     callbacks.updateSevenSeg = updateSevenSeg;
     callbacks.updateSevenSegStoper = updateSevenSegStoper;
-    callbacks.drawStats = drawStats; //Callbacki do UI statystyk
+    callbacks.drawStats = drawStats;  //Callbacki do UI statystyk
+    callbacks.drawSystemResources = drawSystemResources; // Callback do rysowania zasobów systemu (RAM/FLASH)
 
     ui_begin(callbacks);
     drawHome();

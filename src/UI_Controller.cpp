@@ -100,6 +100,10 @@ void ui_handleEvent(EncoderEvent e) {
       }
       if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
     }
+    else if (appState == STATE_STATS_RESOURCES) {
+         // Odśwież ekran przy każdym ruchu 
+         if (s_callbacks.drawSystemResources) s_callbacks.drawSystemResources();
+    }
     return;
   }
 
@@ -121,77 +125,82 @@ void ui_handleEvent(EncoderEvent e) {
          appState = STATE_SET_TIME;
          editState = EDIT_HOURS;
          if (s_callbacks.drawSetTime) s_callbacks.drawSetTime();
+         return;
        }
        else if (menuIndex == 1) {
          appState = STATE_STOPER;
          stoperRunning = false;
          stoperElapsed = 0;
          if (s_callbacks.drawStoper) s_callbacks.drawStoper();
+         return;
        }
        else if (menuIndex == 2) {
          appState = STATE_ALARM;
          editState = EDIT_HOURS;
          if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
+         return;
        }
        else if (menuIndex == 3) {
          syncTimeFromWiFi();
          if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
          if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+         return;
        }
        else if (menuIndex == 4) {
            // Wejście w Menu Statystyk
            appState = STATE_STATS;
            statsMenuIndex = 0; // Reset na pierwszą pozycję
            if (s_callbacks.drawStats) s_callbacks.drawStats();
+           return;
        }
        else if (menuIndex == 5) {
          appState = STATE_DEBUG_STM32;
          if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
          if (s_callbacks.drawDebugSTM32) s_callbacks.drawDebugSTM32();
+         return;
        }
        else if (menuIndex == 6) {   // TEMPERATURA
        appState = STATE_TEMPERATURE;
        drawTemperature();
        showTemperature7Seg();
+       return;
        }
        else if (menuIndex == 7) {   // WILGOTNOSC
        appState = STATE_HUMIDITY;
        drawHumidity();
        showHumidity7Seg();
-       }
-
-       else { // Wyjście
-         appState = STATE_HOME;
-         if (s_callbacks.drawHome) s_callbacks.drawHome();
-       }
        return;
-    }
+       }
+  }
+
+
 
     // --- LOGIKA MENU STATYSTYK ---
 if (appState == STATE_STATS) {
 
     if (statsMenuIndex == 0) {
-        // Kliki
         appState = STATE_STATS_CLICKS;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
     }
     else if (statsMenuIndex == 1) {
-        // Kroki
         appState = STATE_STATS_STEPS;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
     }
     else if (statsMenuIndex == 2) {
-        // Temp min/max
         appState = STATE_STATS_TEMP;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
     }
     else if (statsMenuIndex == 3) {
-        // Wilg min/max
         appState = STATE_STATS_HUM;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
     }
     else if (statsMenuIndex == 4) {
-        // Wyjscie -> MENU GŁÓWNE
+        // ZASOBY
+        appState = STATE_STATS_RESOURCES;
+        if (s_callbacks.drawSystemResources) s_callbacks.drawSystemResources();
+    }
+    else if (statsMenuIndex == 5) {
+        // WYJSCIE
         appState = STATE_MENU;
         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
     }
@@ -200,7 +209,7 @@ if (appState == STATE_STATS) {
 }
 
     // --- LOGIKA POZOSTAŁYCH STANÓW ---
-    
+
     if (appState == STATE_STOPER) {
       if (!stoperRunning) {
         stoperRunning = true;
@@ -245,72 +254,81 @@ if (appState == STATE_STATS) {
       }
       return;
     }
-    
+
     return;
-  }
+  } // koniec: if (e == ENC_CLICK)
 
   // ========================================================================
   // 3. DŁUGIE KLIKNIĘCIE (back/escape)
   // ========================================================================
   if (e == ENC_LONG) {
-    // =====================================================
-// STATYSTYKI ENV -> powrót do MENU STATYSTYK
-// =====================================================
-if (appState == STATE_STATS_TEMP || appState == STATE_STATS_HUM) {
-    appState = STATE_STATS;
 
-    // ustaw kursor na odpowiedniej pozycji
-    statsMenuIndex = (appState == STATE_STATS_TEMP) ? 2 : 3;
+    // Statystyki: ekrany szczegółowe -> powrót do menu statystyk
+    if (appState == STATE_STATS_CLICKS) {
+      appState = STATE_STATS;
+      statsMenuIndex = 0;
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
 
-    if (s_callbacks.drawStats) s_callbacks.drawStats();
-    return;
-}
+    if (appState == STATE_STATS_STEPS) {
+      appState = STATE_STATS;
+      statsMenuIndex = 1;
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
 
-// =====================================================
-// DHT (Temperatura / Wilgotność) -> powrót do MENU
-// =====================================================
-if (appState == STATE_TEMPERATURE || appState == STATE_HUMIDITY) {
+    if (appState == STATE_STATS_TEMP) {
+      appState = STATE_STATS;
+      statsMenuIndex = 2;
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
 
-    // przywróć czas na 7-seg
-    if (timeSaved) {
+    if (appState == STATE_STATS_HUM) {
+      appState = STATE_STATS;
+      statsMenuIndex = 3;
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
+
+    if (appState == STATE_STATS_RESOURCES) {
+      appState = STATE_STATS;
+      statsMenuIndex = 4; // "Zasoby"
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
+
+    // Menu statystyk -> menu główne
+    if (appState == STATE_STATS) {
+      appState = STATE_MENU;
+      if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+      return;
+    }
+
+    // DHT (temp/wilg) -> powrót do MENU + ewentualne przywrócenie czasu
+    if (appState == STATE_TEMPERATURE || appState == STATE_HUMIDITY) {
+      if (timeSaved) {
         hours = savedHours;
         minutes = savedMinutes;
         seconds = savedSeconds;
         timeSaved = false;
+      }
+      appState = STATE_MENU;
+      if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+      return;
     }
 
-    appState = STATE_MENU;
-    if (s_callbacks.drawMenu) s_callbacks.drawMenu();
-    return;
-}
-
-
-    appState = STATE_MENU;
-    if (s_callbacks.drawMenu) s_callbacks.drawMenu();
-    return;
-    }
-
-
-  
-    // Z głębokich statystyk -> do MENU STATYSTYK
-    if (appState == STATE_STATS_CLICKS || appState == STATE_STATS_STEPS) {
-        appState = STATE_STATS;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
-        return;
-    }
-
-    // Z MENU STATYSTYK -> do MENU GŁÓWNEGO
-    if (appState == STATE_STATS) {
-        appState = STATE_MENU;
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
-        return;
-    }
-
-    // Inne wyjścia
+    // Inne wyjścia -> MENU
     if (appState == STATE_STOPER || appState == STATE_DEBUG_STM32) {
       appState = STATE_MENU;
       if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+      return;
     }
+
+    // Fallback (cokolwiek innego) -> MENU
+    appState = STATE_MENU;
+    if (s_callbacks.drawMenu) s_callbacks.drawMenu();
     return;
   }
-
+} // koniec: ui_handleEvent(...)

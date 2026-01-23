@@ -2,6 +2,7 @@
 #include "LCDMirror.h"
 #include "StatsManager.h"
 #include <LiquidCrystal_I2C.h>
+#include <Esp.h>
 
 extern LiquidCrystal_I2C lcd;
 
@@ -259,13 +260,15 @@ for (int row = 0; row < ITEMS_PER_PAGE; row++) {
         LCD_PRINT("Wilg min/max");
     }
     else if (i == 4) {
+        LCD_PRINT("Zasoby");
+    }
+    else if (i == 5) {
         LCD_PRINT("Wyjscie");
-    }
 
     }
 
-    }
-    
+  }  
+}   
     // === 2. WIDOK KLIKNIĘĆ ===
     else if (appState == STATE_STATS_CLICKS) {
         LCD_SET(0, 0);
@@ -456,4 +459,44 @@ void showHumidity7Seg() {
     seconds = 0;
 
     updateSevenSeg();
+}
+
+
+void drawSystemResources() {
+    LCD_CLEAR();
+    
+    // --- RAM INFO ---
+    uint32_t freeRam = ESP.getFreeHeap();
+    uint32_t maxBlock = ESP.getMaxAllocHeap();
+    
+    // --- FLASH INFO ---
+    // SketchSize - ile zajmuje Twój kod
+    // FreeSketchSpace - ile zostało miejsca
+    uint32_t usedFlash = ESP.getSketchSize();
+    uint32_t freeFlash = ESP.getFreeSketchSpace();
+    
+    // Wiersz 0: Nagłówek
+    LCD_SET(0, 0);
+    LCD_PRINT("ZASOBY SYSTEMU");
+
+    // Wiersz 1: RAM (Wolny / MaxBlok)
+    LCD_SET(0, 1);
+    char buf[17];
+    // Format: R: 45k/120k (Wolny/Całkowity? Nie, ESP podaje wolny. Lepiej: Wolny/Blok)
+    // Zróbmy prościej: RAM: 123kB
+    snprintf(buf, sizeof(buf), "RAM: %lu kB", freeRam / 1024);
+    LCD_PRINT(buf);
+
+    // Wiersz 2: Flash (Zajęty kodem)
+    LCD_SET(0, 2);
+    // Format: FL: 450k (Zajęte)
+    snprintf(buf, sizeof(buf), "FL Use: %lu kB", usedFlash / 1024);
+    LCD_PRINT(buf);
+
+    // Wiersz 3: Flash (Wolny)
+    LCD_SET(0, 3);
+    snprintf(buf, sizeof(buf), "FL Free: %lu kB", freeFlash / 1024);
+    LCD_PRINT(buf);
+
+    LCD_DUMP();
 }

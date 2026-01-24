@@ -1,10 +1,11 @@
 #include "UI_Controller.h"
 #include <Arduino.h>
 #include "AppState.h"
+#include "ModeManager.h"
 
 // Zmienne globalne z main.cpp
 extern int menuIndex;
-extern const int menuCount;
+extern int menuCount;
 extern enum AppState appState;
 extern enum EditState editState;
 
@@ -170,6 +171,32 @@ void ui_handleEvent(EncoderEvent e) {
        drawHumidity();
        showHumidity7Seg();
        return;
+       }
+       else if (menuIndex == 8) { // Wyjscie
+         appState = STATE_HOME;
+         if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
+         if (s_callbacks.drawHome) s_callbacks.drawHome();
+         return;
+       }
+       else if (menuIndex == 9) { // WiFi ON
+         ModeManager::wifiOn();
+         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+         return;
+       }
+       else if (menuIndex == 10) { // WiFi OFF
+         ModeManager::wifiOff();
+         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+         return;
+       }
+       else if (menuIndex == 11) { // BT ON
+         ModeManager::btOn();
+         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+         return;
+       }
+       else if (menuIndex == 12) { // BT OFF
+         ModeManager::btOff();
+         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+         return;
        }
   }
 

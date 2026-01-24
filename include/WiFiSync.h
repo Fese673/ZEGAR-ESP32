@@ -27,6 +27,7 @@ void begin(const char* ssid, const char* pass,
            long gmt_offset = 3600, int dst_offset = 3600);
 
 void startSync();
+void stop();
 void update();
 bool isBusy();
 

@@ -13,6 +13,7 @@
 #include "WiFiSync.h"
 #include "StatsManager.h" 
 #include "AudioBT.h" 
+#include "ModeManager.h"
 #include <DHT.h>
 
 // komentarz testowy 
@@ -38,12 +39,12 @@ void playAlarmMelody();
 
 // --- Wrapper dla kompatybilności ---
 void syncTimeFromWiFi() {
-  WiFiSync::startSync();
+  // Uruchom sync w trybie Wi-Fi, wymuszając wyłączenie BT.
+  ModeManager::wifiOn();
+}
 
 // --- zasoby systemu ---
 void drawSystemResources(); 
-
-}
 
 // ---- KONFIGURACJA SPRZĘTU (PIN + STAŁE) ----
 
@@ -116,9 +117,13 @@ const char* menuItems[] = {
   "Debug STM32",
   "Temperatura",
   "Wilgotnosc",
-  "Wyjscie"
+  "Wyjscie",
+  "WiFi ON",
+  "WiFi OFF",
+  "BT ON",
+  "BT OFF"
 };
-int menuCount = 9;
+int menuCount = 13;
 
 // --- Statystyki Menu ---
 int statsMenuIndex = 0;
@@ -230,11 +235,8 @@ void setup() {
     // --- DHT Sensor Init ---
     dht.begin();
 
-    // ========== BLUETOOTH AUDIO ==========
-    Serial.println("Inicjalizacja Bluetooth...");
-    audioBT_init();
-    Serial.println("Bluetooth gotowy - nazwa: ESP32_AUDIO");
-    // =================================================
+    // Menedżer trybów (Wi-Fi/BT) – nic automatycznie na starcie.
+    ModeManager::begin(&appState);
 
 #if UART_LCD_MIRROR
     lcdMirror.begin();
@@ -281,8 +283,7 @@ void setup() {
     WiFiSync::setTimeRefs(hours, minutes, seconds, lastTick); // referencje do zmiennych czasu
     WiFiSync::setAppStatePtr(&appState);                     // wskaźnik do appState
     WiFiSync::setOnDone([](){ drawHome(); });               // callback po zakończeniu sync
-    WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER, GMT_OFFSET, DST_OFFSET); // inicjalizacja
-    WiFiSync::startSync();                                   // rozpoczęcie synchronizacji
+    WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER, GMT_OFFSET, DST_OFFSET); // inicjalizacja (bez auto startu)
 }
 
 

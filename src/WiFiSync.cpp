@@ -94,6 +94,16 @@ void startSync() {
   }
 }
 
+void stop() {
+  // Siłowe zatrzymanie procesu Wi-Fi/NTP i zamknięcie radia.
+  state = S_IDLE;
+  retryCount = 0;
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  if (pAppState) *pAppState = STATE_HOME;
+  if (onDoneCb) onDoneCb();
+}
+
 bool isBusy() {
   return state != S_IDLE;
 }

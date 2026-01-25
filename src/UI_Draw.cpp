@@ -25,6 +25,7 @@ extern int statsMenuCount;
 // Stan aplikacji i inne
 extern enum AppState appState;
 extern enum EditState editState;
+extern RadioMode radioMode;
 extern int alarmHour;
 extern int alarmMinute;
 extern bool alarmEnabled;
@@ -125,7 +126,16 @@ void drawMenu() {
     if (item >= menuCount) break;
     LCD_SET(0, i);
     LCD_PRINT(item == menuIndex ? ">" : " ");
-    LCD_PRINT(menuItems[item]);
+    
+    if (item == 9) { // Pozycja radio toggle
+       if (radioMode == WIFI_ONLY) {
+         LCD_PRINT("WiFi OFF | BT ON");
+       } else {
+         LCD_PRINT("WiFi ON | BT OFF");
+       }
+    } else {
+       LCD_PRINT(menuItems[item]);
+    }
   }
   LCD_DUMP();
 }

@@ -178,23 +178,13 @@ void ui_handleEvent(EncoderEvent e) {
          if (s_callbacks.drawHome) s_callbacks.drawHome();
          return;
        }
-       else if (menuIndex == 9) { // WiFi ON
-         ModeManager::wifiOn();
-         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
-         return;
-       }
-       else if (menuIndex == 10) { // WiFi OFF
-         ModeManager::wifiOff();
-         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
-         return;
-       }
-       else if (menuIndex == 11) { // BT ON
-         ModeManager::btOn();
-         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
-         return;
-       }
-       else if (menuIndex == 12) { // BT OFF
-         ModeManager::btOff();
+       else if (menuIndex == 9) { // Radio Toggle
+         if (radioMode == WIFI_ONLY) {
+           radioMode = BT_ONLY;
+         } else {
+           radioMode = WIFI_ONLY;
+         }
+         ModeManager::transitionRadio(radioMode);
          if (s_callbacks.drawMenu) s_callbacks.drawMenu();
          return;
        }

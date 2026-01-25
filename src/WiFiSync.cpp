@@ -1,4 +1,6 @@
 #include "WiFiSync.h"
+#include <WiFi.h>
+#include "esp_wifi.h"
 
 namespace WiFiSync {
 
@@ -99,7 +101,10 @@ void stop() {
   state = S_IDLE;
   retryCount = 0;
   WiFi.disconnect(true);
+  // ustaw tryb OFF zanim zatrzymamy/deinicjalizujemy sterownik
   WiFi.mode(WIFI_OFF);
+  esp_wifi_stop();
+  esp_wifi_deinit();
   if (pAppState) *pAppState = STATE_HOME;
   if (onDoneCb) onDoneCb();
 }

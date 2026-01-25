@@ -29,6 +29,12 @@ enum EditState {
   EDIT_DONE
 };
 
+enum RadioMode {
+    WIFI_ONLY = 0,    // WiFi ON, BT OFF
+    BT_ONLY   = 1     // WiFi OFF, BT ON
+};
+
 //  GLOBALNY STAN APLIKACJI
 extern AppState appState;
 extern EditState editState;
+extern RadioMode radioMode;

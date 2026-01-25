@@ -18,6 +18,11 @@ void wifiOff();  // rozłączy Wi-Fi i wyłączy radio
 void btOn();     // włączy BT, wyłączy Wi-Fi jeśli aktywne
 void btOff();    // rozłączy BT i zwolni pamięć stosu
 
+void transitionRadio(RadioMode mode);
+
+// Diagnostic logging helper (bez alokacji dynamicznych)
+void logDiag(const char* msg);
+
 bool isWifiOn();
 bool isBtOn();
 

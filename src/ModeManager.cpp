@@ -1,6 +1,8 @@
 #include "ModeManager.h"
 
 #include <WiFi.h>
+#include <Esp.h>
+#include <Arduino.h>
 
 #include "WiFiSync.h"
 #include "Bluetooth/AudioBT.h"
@@ -63,6 +65,24 @@ void btOff() {
 		btActive = false;
 	}
 	ensureHome();
+}
+
+void transitionRadio(RadioMode mode) {
+    if (mode == WIFI_ONLY) {
+        wifiOn();
+    } else {
+        btOn();
+    }
+}
+
+void logDiag(const char* msg) {
+	// Minimalny diagnostyczny helper bez alokacji; używany w setup()
+	if (msg) {
+		Serial.print("[ModeManager] ");
+		Serial.print(msg);
+		Serial.print(" heap=");
+		Serial.println(ESP.getFreeHeap());
+	}
 }
 
 bool isWifiOn() { return wifiActive; }

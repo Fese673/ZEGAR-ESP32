@@ -3,6 +3,7 @@
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
 #include <time.h>
+#include <Esp.h>
 
 #include "STM32_Data.h"
 #include "LCDMirror.h"
@@ -34,7 +35,6 @@ constexpr unsigned long SETUP_DELAY_MS       = 800;   // opóźnienie w setup()
 
 // --- Logika zegara ---
 void tickClock();
-void syncTimeFromWiFi();
 void playAlarmMelody();
 
 // --- Wrapper dla kompatybilności ---
@@ -118,12 +118,12 @@ const char* menuItems[] = {
   "Temperatura",
   "Wilgotnosc",
   "Wyjscie",
-  "WiFi ON",
-  "WiFi OFF",
-  "BT ON",
-  "BT OFF"
+  "Radio: Toggle" 
 };
-int menuCount = 13;
+int menuCount = 10;
+
+// Diagnostyka pamięci
+static uint32_t heapBaseline = 0;
 
 // --- Statystyki Menu ---
 int statsMenuIndex = 0;
@@ -232,6 +232,10 @@ void setup() {
     Serial.begin(UART_BAUD);
     delay(SETUP_DELAY_MS);
 
+  heapBaseline = ESP.getFreeHeap();
+    Serial.printf("[diag] baseline_heap=%u\n", heapBaseline);
+    ModeManager::logDiag("boot");
+
     // --- DHT Sensor Init ---
     dht.begin();
 
@@ -284,6 +288,9 @@ void setup() {
     WiFiSync::setAppStatePtr(&appState);                     // wskaźnik do appState
     WiFiSync::setOnDone([](){ drawHome(); });               // callback po zakończeniu sync
     WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER, GMT_OFFSET, DST_OFFSET); // inicjalizacja (bez auto startu)
+
+    // Brak automatycznej inicjalizacji WiFi – czekamy na wybór użytkownika.
+    ModeManager::logDiag("after-setup-no-radio");
 }
 
 

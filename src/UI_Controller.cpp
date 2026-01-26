@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include "AppState.h"
 #include "ModeManager.h"
+#include "RadioModeSwitch.h"
 
 // ============================================================================
 // ZMIENNE GLOBALNE (extern z main.cpp)
@@ -204,10 +205,19 @@ void ui_handleEvent(EncoderEvent e) {
           if (s_callbacks.drawHome) s_callbacks.drawHome();
           return;
 
-        case 9:  // Radio Toggle
-          radioMode = (radioMode == WIFI_ONLY) ? BT_ONLY : WIFI_ONLY;
-          ModeManager::transitionRadio(radioMode);
-          if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        case 9:  // Radio Toggle (WiFi ↔ Bluetooth)
+          // Przełącz na inny tryb z resetem - BEZ żadnych operacji LCD!
+          if (radioMode == WIFI_ONLY) {
+            // Przejdź na Bluetooth
+            radioMode = BT_ONLY;
+            // Od razu restart - nie rysuj nic na LCD
+            RadioModeSwitch::requestModeSwitch_BT();
+          } else {
+            // Przejdź na WiFi
+            radioMode = WIFI_ONLY;
+            // Od razu restart - nie rysuj nic na LCD
+            RadioModeSwitch::requestModeSwitch_WiFi();
+          }
           return;
 
         default:

@@ -15,6 +15,7 @@
 #include "StatsManager.h" 
 #include "AudioBT.h" 
 #include "ModeManager.h"
+#include "RadioModeSwitch.h"
 #include <DHT.h>
 
 // ============================================================================
@@ -171,6 +172,9 @@ int minutes = 0;
 int seconds = 0;
 unsigned long lastTick = 0;
 
+// --- Flaga do przywrócenia czasu z RTC (po soft reset) ---
+static bool timeRestored = false;
+
 // --- DHT Sensor ---
 DHT dht(DHT_PIN, DHT_TYPE);
 bool dhtScreenDirty = true;
@@ -257,8 +261,12 @@ void setup() {
   // --- DHT Sensor Init ---
   dht.begin();
 
-  // Menedżer trybów (Wi-Fi/BT) – nic automatycznie na starcie.
+  // ===== Menedżer trybów (Wi-Fi/BT) - inicjalizuj WCZEŚNIE =====
   ModeManager::begin(&appState);
+
+  // ===== RadioModeSwitch - inicjalizacja przełączania trybu =====
+  // BĘDZIE NA KONIEC setup() po LCD i UI init!
+  RadioModeSwitch::begin();
 
 #if UART_LCD_MIRROR
   lcdMirror.begin();
@@ -307,8 +315,17 @@ void setup() {
   WiFiSync::setOnDone([]() { drawHome(); });                       // callback po zakończeniu sync
   WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER, GMT_OFFSET, DST_OFFSET);
 
-  // Brak automatycznej inicjalizacji WiFi – czekamy na wybór użytkownika.
-  ModeManager::logDiag("after-setup-no-radio");
+  // ===== RadioModeSwitch inicjalizuje się, ale faktyczna inicjalizacja WiFi/BT =====
+  // będzie opóźniona w loop() aby zagwarantować że LCD jest w pełni gotowe
+  
+  // Synchronizuj radioMode ze stanem RadioModeSwitch na starcie
+  if (RadioModeSwitch::getCurrentState() == RADIO_STATE_BT) {
+    radioMode = BT_ONLY;
+  } else {
+    radioMode = WIFI_ONLY;
+  }
+
+  ModeManager::logDiag("after-setup-radio-ready");
 }
 
 // ============================================================================
@@ -328,8 +345,8 @@ void loop() {
       statsManager.registerStepRight();
     }
 
-    // Przekaż event do UI (jeśli WiFi nie jest zajęte)
-    if (!WiFiSync::isBusy()) {
+    // Przekaż event do UI (jeśli WiFi nie jest zajęte ORAZ RadioModeSwitch się nie inicjalizuje)
+    if (!WiFiSync::isBusy() && !RadioModeSwitch::isInitializing()) {
       ui_handleEvent(evt);
     }
   }
@@ -342,6 +359,41 @@ void loop() {
 
   // --- WiFi sync update ---
   WiFiSync::update();
+
+  // --- RadioModeSwitch update (opóźniona inicjalizacja WiFi/BT po starcie) ---
+  RadioModeSwitch::update();
+
+  // --- Synchronizuj radioMode ze stanem RadioModeSwitch ---
+  // Ważne: to zapewnia, że menu zawsze pokazuje prawidłowy stan
+  if (RadioModeSwitch::getCurrentState() == RADIO_STATE_BT) {
+    radioMode = BT_ONLY;
+  } else {
+    radioMode = WIFI_ONLY;
+  }
+
+  // --- Przywrócenie czasu z RTC (jeśli był soft reset z przełączeniem trybu) ---
+  if (!timeRestored && !RadioModeSwitch::isInitializing()) {
+    uint8_t rtc_hours = RadioModeSwitch::getRTCHours();
+    uint8_t rtc_minutes = RadioModeSwitch::getRTCMinutes();
+    uint8_t rtc_seconds = RadioModeSwitch::getRTCSeconds();
+    
+    // Sprawdź czy czas był zapisany (non-zero wartości)
+    if (rtc_hours > 0 || rtc_minutes > 0 || rtc_seconds > 0) {
+      hours = rtc_hours;
+      minutes = rtc_minutes;
+      seconds = rtc_seconds;
+      lastTick = millis();  // Zresetuj tick timer
+      
+      Serial.printf("[main] Przywrócono czas z RTC: %02d:%02d:%02d\n", hours, minutes, seconds);
+      updateSevenSeg();
+      drawHome();
+      
+      // Wyczyść RTC czas (one-time restoration)
+      RadioModeSwitch::clearRTCTime();
+    }
+    
+    timeRestored = true;
+  }
 
   // --- STM32 Debug State ---
   if (appState == STATE_DEBUG_STM32 &&

@@ -77,6 +77,7 @@ void printTime(bool edit);
 void printVal(int v, bool sel);
 void drawStats();  // UI statystyk
 void drawSystemResources(); // UI zasobów systemu (RAM/FLASH)
+void drawModeTransition(); // UI przejścia trybu (WiFi ↔ Bluetooth)
 
 // === Funkcje DHT ===
 void drawTemperature();

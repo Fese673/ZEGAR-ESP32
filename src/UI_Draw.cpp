@@ -148,9 +148,9 @@ void drawMenu() {
 
     if (item == 9) {  // Pozycja radio toggle
       if (radioMode == WIFI_ONLY) {
-        LCD_PRINT("WiFi OFF | BT ON");
+        LCD_PRINT("BLUETOOTH MODE");  // Teraz w WiFi, przełącz na BT
       } else {
-        LCD_PRINT("WiFi ON | BT OFF");
+        LCD_PRINT("WIFI MODE     ");  // Teraz w BT, przełącz na WiFi
       }
     } else {
       LCD_PRINT(menuItems[item]);
@@ -532,6 +532,28 @@ void drawSystemResources() {
     LCD_SET(0, 3);
     snprintf(buf, sizeof(buf), "FL Free: %lu kB", freeFlash / 1024);
     LCD_PRINT(buf);
+
+    LCD_DUMP();
+}
+
+// ============================================================================
+// EKRAN PRZEJŚCIA TRYBU (WiFi ↔ Bluetooth)
+// ============================================================================
+
+void drawModeTransition() {
+    LCD_CLEAR();
+
+    LCD_SET(0, 0);
+    LCD_PRINT("ZMIANA TRYBU");
+
+    LCD_SET(0, 1);
+    LCD_PRINT("                ");
+
+    LCD_SET(0, 2);
+    LCD_PRINT("     RESET      ");
+
+    LCD_SET(0, 3);
+    LCD_PRINT("                ");
 
     LCD_DUMP();
 }

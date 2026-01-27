@@ -12,6 +12,7 @@
 #include "AppState.h"
 #include "UI_Draw.h"
 #include "WiFiSync.h"
+#include "MQTTSync.h"
 #include "StatsManager.h" 
 #include "AudioBT.h" 
 #include "ModeManager.h"
@@ -175,6 +176,10 @@ unsigned long lastTick = 0;
 // --- Flaga do przywrócenia czasu z RTC (po soft reset) ---
 static bool timeRestored = false;
 
+// --- MQTT Mode Control ---
+static bool mqtt_initialized = false;
+static RadioModeSwitchState last_radio_mode = RADIO_STATE_WIFI;
+
 // --- DHT Sensor ---
 DHT dht(DHT_PIN, DHT_TYPE);
 bool dhtScreenDirty = true;
@@ -315,6 +320,10 @@ void setup() {
   WiFiSync::setOnDone([]() { drawHome(); });                       // callback po zakończeniu sync
   WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER, GMT_OFFSET, DST_OFFSET);
 
+  // ===== MQTT Sync (Core 1) - initialized only in WiFi mode =====
+  // MQTTSync will be initialized later in RadioModeSwitch::update() when WiFi mode is confirmed
+  Serial.println("[main] MQTT will start when WiFi mode is active");
+
   // ===== RadioModeSwitch inicjalizuje się, ale faktyczna inicjalizacja WiFi/BT =====
   // będzie opóźniona w loop() aby zagwarantować że LCD jest w pełni gotowe
   
@@ -362,6 +371,34 @@ void loop() {
 
   // --- RadioModeSwitch update (opóźniona inicjalizacja WiFi/BT po starcie) ---
   RadioModeSwitch::update();
+
+  // --- MQTT Control (start/stop based on WiFi mode) ---
+  RadioModeSwitchState current_radio_mode = RadioModeSwitch::getCurrentState();
+  
+  if (current_radio_mode == RADIO_STATE_WIFI && !mqtt_initialized) {
+    // Start MQTT when switching to WiFi mode
+    Serial.println("[main] Activating MQTT for WiFi mode");
+    MQTTSync::begin(WIFI_SSID, WIFI_PASS);
+    MQTTSync::startCore1Task();
+    mqtt_initialized = true;
+    last_radio_mode = RADIO_STATE_WIFI;
+  } 
+  else if (current_radio_mode == RADIO_STATE_BT && mqtt_initialized) {
+    // Stop MQTT when switching to BT mode
+    Serial.println("[main] Deactivating MQTT for BT mode");
+    MQTTSync::stopCore1Task();
+    mqtt_initialized = false;
+    last_radio_mode = RADIO_STATE_BT;
+  }
+
+  // --- MQTT Update (publish sensor data only if initialized) ---
+  if (mqtt_initialized) {
+    static unsigned long lastMQTTPublish = 0;
+    if (millis() - lastMQTTPublish >= 5000) {
+      lastMQTTPublish = millis();
+      MQTTSync::publishSensorData(dhtTemperature, (int)dhtHumidity, 1013);
+    }
+  }
 
   // --- Synchronizuj radioMode ze stanem RadioModeSwitch ---
   // Ważne: to zapewnia, że menu zawsze pokazuje prawidłowy stan

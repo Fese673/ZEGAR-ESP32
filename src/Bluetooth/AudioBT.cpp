@@ -35,11 +35,11 @@ void audioBT_init() {
     };
     
     // KROK 5: Konfiguracja pinów PCM5102
-    // Wybieramy piny wolne: BCK=33, WS=32, DATA=22 (unikamy 25/26 enkodera)
+    // BCK=33, WS=32, DATA=14 (GPIO14 = wolny, bezpieczny pin)
     i2s_pin_config_t pin_config = {
         .bck_io_num = 33,
         .ws_io_num = 32,
-        .data_out_num = 22,
+        .data_out_num = 14,
         .data_in_num = I2S_PIN_NO_CHANGE
     };
     

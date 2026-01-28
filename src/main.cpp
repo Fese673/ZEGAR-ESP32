@@ -277,7 +277,8 @@ void setup() {
   lcdMirror.begin();
 #endif
 
-  Wire.begin();
+  // I2C initialization with explicit pins: SDA=21, SCL=22 (GPIO22 now free from I2S after fix)
+  Wire.begin(21, 22);
   lcd.init();
   lcd.backlight();
   lcd.createChar(0, alarmIcon);

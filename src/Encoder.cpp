@@ -75,6 +75,27 @@ void encoder_begin(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
 }
 
 // ============================================================================
+// PRZYWRÓCENIE PINÓW (po I2S driver reset GPIO 25/26)
+// ============================================================================
+void encoder_reinit_pins() {
+  if (s_clkPin != 255) {
+    pinMode(s_clkPin, INPUT_PULLUP);
+    pinMode(s_dtPin,  INPUT_PULLUP);
+    pinMode(s_swPin,  INPUT_PULLUP);
+
+    // Odczytaj aktualny stan po przywróceniu pull-upów
+    const uint8_t clk = digitalRead(s_clkPin) ? 1 : 0;
+    const uint8_t dt  = digitalRead(s_dtPin)  ? 1 : 0;
+    s_encoderState     = (clk << 1) | dt;
+    s_lastEncoderState = s_encoderState;
+    s_sequenceStep     = 0;
+    s_sequenceDirection = 0;
+
+    Serial.println("[Encoder] Piny przywrocone (INPUT_PULLUP)");
+  }
+}
+
+// ============================================================================
 // OBSŁUGA ROTACJI - GRAY-CODE STATE MACHINE
 // ============================================================================
 static EncoderEvent rotationCheck() {

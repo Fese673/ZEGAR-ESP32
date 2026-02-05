@@ -6,6 +6,7 @@
 
 #include "WiFiSync.h"
 #include "Bluetooth/AudioBT.h"
+#include "Encoder.h"
 
 namespace ModeManager {
 
@@ -71,6 +72,10 @@ void btOn() {
   if (!btActive) {
     audioBT_init();
     btActive = true;
+    // NAPRAWA: i2s_driver_install() resetuje domyślne piny I2S (GPIO 25, 26)
+    // które są jednocześnie pinami enkodera (CLK, DT).
+    // Przywróć INPUT_PULLUP aby enkoder działał w trybie BT.
+    encoder_reinit_pins();
   }
   ensureHome();
 }

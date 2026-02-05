@@ -45,6 +45,7 @@ void BluetoothA2DPSinkQueued::bt_i2s_task_shut_down(void) {
 void BluetoothA2DPSinkQueued::i2s_task_handler(void *arg) {
     uint8_t *data = nullptr;
     size_t item_size = 0;
+    static unsigned long last_underflow_log = 0;
     /**
      * The total length of DMA buffer of I2S is:
      * `dma_frame_num * dma_desc_num * i2s_channel_num * i2s_data_bit_width / 8`.
@@ -67,7 +68,7 @@ void BluetoothA2DPSinkQueued::i2s_task_handler(void *arg) {
         data = (uint8_t *)xRingbufferReceiveUpTo(s_ringbuf_i2s, &item_size, (TickType_t)pdMS_TO_TICKS(i2s_ticks), i2s_write_size_upto);
         if (item_size == 0) {
             if (ringbuffer_mode != RINGBUFFER_MODE_PREFETCHING) {
-                ESP_LOGI(BT_APP_TAG, "ringbuffer underflowed! mode changed: RINGBUFFER_MODE_PREFETCHING");
+                // Underflow - silent mode switch
                 ringbuffer_mode = RINGBUFFER_MODE_PREFETCHING;
             }
             continue;

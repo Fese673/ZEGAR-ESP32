@@ -364,6 +364,24 @@ void loop() {
   // --- Aktualizacja statystyk (zapis do NVS jeśli potrzeba) ---
   statsManager.update();
 
+  // --- Diagnostyka statusu co 2s (wyłączona w BT mode aby nie wpływać na audio) ---
+  static unsigned long last_status_diag = 0;
+  if (!ModeManager::isBtOn() && (millis() - last_status_diag >= 2000)) {
+    last_status_diag = millis();
+    static uint32_t last_heap = 0;
+    uint32_t current_heap = ESP.getFreeHeap();
+    int heap_delta = (int)current_heap - (int)last_heap;
+    last_heap = current_heap;
+    
+    Serial.printf("[STATUS] WiFi:%s MQTT:%s BT:%s Heap:%u (%+d) Mode:%s\n",
+      ModeManager::isWifiOn() ? "ON" : "OFF",
+      mqtt_initialized ? "ON" : "OFF",
+      ModeManager::isBtOn() ? "ON" : "OFF",
+      current_heap,
+      heap_delta,
+      (RadioModeSwitch::getCurrentState() == RADIO_STATE_BT) ? "BT" : "WiFi");
+  }
+
   // --- Tykanie zegara ---
   tickClock();
 
@@ -500,11 +518,16 @@ void loop() {
 // ============================================================================
 
 void updateDHT() {
+  // NAPRAWA: DHT czytanie blokuje główny loop - wyłącz w trybie BT aby uniknąć zniekształceń audio
+  if (ModeManager::isBtOn()) {
+    return;  // DHT wyłączony w trybie BT - priorytet dla czystego audio
+  }
+
   if (millis() - dhtLastRead < DHT_READ_INTERVAL_MS) return;
   dhtLastRead = millis();
 
-  const float t = dht.readTemperature();
-  const float h = dht.readHumidity();
+  const float t = dht.readTemperature();  // ~2-3ms blokada
+  const float h = dht.readHumidity();     // ~2-3ms blokada
 
   if (!isnan(t) && !isnan(h)) {
     dhtTemperature = t;

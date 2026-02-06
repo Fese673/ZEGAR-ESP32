@@ -72,9 +72,9 @@ void btOn() {
   if (!btActive) {
     audioBT_init();
     btActive = true;
-    // NAPRAWA: i2s_driver_install() resetuje domyślne piny I2S (GPIO 25, 26)
-    // które są jednocześnie pinami enkodera (CLK, DT).
-    // Przywróć INPUT_PULLUP aby enkoder działał w trybie BT.
+    // BEZPIECZEŃSTWO: Przywróć piny enkodera (GPIO 25, 26) do INPUT_PULLUP
+    // I2S teraz używa GPIO 33/32 zamiast 25/26 - konflikt ROZWIĄZANY
+    // encoder_reinit_pins() zapewnia stabilną reinicjalizację po I2S init
     encoder_reinit_pins();
   }
   ensureHome();

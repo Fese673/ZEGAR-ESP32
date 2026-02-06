@@ -31,13 +31,14 @@ BluetoothA2DPOutputLegacy::BluetoothA2DPOutputLegacy() {
   };
 
   // setup default pins
+  // NAPRAWA: piny zmienione z 26/25/22 na 33/32/14 aby uniknąć konfliktu z Encoder (GPIO 25/26)
   pin_config = {
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
       .mck_io_num = 0,
 #endif
-      .bck_io_num = 26,
-      .ws_io_num = 25,
-      .data_out_num = 22,
+      .bck_io_num = 33,
+      .ws_io_num = 32,
+      .data_out_num = 14,
       .data_in_num = I2S_PIN_NO_CHANGE};
 
 #endif

@@ -75,8 +75,10 @@ void encoder_begin(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
 }
 
 // ============================================================================
-// PRZYWRÓCENIE PINÓW (po I2S driver reset GPIO 25/26)
+// PRZYWRÓCENIE PINÓW ENKODERA (GPIO 25/26) - BEZPIECZEŃSTWO
 // ============================================================================
+// Funkcja bezpieczeństwa przywracająca INPUT_PULLUP na pinach enkodera.
+// Konflikt I2S/Encoder ROZWIĄZANY - I2S teraz używa GPIO 33/32 zamiast 25/26.
 void encoder_reinit_pins() {
   if (s_clkPin != 255) {
     pinMode(s_clkPin, INPUT_PULLUP);

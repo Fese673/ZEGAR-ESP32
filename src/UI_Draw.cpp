@@ -24,6 +24,68 @@ extern int statsMenuIndex;
 extern const char* statsMenuItems[];
 extern int statsMenuCount;
 
+// --- Zasoby ---
+extern int resourcesMenuIndex;
+extern const char* resourcesMenuItems[];
+extern int resourcesMenuCount;
+
+// --- PMS5003 ---
+extern int pms5003MenuIndex;
+extern const char* pms5003MenuItems[];
+extern int pms5003MenuCount;
+extern int pms5003CF1MenuIndex;
+extern const char* pms5003CF1MenuItems[];
+extern int pms5003CF1MenuCount;
+extern int pms5003ATMMenuIndex;
+extern const char* pms5003ATMMenuItems[];
+extern int pms5003ATMMenuCount;
+extern int pms5003ParticlesMenuIndex;
+extern const char* pms5003ParticlesMenuItems[];
+extern int pms5003ParticlesMenuCount;
+
+// --- Dane PMS5003 ---
+extern uint16_t pms5003_PM1_0_CF1;
+extern uint16_t pms5003_PM2_5_CF1;
+extern uint16_t pms5003_PM10_CF1;
+extern uint16_t pms5003_PM1_0_ATM;
+extern uint16_t pms5003_PM2_5_ATM;
+extern uint16_t pms5003_PM10_ATM;
+extern uint16_t pms5003_PM1_0_CF1_MIN;
+extern uint16_t pms5003_PM1_0_CF1_MAX;
+extern uint16_t pms5003_PM2_5_CF1_MIN;
+extern uint16_t pms5003_PM2_5_CF1_MAX;
+extern uint16_t pms5003_PM10_CF1_MIN;
+extern uint16_t pms5003_PM10_CF1_MAX;
+extern uint16_t pms5003_PM1_0_ATM_MIN;
+extern uint16_t pms5003_PM1_0_ATM_MAX;
+extern uint16_t pms5003_PM2_5_ATM_MIN;
+extern uint16_t pms5003_PM2_5_ATM_MAX;
+extern uint16_t pms5003_PM10_ATM_MIN;
+extern uint16_t pms5003_PM10_ATM_MAX;
+extern uint16_t pms5003_particleCount_0_3;
+extern uint16_t pms5003_particleCount_0_5;
+extern uint16_t pms5003_particleCount_1_0;
+extern uint16_t pms5003_particleCount_2_5;
+extern uint16_t pms5003_particleCount_5_0;
+extern uint16_t pms5003_particleCount_10_0;
+extern uint16_t pms5003_particleCount_0_3_MIN;
+extern uint16_t pms5003_particleCount_0_3_MAX;
+extern uint16_t pms5003_particleCount_0_5_MIN;
+extern uint16_t pms5003_particleCount_0_5_MAX;
+extern uint16_t pms5003_particleCount_1_0_MIN;
+extern uint16_t pms5003_particleCount_1_0_MAX;
+extern uint16_t pms5003_particleCount_2_5_MIN;
+extern uint16_t pms5003_particleCount_2_5_MAX;
+extern uint16_t pms5003_particleCount_5_0_MIN;
+extern uint16_t pms5003_particleCount_5_0_MAX;
+extern uint16_t pms5003_particleCount_10_0_MIN;
+extern uint16_t pms5003_particleCount_10_0_MAX;
+extern uint16_t pms5003_errorCount_current;
+extern uint16_t pms5003_errorCount_total;
+extern uint16_t pms5003_bytesReceived;
+extern uint32_t pms5003_lastFrameTime;
+extern uint32_t pms5003_latency_ms;
+
 // --- Stan aplikacji ---
 extern enum AppState appState;
 extern enum EditState editState;
@@ -48,6 +110,15 @@ extern int seconds;
 extern int  displayedBPM;
 extern int  displayedSPO2;
 extern bool stm32Connected;
+
+// --- CPU Load ---
+extern uint8_t cpuLoadPercent;
+extern uint8_t cpuCore0Percent;
+extern uint8_t cpuCore1Percent;
+
+// --- System Resources ---
+extern uint32_t ramFreeBytes;
+extern uint32_t flashFreeBytes;
 
 // ============================================================================
 // IMPLEMENTACJA FUNKCJI - 7-SEGMENT (74HC595)
@@ -146,7 +217,7 @@ void drawMenu() {
     LCD_SET(0, i);
     LCD_PRINT(item == menuIndex ? ">" : " ");
 
-    if (item == 9) {  // Pozycja radio toggle
+    if (item == 10) {  // Pozycja radio toggle
       if (radioMode == WIFI_ONLY) {
         LCD_PRINT("BLUETOOTH MODE");  // Teraz w WiFi, przełącz na BT
       } else {
@@ -300,6 +371,22 @@ void drawStats() {
       }
     }
   }
+  // === 1b. MENU PMS5003 (LISTA Z WYBOREM) ===
+  else if (appState == STATE_PMS5003) {
+    LCD_SET(2, 0);
+    LCD_PRINT("MENU PMS5003");
+
+    const int first = (pms5003MenuIndex / 3) * 3;
+
+    for (int row = 0; row < 3; row++) {
+      const int i = first + row;
+      if (i >= pms5003MenuCount) break;
+
+      LCD_SET(0, row + 1);
+      LCD_PRINT(i == pms5003MenuIndex ? "> " : "  ");
+      LCD_PRINT(pms5003MenuItems[i]);
+    }
+  }
   // === 2. WIDOK KLIKNIĘĆ ===
   else if (appState == STATE_STATS_CLICKS) {
     LCD_SET(0, 0);
@@ -367,6 +454,406 @@ void drawStats() {
 
     LCD_SET(0, 3);
     LCD_PRINT("Dlugi -> Powrot");
+  }
+  // === 5b. MENU ZASOBÓW SYSTEMU ===
+  else if (appState == STATE_STATS_RESOURCES_MENU) {
+    LCD_SET(1, 0);
+    LCD_PRINT("ZASOBY SYSTEMU");
+
+    const int first = (resourcesMenuIndex / 3) * 3;
+
+    for (int row = 0; row < 3; row++) {
+      const int i = first + row;
+      if (i >= resourcesMenuCount) break;
+
+      LCD_SET(0, row + 1);
+      LCD_PRINT(i == resourcesMenuIndex ? "> " : "  ");
+      LCD_PRINT(resourcesMenuItems[i]);
+    }
+  }
+  // === 5c. WIDOK PAMIĘCI RAM ===
+  else if (appState == STATE_STATS_RESOURCES_RAM) {
+    char buf[10];
+    uint32_t ramMB = ramFreeBytes / (1024 * 1024);
+    uint32_t ramKB = (ramFreeBytes % (1024 * 1024)) / 1024;
+
+    LCD_SET(0, 0);
+    LCD_PRINT("PAMIEC RAM");
+
+    LCD_SET(0, 1);
+    LCD_PRINT("Free: ");
+    LCD_PRINT(ramMB);
+    LCD_PRINT(".");
+    LCD_PRINT(ramKB);
+    LCD_PRINT(" MB");
+
+    LCD_SET(0, 2);
+    LCD_PRINT("Bytes: ");
+    LCD_PRINT(ramFreeBytes);
+
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  // === 5d. WIDOK OBCIĄŻENIA CPU ===
+  else if (appState == STATE_STATS_RESOURCES_CPU) {
+    LCD_SET(0, 0);
+    LCD_PRINT("CPU LOAD");
+
+    LCD_SET(0, 1);
+    LCD_PRINT("Calkowite: ");
+    LCD_PRINT(cpuLoadPercent);
+    LCD_PRINT("%");
+
+    LCD_SET(0, 2);
+    LCD_PRINT("CORE0: ");
+    LCD_PRINT(cpuCore0Percent);
+    LCD_PRINT("%");
+
+    LCD_SET(0, 3);
+    LCD_PRINT("CORE1: ");
+    LCD_PRINT(cpuCore1Percent);
+    LCD_PRINT("%");
+  }
+  // === 5e. WIDOK PAMIĘCI FLASH ===
+  else if (appState == STATE_STATS_RESOURCES_FLASH) {
+    char buf[10];
+    uint32_t flashMB = flashFreeBytes / (1024 * 1024);
+    uint32_t flashKB = (flashFreeBytes % (1024 * 1024)) / 1024;
+
+    LCD_SET(0, 0);
+    LCD_PRINT("PAMIEC FLASH");
+
+    LCD_SET(0, 1);
+    LCD_PRINT("Free: ");
+    LCD_PRINT(flashMB);
+    LCD_PRINT(".");
+    LCD_PRINT(flashKB);
+    LCD_PRINT(" MB");
+
+    LCD_SET(0, 2);
+    LCD_PRINT("Bytes: ");
+    LCD_PRINT(flashFreeBytes);
+
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  // === 6. WIDOK PMS5003 TRYB FABRYCZNY CF=1 (BIEŻĄCE DANE Z WYBOREM) ===
+  else if (appState == STATE_PMS5003_CF1) {
+    LCD_SET(0, 0);
+    LCD_PRINT("PMS5003 CF=1");
+    
+    // Wiersz 1: PM1.0 (z > jeśli wybrany)
+    LCD_SET(0, 1);
+    LCD_PRINT(pms5003CF1MenuIndex == 0 ? ">" : " ");
+    LCD_PRINT(" PM1.0: ");
+    LCD_PRINT(pms5003_PM1_0_CF1 > 0 ? pms5003_PM1_0_CF1 : 0);
+    
+    // Wiersz 2: PM2.5 (z > jeśli wybrany)
+    LCD_SET(0, 2);
+    LCD_PRINT(pms5003CF1MenuIndex == 1 ? ">" : " ");
+    LCD_PRINT(" PM2.5: ");
+    LCD_PRINT(pms5003_PM2_5_CF1 > 0 ? pms5003_PM2_5_CF1 : 0);
+    
+    // Wiersz 3: PM10 (z > jeśli wybrany)
+    LCD_SET(0, 3);
+    LCD_PRINT(pms5003CF1MenuIndex == 2 ? ">" : " ");
+    LCD_PRINT(" PM10:  ");
+    LCD_PRINT(pms5003_PM10_CF1 > 0 ? pms5003_PM10_CF1 : 0);
+  }
+  // === 6a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB CF=1 (MIN/MAX) ===
+  else if (appState == STATE_PMS5003_CF1_PM1) {
+    LCD_SET(0, 0);
+    LCD_PRINT("PM1.0 CF=1");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_PM1_0_CF1);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_PM1_0_CF1_MIN < 9999 ? pms5003_PM1_0_CF1_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_PM1_0_CF1_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  // === 6b. WIDOK SZCZEGÓŁÓW PM2.5 TRYB CF=1 (MIN/MAX) ===
+  else if (appState == STATE_PMS5003_CF1_PM25) {
+    LCD_SET(0, 0);
+    LCD_PRINT("PM2.5 CF=1");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_PM2_5_CF1);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_PM2_5_CF1_MIN < 9999 ? pms5003_PM2_5_CF1_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_PM2_5_CF1_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  // === 6c. WIDOK SZCZEGÓŁÓW PM10 TRYB CF=1 (MIN/MAX) ===
+  else if (appState == STATE_PMS5003_CF1_PM10) {
+    LCD_SET(0, 0);
+    LCD_PRINT("PM10 CF=1");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_PM10_CF1);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_PM10_CF1_MIN < 9999 ? pms5003_PM10_CF1_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_PM10_CF1_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  // === 7. WIDOK PMS5003 TRYB ATMOSFERYCZNY (BIEŻĄCE DANE Z WYBOREM) ===
+  else if (appState == STATE_PMS5003_ATM) {
+    LCD_SET(0, 0);
+    LCD_PRINT("PMS5003 ATM");
+    
+    // Wiersz 1: PM1.0 (z > jeśli wybrany)
+    LCD_SET(0, 1);
+    LCD_PRINT(pms5003ATMMenuIndex == 0 ? ">" : " ");
+    LCD_PRINT(" PM1.0: ");
+    LCD_PRINT(pms5003_PM1_0_ATM > 0 ? pms5003_PM1_0_ATM : 0);
+    
+    // Wiersz 2: PM2.5 (z > jeśli wybrany)
+    LCD_SET(0, 2);
+    LCD_PRINT(pms5003ATMMenuIndex == 1 ? ">" : " ");
+    LCD_PRINT(" PM2.5: ");
+    LCD_PRINT(pms5003_PM2_5_ATM > 0 ? pms5003_PM2_5_ATM : 0);
+    
+    // Wiersz 3: PM10 (z > jeśli wybrany)
+    LCD_SET(0, 3);
+    LCD_PRINT(pms5003ATMMenuIndex == 2 ? ">" : " ");
+    LCD_PRINT(" PM10:  ");
+    LCD_PRINT(pms5003_PM10_ATM > 0 ? pms5003_PM10_ATM : 0);
+  }
+  // === 7a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB ATM (MIN/MAX) ===
+  else if (appState == STATE_PMS5003_ATM_PM1) {
+    LCD_SET(0, 0);
+    LCD_PRINT("PM1.0 ATM");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_PM1_0_ATM);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_PM1_0_ATM_MIN < 9999 ? pms5003_PM1_0_ATM_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_PM1_0_ATM_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  // === 7b. WIDOK SZCZEGÓŁÓW PM2.5 TRYB ATM (MIN/MAX) ===
+  else if (appState == STATE_PMS5003_ATM_PM25) {
+    LCD_SET(0, 0);
+    LCD_PRINT("PM2.5 ATM");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_PM2_5_ATM);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_PM2_5_ATM_MIN < 9999 ? pms5003_PM2_5_ATM_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_PM2_5_ATM_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  // === 7c. WIDOK SZCZEGÓŁÓW PM10 TRYB ATM (MIN/MAX) ===
+  else if (appState == STATE_PMS5003_ATM_PM10) {
+    LCD_SET(0, 0);
+    LCD_PRINT("PM10 ATM");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_PM10_ATM);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_PM10_ATM_MIN < 9999 ? pms5003_PM10_ATM_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_PM10_ATM_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+
+  // ========== Particles ==========
+  else if (appState == STATE_PMS5003_PARTICLES) {
+    LCD_SET(0, 0);
+    LCD_PRINT("Liczba Czastek");
+    
+    // Pagination: show 3 items per page
+    const int itemsPerPage = 3;
+    const int first = (pms5003ParticlesMenuIndex / itemsPerPage) * itemsPerPage;
+    
+    const char* particleLabels[] = {"0.3um", "0.5um", "1.0um", "2.5um", "5.0um", "10um"};
+    uint16_t particleValues[] = {
+      pms5003_particleCount_0_3,
+      pms5003_particleCount_0_5,
+      pms5003_particleCount_1_0,
+      pms5003_particleCount_2_5,
+      pms5003_particleCount_5_0,
+      pms5003_particleCount_10_0
+    };
+    
+    for (int row = 0; row < itemsPerPage; row++) {
+      const int i = first + row;
+      if (i >= 6) break;
+      
+      LCD_SET(0, row + 1);
+      LCD_PRINT(i == pms5003ParticlesMenuIndex ? ">" : " ");
+      LCD_PRINT(" ");
+      LCD_PRINT(particleLabels[i]);
+      LCD_PRINT(": ");
+      LCD_PRINT(particleValues[i]);
+    }
+  }
+
+  else if (appState == STATE_PMS5003_PARTICLES_0_3) {
+    LCD_SET(0, 0);
+    LCD_PRINT("0.3um");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_particleCount_0_3);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_particleCount_0_3_MIN < 9999 ? pms5003_particleCount_0_3_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_particleCount_0_3_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+
+  else if (appState == STATE_PMS5003_PARTICLES_0_5) {
+    LCD_SET(0, 0);
+    LCD_PRINT("0.5um");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_particleCount_0_5);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_particleCount_0_5_MIN < 9999 ? pms5003_particleCount_0_5_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_particleCount_0_5_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+
+  else if (appState == STATE_PMS5003_PARTICLES_1_0) {
+    LCD_SET(0, 0);
+    LCD_PRINT("1.0um");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_particleCount_1_0);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_particleCount_1_0_MIN < 9999 ? pms5003_particleCount_1_0_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_particleCount_1_0_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+
+  else if (appState == STATE_PMS5003_PARTICLES_2_5) {
+    LCD_SET(0, 0);
+    LCD_PRINT("2.5um");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_particleCount_2_5);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_particleCount_2_5_MIN < 9999 ? pms5003_particleCount_2_5_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_particleCount_2_5_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+
+  else if (appState == STATE_PMS5003_PARTICLES_5_0) {
+    LCD_SET(0, 0);
+    LCD_PRINT("5.0um");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_particleCount_5_0);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_particleCount_5_0_MIN < 9999 ? pms5003_particleCount_5_0_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_particleCount_5_0_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+
+  else if (appState == STATE_PMS5003_PARTICLES_10_0) {
+    LCD_SET(0, 0);
+    LCD_PRINT("10um");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(pms5003_particleCount_10_0);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Min:");
+    LCD_PRINT(pms5003_particleCount_10_0_MIN < 9999 ? pms5003_particleCount_10_0_MIN : 0);
+    LCD_PRINT(" Max:");
+    LCD_PRINT(pms5003_particleCount_10_0_MAX);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+
+  // ========== Telemetria ==========
+  else if (appState == STATE_PMS5003_TELEMETRY) {
+    LCD_SET(0, 0);
+    LCD_PRINT("Telemetria");
+    
+    LCD_SET(0, 1);
+    LCD_PRINT("Bledy: ");
+    LCD_PRINT(pms5003_errorCount_current);
+    LCD_PRINT("/");
+    LCD_PRINT(pms5003_errorCount_total);
+    
+    LCD_SET(0, 2);
+    LCD_PRINT("Bajty: ");
+    if (pms5003_bytesReceived < 10) LCD_PRINT("0");
+    LCD_PRINT(pms5003_bytesReceived);
+    
+    LCD_SET(0, 3);
+    LCD_PRINT("Latencja: ");
+    if (pms5003_latency_ms < 10) LCD_PRINT("0");
+    if (pms5003_latency_ms < 100) LCD_PRINT("0");
+    LCD_PRINT(pms5003_latency_ms);
+    LCD_PRINT(" ms");
   }
 
   LCD_DUMP();

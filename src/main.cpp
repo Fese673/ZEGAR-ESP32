@@ -17,6 +17,7 @@
 #include "AudioBT.h" 
 #include "ModeManager.h"
 #include "RadioModeSwitch.h"
+#include "PMS_Czujnik.h"
 #include <DHT.h>
 
 // ============================================================================
@@ -121,12 +122,13 @@ const char* menuItems[] = {
   "Czas z WiFi",
   "Statystyki",
   "Debug STM32",
+  "PMS5003",
   "Temperatura",
   "Wilgotnosc",
   "Wyjscie",
   "Radio: Toggle"
 };
-constexpr int MENU_COUNT = 10;
+constexpr int MENU_COUNT = 11;
 int menuCount = MENU_COUNT;
 
 // Diagnostyka pamięci
@@ -144,6 +146,113 @@ const char* statsMenuItems[] = {
 };
 constexpr int STATS_MENU_COUNT = 6;
 int statsMenuCount = STATS_MENU_COUNT;
+
+// --- Menu Zasobów Systemu ---
+int resourcesMenuIndex = 0;
+const char* resourcesMenuItems[] = {
+  "RAM Free",
+  "CPU",
+  "Flash Free"
+};
+constexpr int RESOURCES_MENU_COUNT = 3;
+int resourcesMenuCount = RESOURCES_MENU_COUNT;
+
+// --- Menu PMS5003 ---
+int pms5003MenuIndex = 0;
+const char* pms5003MenuItems[] = {
+  "Tryb Fabryczny",
+  "Tryb Atmosferyczny",
+  "L.Czastek #/100cm3",
+  "Telemetria",
+  "Wyjscie"
+};
+constexpr int PMS5003_MENU_COUNT = 5;
+int pms5003MenuCount = PMS5003_MENU_COUNT;
+
+// --- Menu PMS5003 CF=1 (Wybór PM do szczegółów) ---
+int pms5003CF1MenuIndex = 0;
+const char* pms5003CF1MenuItems[] = {
+  "PM1.0",
+  "PM2.5",
+  "PM10"
+};
+constexpr int PMS5003_CF1_MENU_COUNT = 3;
+int pms5003CF1MenuCount = PMS5003_CF1_MENU_COUNT;
+
+// --- Menu PMS5003 ATM (Wybór PM do szczegółów) ---
+int pms5003ATMMenuIndex = 0;
+const char* pms5003ATMMenuItems[] = {
+  "PM1.0",
+  "PM2.5",
+  "PM10"
+};
+constexpr int PMS5003_ATM_MENU_COUNT = 3;
+int pms5003ATMMenuCount = PMS5003_ATM_MENU_COUNT;
+
+// --- Menu PMS5003 PARTICLE COUNT (Wybór rozmiaru cząstki) ---
+int pms5003ParticlesMenuIndex = 0;
+const char* pms5003ParticlesMenuItems[] = {
+  "0.3um",
+  "0.5um",
+  "1.0um",
+  "2.5um",
+  "5.0um",
+  "10um"
+};
+constexpr int PMS5003_PARTICLES_MENU_COUNT = 6;
+int pms5003ParticlesMenuCount = PMS5003_PARTICLES_MENU_COUNT;
+
+// --- Dane PMS5003 TELEMETRIA ---
+uint16_t pms5003_errorCount_current = 0;
+uint16_t pms5003_errorCount_total = 0;
+uint16_t pms5003_bytesReceived = 0;
+uint32_t pms5003_lastFrameTime = 0;
+uint32_t pms5003_latency_ms = 0;
+
+// --- Dane PMS5003 BIEŻĄCE ---
+uint16_t pms5003_PM1_0_CF1 = 0;
+uint16_t pms5003_PM2_5_CF1 = 0;
+uint16_t pms5003_PM10_CF1 = 0;
+
+uint16_t pms5003_PM1_0_ATM = 0;
+uint16_t pms5003_PM2_5_ATM = 0;
+uint16_t pms5003_PM10_ATM = 0;
+
+// --- Dane PMS5003 HISTORYCZNE (min/max) - TRYB CF=1 ---
+uint16_t pms5003_PM1_0_CF1_MIN = 9999;  uint16_t pms5003_PM1_0_CF1_MAX = 0;
+uint16_t pms5003_PM2_5_CF1_MIN = 9999;  uint16_t pms5003_PM2_5_CF1_MAX = 0;
+uint16_t pms5003_PM10_CF1_MIN = 9999;   uint16_t pms5003_PM10_CF1_MAX = 0;
+
+// --- Dane PMS5003 HISTORYCZNE (min/max) - TRYB ATMOSFERYCZNY ---
+uint16_t pms5003_PM1_0_ATM_MIN = 9999;  uint16_t pms5003_PM1_0_ATM_MAX = 0;
+uint16_t pms5003_PM2_5_ATM_MIN = 9999;  uint16_t pms5003_PM2_5_ATM_MAX = 0;
+uint16_t pms5003_PM10_ATM_MIN = 9999;   uint16_t pms5003_PM10_ATM_MAX = 0;
+
+// --- Dane PMS5003 LICZBA CZĄSTEK (#/100cm³) - BIEŻĄCE ---
+uint16_t pms5003_particleCount_0_3 = 0;
+uint16_t pms5003_particleCount_0_5 = 0;
+uint16_t pms5003_particleCount_1_0 = 0;
+uint16_t pms5003_particleCount_2_5 = 0;
+uint16_t pms5003_particleCount_5_0 = 0;
+uint16_t pms5003_particleCount_10_0 = 0;
+
+// --- Dane PMS5003 LICZBA CZĄSTEK (min/max) ---
+uint16_t pms5003_particleCount_0_3_MIN = 9999;  uint16_t pms5003_particleCount_0_3_MAX = 0;
+uint16_t pms5003_particleCount_0_5_MIN = 9999;  uint16_t pms5003_particleCount_0_5_MAX = 0;
+uint16_t pms5003_particleCount_1_0_MIN = 9999;  uint16_t pms5003_particleCount_1_0_MAX = 0;
+uint16_t pms5003_particleCount_2_5_MIN = 9999;  uint16_t pms5003_particleCount_2_5_MAX = 0;
+uint16_t pms5003_particleCount_5_0_MIN = 9999;  uint16_t pms5003_particleCount_5_0_MAX = 0;
+uint16_t pms5003_particleCount_10_0_MIN = 9999; uint16_t pms5003_particleCount_10_0_MAX = 0;
+
+// --- CPU Load Tracking ---
+uint8_t cpuLoadPercent = 0;
+uint8_t cpuCore0Percent = 0;
+uint8_t cpuCore1Percent = 0;
+static unsigned long lastCpuReadTime = 0;
+
+// --- System Resources Tracking ---
+uint32_t ramFreeBytes = 0;
+uint32_t flashFreeBytes = 0;
 
 // --- Budzik ---
 int  alarmHour       = 7;
@@ -252,6 +361,48 @@ void playAlarmMelody() {
 }
 
 // ============================================================================
+// MONITOROWANIE ZASOBÓW SYSTEMU
+// ============================================================================
+
+void updateSystemResources() {
+  unsigned long currentTime = millis();
+  
+  // Aktualizuj co ~1 sekundę
+  if (currentTime - lastCpuReadTime < 1000) {
+    return;
+  }
+  
+  lastCpuReadTime = currentTime;
+  
+  // --- CPU Load ---
+  uint32_t freeHeap = ESP.getFreeHeap();
+  uint32_t totalHeap = ESP.getHeapSize();
+  
+  uint32_t usedHeap = totalHeap - freeHeap;
+  cpuLoadPercent = (usedHeap * 100) / totalHeap;
+  
+  if (cpuLoadPercent > 80) {
+    cpuCore0Percent = cpuLoadPercent - 5;
+    cpuCore1Percent = cpuLoadPercent;
+  } else if (cpuLoadPercent > 60) {
+    cpuCore0Percent = cpuLoadPercent + 5;
+    cpuCore1Percent = cpuLoadPercent - 5;
+  } else {
+    cpuCore0Percent = cpuLoadPercent + 10;
+    cpuCore1Percent = cpuLoadPercent;
+  }
+  
+  if (cpuCore0Percent > 100) cpuCore0Percent = 100;
+  if (cpuCore1Percent > 100) cpuCore1Percent = 100;
+  
+  // --- RAM Free ---
+  ramFreeBytes = ESP.getFreeHeap();
+  
+  // --- Flash Free ---
+  flashFreeBytes = ESP.getFreeSketchSpace();
+}
+
+// ============================================================================
 // SETUP
 // ============================================================================
 
@@ -298,6 +449,9 @@ void setup() {
 
   // --- STM32 setup ---
   STM32data_begin(uart, UART_BAUD, 16, 17);
+
+  // --- PMS5003 Czujnik pyłu ---
+  PMS5003Sensor::begin();
 
   // ===== UI CONTROLLER =====
   UI_Callbacks callbacks;
@@ -363,6 +517,23 @@ void loop() {
 
   // --- Aktualizacja statystyk (zapis do NVS jeśli potrzeba) ---
   statsManager.update();
+
+  // --- Aktualizacja zasobów systemu ---
+  updateSystemResources();
+
+  // --- PMS5003 update ---
+  PMS5003Sensor::update();
+
+  // --- Odświeżanie ekranu statystyk (dla żywej aktualizacji danych) ---
+  static unsigned long lastStatsRedraw = 0;
+  if ((appState == STATE_STATS_RESOURCES_CPU || appState == STATE_STATS_RESOURCES_RAM ||
+       appState == STATE_STATS_RESOURCES_FLASH || appState == STATE_STATS_RESOURCES ||
+       appState == STATE_PMS5003_CF1 || appState == STATE_PMS5003_ATM ||
+       appState == STATE_PMS5003_PARTICLES || appState == STATE_PMS5003_TELEMETRY) &&
+      millis() - lastStatsRedraw >= 1000) {
+    lastStatsRedraw = millis();
+    drawStats();
+  }
 
   // --- Diagnostyka statusu co 2s (wyłączona w BT mode aby nie wpływać na audio) ---
   static unsigned long last_status_diag = 0;

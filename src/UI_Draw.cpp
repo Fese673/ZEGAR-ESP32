@@ -218,7 +218,7 @@ void drawMenu() {
     LCD_SET(0, i);
     LCD_PRINT(item == menuIndex ? ">" : " ");
 
-    if (item == 10) {  // Pozycja radio toggle
+    if (item == 11) {  // Pozycja radio toggle (teraz na indeksie 11 po dodaniu Ustawienia)
       if (radioMode == WIFI_ONLY) {
         LCD_PRINT("BLUETOOTH MODE");  // Teraz w WiFi, przełącz na BT
       } else {
@@ -401,6 +401,50 @@ void drawStats() {
       LCD_PRINT(i == pms5003MenuIndex ? "> " : "  ");
       LCD_PRINT(pms5003MenuItems[i]);
     }
+  }
+  // === 1c. MENU USTAWIEŃ (Settings) ===
+  else if (appState == STATE_SETTINGS) {
+    LCD_SET(2, 0);
+    LCD_PRINT("USTAWIENIA");
+
+    const int first = (settingsMenuIndex / 3) * 3;
+
+    for (int row = 0; row < 3; row++) {
+      const int i = first + row;
+      if (i >= settingsMenuCount) break;
+
+      LCD_SET(0, row + 1);
+      LCD_PRINT(i == settingsMenuIndex ? "> " : "  ");
+      LCD_PRINT(settingsMenuItems[i]);
+    }
+  }
+  // === 1d. USTAWIENIA PMS5003 (włącz/wyłącz) ===
+  else if (appState == STATE_SETTINGS_PMS5003) {
+    LCD_SET(0, 0);
+    LCD_PRINT("PMS5003");
+
+    LCD_SET(0, 1);
+    LCD_PRINT("Stan: ");
+
+    LCD_SET(0, 2);
+    LCD_PRINT(settingsPmsMenuIndex == 0 ? "> Wlaczony " : "  Wylaczony");
+
+    LCD_SET(0, 3);
+    LCD_PRINT("Klik -> zapisz");
+  }
+  // === 1e. USTAWIENIA BUZERA (włącz/wyłącz) ===
+  else if (appState == STATE_SETTINGS_BUZZER) {
+    LCD_SET(0, 0);
+    LCD_PRINT("BUZZER");
+
+    LCD_SET(0, 1);
+    LCD_PRINT("Stan: ");
+
+    LCD_SET(0, 2);
+    LCD_PRINT(settingsBuzzerMenuIndex == 0 ? "> Wlaczony " : "  Wylaczony");
+
+    LCD_SET(0, 3);
+    LCD_PRINT("Klik -> zapisz");
   }
   // === 2. WIDOK KLIKNIĘĆ ===
   else if (appState == STATE_STATS_CLICKS) {

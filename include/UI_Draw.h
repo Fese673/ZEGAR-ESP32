@@ -56,6 +56,19 @@ extern bool dhtScreenDirty;
 // === Flaga ekranów PMS5003 - wymusi rysowanie przy wejściu do podmenu ===
 extern bool pmsScreenDirty;
 
+// === Zmienne Ustawień (Settings) ===
+extern int settingsMenuIndex;
+extern const char* settingsMenuItems[];
+extern int settingsMenuCount;
+extern int settingsPmsMenuIndex;
+extern const char* settingsPmsMenuItems[];
+extern int settingsPmsMenuCount;
+extern int settingsBuzzerMenuIndex;
+extern const char* settingsBuzzerMenuItems[];
+extern int settingsBuzzerMenuCount;
+extern bool pms5003Enabled;
+extern bool buzzerEnabled;
+
 // Zmienne do triku z zamrażaniem czasu na 7-seg
 extern int savedHours, savedMinutes, savedSeconds;
 extern bool timeSaved;

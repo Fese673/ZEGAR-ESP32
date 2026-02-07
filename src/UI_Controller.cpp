@@ -98,6 +98,16 @@ extern uint32_t pms5003_lastFrameTime;
 extern uint32_t pms5003_latency_ms;
 extern bool pmsScreenDirty;
 
+// --- Ustawienia (Settings) ---
+extern int settingsMenuIndex;
+extern int settingsMenuCount;
+extern int settingsPmsMenuIndex;
+extern int settingsPmsMenuCount;
+extern int settingsBuzzerMenuIndex;
+extern int settingsBuzzerMenuCount;
+extern bool pms5003Enabled;
+extern bool buzzerEnabled;
+
 // ============================================================================
 // FUNKCJE EXTERN (z main.cpp)
 // ============================================================================
@@ -202,6 +212,21 @@ void ui_handleEvent(EncoderEvent e) {
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         break;
 
+      case STATE_SETTINGS:
+        settingsMenuIndex = constrain(settingsMenuIndex + dir, 0, settingsMenuCount - 1);
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        break;
+
+      case STATE_SETTINGS_PMS5003:
+        settingsPmsMenuIndex = constrain(settingsPmsMenuIndex + dir, 0, settingsPmsMenuCount - 1);
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        break;
+
+      case STATE_SETTINGS_BUZZER:
+        settingsBuzzerMenuIndex = constrain(settingsBuzzerMenuIndex + dir, 0, settingsBuzzerMenuCount - 1);
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        break;
+
       case STATE_SET_TIME:
         adjustTime_internal(dir);
         break;
@@ -293,13 +318,19 @@ void ui_handleEvent(EncoderEvent e) {
           showHumidity7Seg();
           return;
 
-        case 9:  // Wyjście
+        case 9:  // Ustawienia
+          appState        = STATE_SETTINGS;
+          settingsMenuIndex = 0;
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          return;
+
+        case 10:  // Wyjście
           appState = STATE_HOME;
           if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
           if (s_callbacks.drawHome) s_callbacks.drawHome();
           return;
 
-        case 10:  // Radio Toggle (WiFi ↔ Bluetooth)
+        case 11:  // Radio Toggle (WiFi ↔ Bluetooth)
           // Przełącz na inny tryb z resetem - BEZ żadnych operacji LCD!
           if (radioMode == WIFI_ONLY) {
             // Przejdź na Bluetooth
@@ -501,6 +532,45 @@ void ui_handleEvent(EncoderEvent e) {
       return;
     }
 
+    // --- LOGIKA MENU USTAWIEŃ (Settings) ---
+    if (appState == STATE_SETTINGS) {
+      switch (settingsMenuIndex) {
+        case 0:  // PMS5003
+          appState = STATE_SETTINGS_PMS5003;
+          settingsPmsMenuIndex = pms5003Enabled ? 0 : 1;
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 1:  // Buzzer
+          appState = STATE_SETTINGS_BUZZER;
+          settingsBuzzerMenuIndex = buzzerEnabled ? 0 : 1;
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 2:  // Wyjście
+          appState = STATE_MENU;
+          if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+          break;
+        default:
+          break;
+      }
+      return;
+    }
+
+    // --- LOGIKA MENU USTAWIEŃ PMS5003 (włącz/wyłącz) ---
+    if (appState == STATE_SETTINGS_PMS5003) {
+      pms5003Enabled = (settingsPmsMenuIndex == 0);
+      appState = STATE_SETTINGS;
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
+
+    // --- LOGIKA MENU USTAWIEŃ BUZERA (włącz/wyłącz) ---
+    if (appState == STATE_SETTINGS_BUZZER) {
+      buzzerEnabled = (settingsBuzzerMenuIndex == 0);
+      appState = STATE_SETTINGS;
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
+
     // --- LOGIKA POZOSTAŁYCH STANÓW ---
 
     if (appState == STATE_STOPER) {
@@ -648,6 +718,19 @@ void ui_handleEvent(EncoderEvent e) {
 
       case STATE_PMS5003:
         // Menu PMS5003 -> menu główne
+        appState = STATE_MENU;
+        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        return;
+
+      // --- Ustawienia (Settings) -> powrót do menu głównego ---
+      case STATE_SETTINGS_PMS5003:
+      case STATE_SETTINGS_BUZZER:
+        appState = STATE_SETTINGS;
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        return;
+
+      case STATE_SETTINGS:
+        // Menu Ustawień -> menu główne
         appState = STATE_MENU;
         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
         return;

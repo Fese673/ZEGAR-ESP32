@@ -125,10 +125,11 @@ const char* menuItems[] = {
   "PMS5003",
   "Temperatura",
   "Wilgotnosc",
+  "Ustawienia",
   "Wyjscie",
   "Radio: Toggle"
 };
-constexpr int MENU_COUNT = 11;
+constexpr int MENU_COUNT = 12;
 int menuCount = MENU_COUNT;
 
 // Diagnostyka pamięci
@@ -202,6 +203,34 @@ const char* pms5003ParticlesMenuItems[] = {
 constexpr int PMS5003_PARTICLES_MENU_COUNT = 6;
 int pms5003ParticlesMenuCount = PMS5003_PARTICLES_MENU_COUNT;
 
+// --- Menu Ustawień (Settings) ---
+int settingsMenuIndex = 0;
+const char* settingsMenuItems[] = {
+  "PMS5003",
+  "Buzzer",
+  "Wyjscie"
+};
+constexpr int SETTINGS_MENU_COUNT = 3;
+int settingsMenuCount = SETTINGS_MENU_COUNT;
+
+// --- Menu Ustawienia PMS5003 (włącz/wyłącz) ---
+int settingsPmsMenuIndex = 0;
+const char* settingsPmsMenuItems[] = {
+  "Wlaczony",
+  "Wylaczony"
+};
+constexpr int SETTINGS_PMS_MENU_COUNT = 2;
+int settingsPmsMenuCount = SETTINGS_PMS_MENU_COUNT;
+
+// --- Menu Ustawienia Buzera (włącz/wyłącz) ---
+int settingsBuzzerMenuIndex = 0;
+const char* settingsBuzzerMenuItems[] = {
+  "Wlaczony",
+  "Wylaczony"
+};
+constexpr int SETTINGS_BUZZER_MENU_COUNT = 2;
+int settingsBuzzerMenuCount = SETTINGS_BUZZER_MENU_COUNT;
+
 // --- Dane PMS5003 TELEMETRIA ---
 uint16_t pms5003_errorCount_current = 0;
 uint16_t pms5003_errorCount_total = 0;
@@ -253,6 +282,10 @@ static unsigned long lastCpuReadTime = 0;
 // --- System Resources Tracking ---
 uint32_t ramFreeBytes = 0;
 uint32_t flashFreeBytes = 0;
+
+// --- Ustawienia (Configuration settings) ---
+bool pms5003Enabled = true;   // Czy czujnik PMS5003 jest włączony
+bool buzzerEnabled = true;    // Czy buzzer jest włączony
 
 // --- Budzik ---
 int  alarmHour       = 7;
@@ -452,6 +485,9 @@ void setup() {
 
   // I2C initialization with explicit pins: SDA=21, SCL=22 (GPIO22 now free from I2S after fix)
   Wire.begin(21, 22);
+  // USTAWIENIE I2C: zwiększone do 400 kHz aby przyspieszyć komunikację z LCD/i2c
+  // ZMIANA: domyślnie było 100 kHz; zwiększam do 400 kHz (Fast-mode)
+  Wire.setClock(400000);
   lcd.init();
   lcd.backlight();
   lcd.createChar(0, alarmIcon);

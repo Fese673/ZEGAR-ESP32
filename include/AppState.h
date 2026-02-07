@@ -50,6 +50,11 @@ enum AppState {
   // --- PMS5003 ---
   STATE_PMS5003,        // Menu PMS5003 (lista z >)
   STATE_PMS5003_CF1,    // Menu trybu fabrycsnego (dane bieżące)
+
+  // --- Ustawienia (Settings) ---
+  STATE_SETTINGS,              // Menu Ustawień (lista z >)
+  STATE_SETTINGS_PMS5003,      // Ustawienia PMS5003 (włącz/wyłącz)
+  STATE_SETTINGS_BUZZER,       // Ustawienia Buzera (włącz/wyłącz)
   STATE_PMS5003_CF1_PM1,   // Szczegóły PM1.0 w CF=1
   STATE_PMS5003_CF1_PM25,  // Szczegóły PM2.5 w CF=1
   STATE_PMS5003_CF1_PM10,  // Szczegóły PM10 w CF=1
@@ -83,7 +88,12 @@ enum AppState {
   STATEPMS5003PARTICLES2_5 = STATE_PMS5003_PARTICLES_2_5,
   STATEPMS5003PARTICLES5_0 = STATE_PMS5003_PARTICLES_5_0,
   STATEPMS5003PARTICLES10_0 = STATE_PMS5003_PARTICLES_10_0,
-  STATEPMS5003TELEMETRY = STATE_PMS5003_TELEMETRY
+  STATEPMS5003TELEMETRY = STATE_PMS5003_TELEMETRY,
+
+  // --- Aliasy dla Settings ---
+  STATESETTINGS = STATE_SETTINGS,
+  STATESETTINGSPMS5003 = STATE_SETTINGS_PMS5003,
+  STATESETTINGSBUZZER = STATE_SETTINGS_BUZZER
 };
 
 enum EditState {

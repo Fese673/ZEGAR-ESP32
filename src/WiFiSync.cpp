@@ -1,6 +1,7 @@
 #include "WiFiSync.h"
 #include <WiFi.h>
 #include "esp_wifi.h"
+#include "ModeManager.h"
 
 namespace WiFiSync {
 
@@ -29,11 +30,22 @@ static int retryCount = 0;
 
 static void (*onStartCb)() = nullptr;
 static void (*onDoneCb)() = nullptr;
+// Control whether sync-related UI (LCD) should be shown
+static bool showSyncUi = false; // disabled by default per user request
+
+void setShowSyncUi(bool enable) {
+  showSyncUi = enable;
+}
+
+// (Auto-sync-on-connect removed - feature disabled)
 
 static constexpr unsigned long WIFI_RETRY_DELAY_MS = 500;
 static constexpr int WIFI_MAX_RETRIES = 20;
 static constexpr unsigned long NTP_TIMEOUT_MS = 5000;
 static constexpr unsigned long MSG_DISPLAY_MS = 1500;
+// Periodic automatic sync interval (1 hour)
+static constexpr unsigned long PERIODIC_SYNC_INTERVAL_MS = 3600000UL;
+static unsigned long lastPeriodicSync = 0;
 
 void setTimeRefs(int &hoursRef, int &minutesRef, int &secondsRef, unsigned long &lastTickRef) {
   pHours = &hoursRef;
@@ -52,12 +64,17 @@ void begin(const char* _ssid, const char* _pass,
   state = S_IDLE;
   lastCheck = 0;
   retryCount = 0;
+  // Initialize periodic sync timer to avoid immediate trigger after boot
+  lastPeriodicSync = millis();
+
+  // Auto-sync-on-connect feature removed per user request; no event handler registered
 }
 
 void setOnStart(void (*cb)()) { onStartCb = cb; }
 void setOnDone(void (*cb)())  { onDoneCb  = cb; }
 
 static void drawConnectingDots(int dots) {
+  if (!showSyncUi) return;
   LCD_CLEAR();
   LCD_SET(0, 0);
   LCD_PRINT("Laczenie WiFi");
@@ -67,6 +84,7 @@ static void drawConnectingDots(int dots) {
 }
 
 static void drawMessage(const char* msg) {
+  if (!showSyncUi) return;
   LCD_CLEAR();
   LCD_SET(0, 0);
   LCD_PRINT(msg);
@@ -74,17 +92,32 @@ static void drawMessage(const char* msg) {
 }
 
 void startSync() {
-  if (state != S_IDLE) return;
+  Serial.println("[WiFiSync] startSync() called");
+  if (state != S_IDLE) {
+    Serial.println("[WiFiSync] startSync() aborted because not in S_IDLE");
+    return;
+  }
 
   // ustaw appState, jeśli przekazano wskaźnik
   if (pAppState) *pAppState = STATE_WIFI_SYNC;
 
-  state = S_CONNECTING;
   retryCount = 0;
   lastCheck = millis();
 
   if (onStartCb) onStartCb();
 
+  // Jeśli już jesteśmy połączeni, przejdź od razu do synchronizacji czasu
+  if (WiFi.status() == WL_CONNECTED) {
+    state = S_SYNCING_TIME;
+    lastCheck = millis();
+    Serial.println("[WiFiSync] WiFi already connected -> S_SYNCING_TIME");
+    configTime(gmtOffsetSec, dstOffsetSec, ntpServer);
+    drawMessage("Połączono, NTP...");
+    return;
+  }
+
+  // W przeciwnym razie rozpocznij łączenie
+  state = S_CONNECTING;
   drawConnectingDots(0);
 
   if (ssid && pass) {
@@ -96,15 +129,22 @@ void startSync() {
   }
 }
 
+void setAutoSyncOnConnect(bool enable) {
+  // noop: auto-sync-on-connect feature disabled
+}
+
 void stop() {
-  // Siłowe zatrzymanie procesu Wi-Fi/NTP i zamknięcie radia.
+  // Zatrzymanie procesu Wi-Fi/NTP bez całkowitego deinicjalizowania drivera
+  // (bo to uniemożliwia handler events przy ponownym włączeniu WiFi)
   state = S_IDLE;
   retryCount = 0;
-  WiFi.disconnect(true);
-  // ustaw tryb OFF zanim zatrzymamy/deinicjalizujemy sterownik
-  WiFi.mode(WIFI_OFF);
-  esp_wifi_stop();
-  esp_wifi_deinit();
+  
+  WiFi.disconnect(true);    // Disconnect and turn off radio, ale nie deinicjalizuj driver
+  WiFi.mode(WIFI_OFF);      // Set mode OFF
+  
+  // NIE wywoływać esp_wifi_stop() ani esp_wifi_deinit() - to blokuje handler events
+  // przy ponownym włączeniu WiFi. Handler będzie działać gdy WiFi.begin() będzie wywoływane
+  
   if (pAppState) *pAppState = STATE_HOME;
   if (onDoneCb) onDoneCb();
 }
@@ -114,9 +154,19 @@ bool isBusy() {
 }
 
 void update() {
-  if (state == S_IDLE) return;
-
   unsigned long now = millis();
+
+  // Periodic sync: if device is in WiFi mode, connected and idle, run sync every interval
+  if (ModeManager::isWifiOn() && WiFi.status() == WL_CONNECTED && state == S_IDLE) {
+    if (now - lastPeriodicSync >= PERIODIC_SYNC_INTERVAL_MS) {
+      Serial.println("[WiFiSync] Periodic autoSync triggered (hourly)");
+      lastPeriodicSync = now;
+      startSync();
+      return;
+    }
+  }
+
+  if (state == S_IDLE) return;
 
   if (state == S_CONNECTING) {
     if (WiFi.status() == WL_CONNECTED) {

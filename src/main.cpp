@@ -297,6 +297,9 @@ int  savedMinutes   = 0;
 int  savedSeconds   = 0;
 bool timeSaved      = false;
 
+// Flaga do wymuszenia rysowania ekranów PMS5003 przy wejściu do podmenu
+bool pmsScreenDirty = true;
+
 // Odczyty DHT
 float dhtTemperature = 0.0f;
 float dhtHumidity    = 0.0f;
@@ -424,6 +427,25 @@ void setup() {
   // BĘDZIE NA KONIEC setup() po LCD i UI init!
   RadioModeSwitch::begin();
 
+  // ===== Przywrócenie czasu z RTC WCZEŚNIE (jeśli zapisane) =====
+  // Jeśli RadioModeSwitch zapisał czas przed restartem, zastosuj go natychmiast
+  uint8_t early_rtc_hours = RadioModeSwitch::getRTCHours();
+  uint8_t early_rtc_minutes = RadioModeSwitch::getRTCMinutes();
+  uint8_t early_rtc_seconds = RadioModeSwitch::getRTCSeconds();
+  if (early_rtc_hours > 0 || early_rtc_minutes > 0 || early_rtc_seconds > 0) {
+    if (early_rtc_hours < 24 && early_rtc_minutes < 60 && early_rtc_seconds < 60) {
+      hours = early_rtc_hours;
+      minutes = early_rtc_minutes;
+      seconds = early_rtc_seconds;
+      lastTick = millis();
+      Serial.printf("[main] Early restore time from RTC: %02d:%02d:%02d\n", hours, minutes, seconds);
+      updateSevenSeg();
+    } else {
+      Serial.printf("[main] Early RTC time invalid: %02d:%02d:%02d - ignoring\n", early_rtc_hours, early_rtc_minutes, early_rtc_seconds);
+      RadioModeSwitch::clearRTCTime();
+    }
+  }
+
 #if UART_LCD_MIRROR
   lcdMirror.begin();
 #endif
@@ -528,8 +550,11 @@ void loop() {
   static unsigned long lastStatsRedraw = 0;
   if ((appState == STATE_STATS_RESOURCES_CPU || appState == STATE_STATS_RESOURCES_RAM ||
        appState == STATE_STATS_RESOURCES_FLASH || appState == STATE_STATS_RESOURCES ||
-       appState == STATE_PMS5003_CF1 || appState == STATE_PMS5003_ATM ||
-       appState == STATE_PMS5003_PARTICLES || appState == STATE_PMS5003_TELEMETRY) &&
+       // PMS menus and all detail sub-states
+       appState == STATE_PMS5003_CF1 || appState == STATE_PMS5003_CF1_PM1 || appState == STATE_PMS5003_CF1_PM25 || appState == STATE_PMS5003_CF1_PM10 ||
+       appState == STATE_PMS5003_ATM || appState == STATE_PMS5003_ATM_PM1 || appState == STATE_PMS5003_ATM_PM25 || appState == STATE_PMS5003_ATM_PM10 ||
+       appState == STATE_PMS5003_PARTICLES || appState == STATE_PMS5003_PARTICLES_0_3 || appState == STATE_PMS5003_PARTICLES_0_5 || appState == STATE_PMS5003_PARTICLES_1_0 || appState == STATE_PMS5003_PARTICLES_2_5 || appState == STATE_PMS5003_PARTICLES_5_0 || appState == STATE_PMS5003_PARTICLES_10_0 ||
+       appState == STATE_PMS5003_TELEMETRY) &&
       millis() - lastStatsRedraw >= 1000) {
     lastStatsRedraw = millis();
     drawStats();
@@ -606,17 +631,24 @@ void loop() {
     
     // Sprawdź czy czas był zapisany (non-zero wartości)
     if (rtc_hours > 0 || rtc_minutes > 0 || rtc_seconds > 0) {
-      hours = rtc_hours;
-      minutes = rtc_minutes;
-      seconds = rtc_seconds;
-      lastTick = millis();  // Zresetuj tick timer
-      
-      Serial.printf("[main] Przywrócono czas z RTC: %02d:%02d:%02d\n", hours, minutes, seconds);
-      updateSevenSeg();
-      drawHome();
-      
-      // Wyczyść RTC czas (one-time restoration)
-      RadioModeSwitch::clearRTCTime();
+      // Waliduj zakresy: hours 0-23, minutes 0-59, seconds 0-59
+      if (rtc_hours < 24 && rtc_minutes < 60 && rtc_seconds < 60) {
+        hours = rtc_hours;
+        minutes = rtc_minutes;
+        seconds = rtc_seconds;
+        lastTick = millis();  // Zresetuj tick timer
+
+        Serial.printf("[main] Przywrócono czas z RTC: %02d:%02d:%02d\n", hours, minutes, seconds);
+        updateSevenSeg();
+        drawHome();
+
+        // Wyczyść RTC czas (one-time restoration)
+        RadioModeSwitch::clearRTCTime();
+      } else {
+        // Nieprawidłowy zapis w RTC - zignoruj i wyczyść
+        Serial.printf("[main] Ignoruję nieprawidłowy czas z RTC: %02d:%02d:%02d\n", rtc_hours, rtc_minutes, rtc_seconds);
+        RadioModeSwitch::clearRTCTime();
+      }
     }
     
     timeRestored = true;

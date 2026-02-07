@@ -33,6 +33,9 @@ namespace PMS5003Sensor {
   /// Zwraca timestamp (ms) ostatniej aktualizacji danych z czujnika
   uint32_t getLastUpdateTime();
 
+  /// Wymuś natychmiastowy cykl odczytu (rozpoczyna nowy START_ATM_READ)
+  void requestImmediateRead();
+
   /// Wymuś reset statystyk min/max (wywoływane wewnętrznie w begin(),
   /// ale można też z menu)
   void resetMinMax();

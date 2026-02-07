@@ -3,6 +3,8 @@
 #include "AppState.h"
 #include "ModeManager.h"
 #include "RadioModeSwitch.h"
+#include "PMS_Czujnik.h"
+#include "UI_Draw.h"
 
 // ============================================================================
 // ZMIENNE GLOBALNE (extern z main.cpp)
@@ -94,6 +96,7 @@ extern uint16_t pms5003_errorCount_total;
 extern uint16_t pms5003_bytesReceived;
 extern uint32_t pms5003_lastFrameTime;
 extern uint32_t pms5003_latency_ms;
+extern bool pmsScreenDirty;
 
 // ============================================================================
 // FUNKCJE EXTERN (z main.cpp)
@@ -177,21 +180,25 @@ void ui_handleEvent(EncoderEvent e) {
 
       case STATE_PMS5003:
         pms5003MenuIndex = constrain(pms5003MenuIndex + dir, 0, pms5003MenuCount - 1);
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         break;
 
       case STATE_PMS5003_CF1:
         pms5003CF1MenuIndex = constrain(pms5003CF1MenuIndex + dir, 0, pms5003CF1MenuCount - 1);
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         break;
 
       case STATE_PMS5003_ATM:
         pms5003ATMMenuIndex = constrain(pms5003ATMMenuIndex + dir, 0, pms5003ATMMenuCount - 1);
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         break;
 
       case STATE_PMS5003_PARTICLES:
         pms5003ParticlesMenuIndex = constrain(pms5003ParticlesMenuIndex + dir, 0, pms5003ParticlesMenuCount - 1);
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         break;
 
@@ -268,6 +275,9 @@ void ui_handleEvent(EncoderEvent e) {
         case 6:  // PMS5003
           appState       = STATE_PMS5003;
           pms5003MenuIndex = 0;
+          // Przy wejściu do menu PMS – wymuś odczyt i pozwól na natychmiastowe rysowanie
+          PMS5003Sensor::requestImmediateRead();
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           return;
 
@@ -370,20 +380,28 @@ void ui_handleEvent(EncoderEvent e) {
         case 0:
           appState = STATE_PMS5003_CF1;
           pms5003CF1MenuIndex = 0;
+          PMS5003Sensor::requestImmediateRead();
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 1:
           appState = STATE_PMS5003_ATM;
           pms5003ATMMenuIndex = 0;
+          PMS5003Sensor::requestImmediateRead();
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 2:  // L.Czastek
           appState = STATE_PMS5003_PARTICLES;
           pms5003ParticlesMenuIndex = 0;
+          PMS5003Sensor::requestImmediateRead();
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 3:  // Telemetria
           appState = STATE_PMS5003_TELEMETRY;
+          PMS5003Sensor::requestImmediateRead();
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 4:  // Wyjście
@@ -401,14 +419,17 @@ void ui_handleEvent(EncoderEvent e) {
       switch (pms5003CF1MenuIndex) {
         case 0:  // PM1.0 - wejdź w szczegóły
           appState = STATE_PMS5003_CF1_PM1;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 1:  // PM2.5 - wejdź w szczegóły
           appState = STATE_PMS5003_CF1_PM25;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 2:  // PM10 - wejdź w szczegóły
           appState = STATE_PMS5003_CF1_PM10;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         default:
@@ -422,14 +443,17 @@ void ui_handleEvent(EncoderEvent e) {
       switch (pms5003ATMMenuIndex) {
         case 0:  // PM1.0 - wejdź w szczegóły
           appState = STATE_PMS5003_ATM_PM1;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 1:  // PM2.5 - wejdź w szczegóły
           appState = STATE_PMS5003_ATM_PM25;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 2:  // PM10 - wejdź w szczegóły
           appState = STATE_PMS5003_ATM_PM10;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         default:
@@ -443,26 +467,32 @@ void ui_handleEvent(EncoderEvent e) {
       switch (pms5003ParticlesMenuIndex) {
         case 0:  // 0.3um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_0_3;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 1:  // 0.5um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_0_5;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 2:  // 1.0um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_1_0;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 3:  // 2.5um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_2_5;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 4:  // 5.0um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_5_0;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         case 5:  // 10um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_10_0;
+          pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
         default:
@@ -563,12 +593,14 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_PMS5003_CF1_PM25:
       case STATE_PMS5003_CF1_PM10:
         appState = STATE_PMS5003_CF1;
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         return;
 
       case STATE_PMS5003_CF1:
         // Menu CF1 -> powrót do menu PMS5003
         appState = STATE_PMS5003;
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         return;
 
@@ -577,12 +609,14 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_PMS5003_ATM_PM25:
       case STATE_PMS5003_ATM_PM10:
         appState = STATE_PMS5003_ATM;
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         return;
 
       case STATE_PMS5003_ATM:
         // Menu ATM -> powrót do menu PMS5003
         appState = STATE_PMS5003;
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         return;
 
@@ -594,18 +628,21 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_PMS5003_PARTICLES_5_0:
       case STATE_PMS5003_PARTICLES_10_0:
         appState = STATE_PMS5003_PARTICLES;
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         return;
 
       case STATE_PMS5003_PARTICLES:
         // Menu PARTICLES -> powrót do menu PMS5003
         appState = STATE_PMS5003;
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         return;
 
       case STATE_PMS5003_TELEMETRY:
         // Telemetria -> powrót do menu PMS5003
         appState = STATE_PMS5003;
+        pmsScreenDirty = true;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         return;
 

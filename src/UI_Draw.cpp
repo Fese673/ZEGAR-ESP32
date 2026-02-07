@@ -3,6 +3,7 @@
 #include "StatsManager.h"
 #include <LiquidCrystal_I2C.h>
 #include <Esp.h>
+#include "PMS_Czujnik.h"
 
 extern LiquidCrystal_I2C lcd;
 
@@ -330,6 +331,20 @@ void printVal(int v, bool sel) {
 constexpr int STATS_ITEMS_PER_PAGE = 3;
 
 void drawStats() {
+  // Optymalizacja dla ekranów PMS5003: rysuj tylko gdy są nowe dane
+  if (appState == STATE_PMS5003 || appState == STATE_PMS5003_CF1 ||
+      appState == STATE_PMS5003_CF1_PM1 || appState == STATE_PMS5003_CF1_PM25 || appState == STATE_PMS5003_CF1_PM10 ||
+      appState == STATE_PMS5003_ATM || appState == STATE_PMS5003_ATM_PM1 || appState == STATE_PMS5003_ATM_PM25 || appState == STATE_PMS5003_ATM_PM10 ||
+      appState == STATE_PMS5003_PARTICLES || appState == STATE_PMS5003_PARTICLES_0_3 || appState == STATE_PMS5003_PARTICLES_0_5 ||
+      appState == STATE_PMS5003_PARTICLES_1_0 || appState == STATE_PMS5003_PARTICLES_2_5 || appState == STATE_PMS5003_PARTICLES_5_0 || appState == STATE_PMS5003_PARTICLES_10_0 ||
+      appState == STATE_PMS5003_TELEMETRY) {
+    static uint32_t lastPmsSeen = 0;
+    uint32_t lu = PMS5003Sensor::getLastUpdateTime();
+    if (!pmsScreenDirty && lu == lastPmsSeen) return; // brak nowych danych -> nie rysuj
+    lastPmsSeen = lu;
+    pmsScreenDirty = false;
+  }
+
   LCD_CLEAR();
   const AppStats stats = statsManager.getStats();
 
@@ -547,18 +562,21 @@ void drawStats() {
     LCD_PRINT(pms5003CF1MenuIndex == 0 ? ">" : " ");
     LCD_PRINT(" PM1.0: ");
     LCD_PRINT(pms5003_PM1_0_CF1 > 0 ? pms5003_PM1_0_CF1 : 0);
+    LCD_PRINT(" µg/m3");
     
     // Wiersz 2: PM2.5 (z > jeśli wybrany)
     LCD_SET(0, 2);
     LCD_PRINT(pms5003CF1MenuIndex == 1 ? ">" : " ");
     LCD_PRINT(" PM2.5: ");
     LCD_PRINT(pms5003_PM2_5_CF1 > 0 ? pms5003_PM2_5_CF1 : 0);
+    LCD_PRINT(" µg/m3");
     
     // Wiersz 3: PM10 (z > jeśli wybrany)
     LCD_SET(0, 3);
     LCD_PRINT(pms5003CF1MenuIndex == 2 ? ">" : " ");
     LCD_PRINT(" PM10:  ");
     LCD_PRINT(pms5003_PM10_CF1 > 0 ? pms5003_PM10_CF1 : 0);
+    LCD_PRINT(" µg/m3");
   }
   // === 6a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB CF=1 (MIN/MAX) ===
   else if (appState == STATE_PMS5003_CF1_PM1) {
@@ -568,6 +586,7 @@ void drawStats() {
     LCD_SET(0, 1);
     LCD_PRINT("Biezaca: ");
     LCD_PRINT(pms5003_PM1_0_CF1);
+    LCD_PRINT(" µg/m3");
     
     LCD_SET(0, 2);
     LCD_PRINT("Min:");
@@ -586,6 +605,7 @@ void drawStats() {
     LCD_SET(0, 1);
     LCD_PRINT("Biezaca: ");
     LCD_PRINT(pms5003_PM2_5_CF1);
+    LCD_PRINT(" µg/m3");
     
     LCD_SET(0, 2);
     LCD_PRINT("Min:");
@@ -604,6 +624,7 @@ void drawStats() {
     LCD_SET(0, 1);
     LCD_PRINT("Biezaca: ");
     LCD_PRINT(pms5003_PM10_CF1);
+    LCD_PRINT(" µg/m3");
     
     LCD_SET(0, 2);
     LCD_PRINT("Min:");
@@ -624,18 +645,21 @@ void drawStats() {
     LCD_PRINT(pms5003ATMMenuIndex == 0 ? ">" : " ");
     LCD_PRINT(" PM1.0: ");
     LCD_PRINT(pms5003_PM1_0_ATM > 0 ? pms5003_PM1_0_ATM : 0);
+    LCD_PRINT(" µg/m3");
     
     // Wiersz 2: PM2.5 (z > jeśli wybrany)
     LCD_SET(0, 2);
     LCD_PRINT(pms5003ATMMenuIndex == 1 ? ">" : " ");
     LCD_PRINT(" PM2.5: ");
     LCD_PRINT(pms5003_PM2_5_ATM > 0 ? pms5003_PM2_5_ATM : 0);
+    LCD_PRINT(" µg/m3");
     
     // Wiersz 3: PM10 (z > jeśli wybrany)
     LCD_SET(0, 3);
     LCD_PRINT(pms5003ATMMenuIndex == 2 ? ">" : " ");
     LCD_PRINT(" PM10:  ");
     LCD_PRINT(pms5003_PM10_ATM > 0 ? pms5003_PM10_ATM : 0);
+    LCD_PRINT(" µg/m3");
   }
   // === 7a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB ATM (MIN/MAX) ===
   else if (appState == STATE_PMS5003_ATM_PM1) {
@@ -645,6 +669,7 @@ void drawStats() {
     LCD_SET(0, 1);
     LCD_PRINT("Biezaca: ");
     LCD_PRINT(pms5003_PM1_0_ATM);
+    LCD_PRINT(" µg/m3");
     
     LCD_SET(0, 2);
     LCD_PRINT("Min:");
@@ -663,6 +688,7 @@ void drawStats() {
     LCD_SET(0, 1);
     LCD_PRINT("Biezaca: ");
     LCD_PRINT(pms5003_PM2_5_ATM);
+    LCD_PRINT(" µg/m3");
     
     LCD_SET(0, 2);
     LCD_PRINT("Min:");
@@ -681,6 +707,7 @@ void drawStats() {
     LCD_SET(0, 1);
     LCD_PRINT("Biezaca: ");
     LCD_PRINT(pms5003_PM10_ATM);
+    LCD_PRINT(" µg/m3");
     
     LCD_SET(0, 2);
     LCD_PRINT("Min:");

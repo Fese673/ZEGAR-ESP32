@@ -1,4 +1,5 @@
 #include "MQTTSync.h"
+#include "WiFiSync.h"
 
 // ============================================================================
 // CA Certificate Definition (GLOBAL - outside namespace)
@@ -94,6 +95,9 @@ static void mqtt_reconnect() {
     if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD)) {
         Serial.println("[MQTT] ✅ Connected to HiveMQ Cloud!");
         mqttConnected = true;
+        // Trigger immediate NTP sync when MQTT becomes connected
+        Serial.println("[MQTT] Triggering immediate NTP sync via WiFiSync::startSync()");
+        WiFiSync::startSync();
         
         // Publish-only mode: do not subscribe to any topics
         // mqttClient.subscribe("sensors/device1/cmd");

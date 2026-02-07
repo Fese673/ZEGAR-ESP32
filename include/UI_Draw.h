@@ -53,6 +53,8 @@ extern float dhtTemperature;
 extern float dhtHumidity;
 extern bool dhtReady;
 extern bool dhtScreenDirty;
+// === Flaga ekranów PMS5003 - wymusi rysowanie przy wejściu do podmenu ===
+extern bool pmsScreenDirty;
 
 // Zmienne do triku z zamrażaniem czasu na 7-seg
 extern int savedHours, savedMinutes, savedSeconds;

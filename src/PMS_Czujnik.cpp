@@ -103,6 +103,15 @@ uint32_t PMS5003Sensor::getLastUpdateTime() {
   return lastUpdateTime;
 }
 
+// Wymuś natychmiastowy cykl odczytu. Ustawiamy stan na START_ATM_READ
+// i wywołujemy update(), aby rozpocząć odczyt bez czekania na kolejny loop().
+void PMS5003Sensor::requestImmediateRead() {
+  state = START_ATM_READ;
+  ts = 0;
+  // Uruchom update od razu (wykona START_ATM_READ -> READ ATM)
+  PMS5003Sensor::update();
+}
+
 static inline void updateVal(uint16_t &cur, uint16_t &mn, uint16_t &mx, uint16_t v) {
   cur = v;
   if (v < mn) mn = v;

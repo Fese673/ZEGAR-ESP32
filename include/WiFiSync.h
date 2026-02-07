@@ -34,6 +34,9 @@ bool isBusy();
 void setOnStart(void (*cb)());
 void setOnDone(void (*cb)());
 
+// Automatyczne wywoływanie synchronizacji po uzyskaniu adresu IP
+void setAutoSyncOnConnect(bool enable);
+
 // przekazanie referencji do globalnych zmiennych czasu (opcjonalne, dla kompatybilności)
 void setTimeRefs(int &hoursRef, int &minutesRef, int &secondsRef, unsigned long &lastTickRef);
 

@@ -1,4 +1,4 @@
-# MQTT Integration for ESP32 - Setup Guide
+# STARE JUŻ NIE WAŻNY KOD   MQTT Integration for ESP32 - Setup Guide
 
 ## ✅ Implementation Complete
 

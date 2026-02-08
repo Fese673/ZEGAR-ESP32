@@ -1,6 +1,23 @@
 #include "MQTTSync.h"
 #include "WiFiSync.h"
 
+// Externy PMS5003 - zmienne globalne z `main.cpp`
+extern uint16_t pms5003_PM1_0_CF1;
+extern uint16_t pms5003_PM2_5_CF1;
+extern uint16_t pms5003_PM10_CF1;
+
+extern uint16_t pms5003_PM1_0_ATM;
+extern uint16_t pms5003_PM2_5_ATM;
+extern uint16_t pms5003_PM10_ATM;
+
+// Particle counts (#/100cm3)
+extern uint16_t pms5003_particleCount_0_3;
+extern uint16_t pms5003_particleCount_0_5;
+extern uint16_t pms5003_particleCount_1_0;
+extern uint16_t pms5003_particleCount_2_5;
+extern uint16_t pms5003_particleCount_5_0;
+extern uint16_t pms5003_particleCount_10_0;
+
 // ============================================================================
 // CA Certificate Definition (GLOBAL - outside namespace)
 // ============================================================================
@@ -169,9 +186,9 @@ void begin(const char* ssid, const char* password) {
     mqttClient.setClient(wifiClientSecure);
     mqttClient.setServer(MQTT_BROKER_ADDRESS, MQTT_BROKER_PORT);
     mqttClient.setCallback(mqtt_callback);
-    
-    // Configure buffer sizes for JSON payload
-    mqttClient.setBufferSize(512);
+
+    // Configure buffer sizes for JSON payload (increase to support particle arrays)
+    mqttClient.setBufferSize(1024);
     
     Serial.println("[MQTT] Client configured");
     Serial.print("[MQTT] Broker: ");
@@ -210,28 +227,55 @@ void stopCore1Task() {
 }
 
 void publishSensorData(float temp, int humidity, int pressure) {
-    // Only publish every publishInterval milliseconds
-    if (millis() - lastPublishTime < publishInterval) {
-        return;
-    }
-    
+    // NOTE: scheduling is handled by the caller (`main.cpp`).
+    // Do not duplicate rate-limiting here to avoid missing every-other publish.
     // Check if connected
     if (!mqttClient.connected()) {
         Serial.println("[MQTT] Not connected, cannot publish");
         return;
     }
-    
-    // Create JSON payload
-    StaticJsonDocument<256> doc;
-    doc["t"] = temp;           // temperature
-    doc["h"] = humidity;       // humidity
-    doc["p"] = pressure;       // pressure
-    doc["ts"] = millis();      // timestamp
-    
+
+    // Compact JSON payload as an array to save bytes:
+    // [ t, h, p, ts, [F_pm1,F_pm25,F_pm10], [A_pm1,A_pm25,A_pm10], [n0.3,n0.5,1.0,2.5,5.0,10.0] ]
+    StaticJsonDocument<512> doc;
+    JsonArray root = doc.to<JsonArray>();
+    root.add(temp);
+    root.add(humidity);
+    root.add(pressure);
+    root.add(millis());
+
+    JsonArray f = root.createNestedArray();
+    f.add(pms5003_PM1_0_CF1);
+    f.add(pms5003_PM2_5_CF1);
+    f.add(pms5003_PM10_CF1);
+
+    JsonArray a = root.createNestedArray();
+    a.add(pms5003_PM1_0_ATM);
+    a.add(pms5003_PM2_5_ATM);
+    a.add(pms5003_PM10_ATM);
+
+    JsonArray particles = root.createNestedArray();
+    particles.add(pms5003_particleCount_0_3);
+    particles.add(pms5003_particleCount_0_5);
+    particles.add(pms5003_particleCount_1_0);
+    particles.add(pms5003_particleCount_2_5);
+    particles.add(pms5003_particleCount_5_0);
+    particles.add(pms5003_particleCount_10_0);
+
+    // Debug: log particle counts before serialization
+    Serial.print("[MQTT] Particles: ");
+    Serial.print(pms5003_particleCount_0_3); Serial.print(",");
+    Serial.print(pms5003_particleCount_0_5); Serial.print(",");
+    Serial.print(pms5003_particleCount_1_0); Serial.print(",");
+    Serial.print(pms5003_particleCount_2_5); Serial.print(",");
+    Serial.print(pms5003_particleCount_5_0); Serial.print(",");
+    Serial.println(pms5003_particleCount_10_0);
+
     // Serialize to string
-    char buffer[256];
-    size_t n = serializeJson(doc, buffer);
-    
+    char buffer[1024];
+    size_t n = serializeJson(doc, buffer, sizeof(buffer));
+    Serial.print("[MQTT] Payload size: "); Serial.println(n);
+
     // Publish
     if (mqttClient.publish(MQTT_TOPIC, buffer)) {
         Serial.print("[MQTT] Published: ");

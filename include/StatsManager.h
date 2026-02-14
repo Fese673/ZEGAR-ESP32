@@ -2,13 +2,13 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-struct AppStats {
+struct AppStats {        // Struktura statystyk
     uint32_t totalClicks;
     uint32_t stepsLeft;
     uint32_t stepsRight;
 };
 
-struct EnvStats {
+struct EnvStats {        // Struktura do przechowywania min/max temperatury i wilgotności
     float tempMin;
     float tempMax;
     float humMin;
@@ -16,22 +16,22 @@ struct EnvStats {
 };
 
 
-class StatsManager {
+class StatsManager {   // Zarządza statystykami aplikacji, zapisuje do NVS i odczytuje przy starcie
 private:
     Preferences prefs;
     AppStats currentStats;
     bool isDirty;
     unsigned long lastSaveTime;
-    const unsigned long SAVE_INTERVAL_MS = 120000; // Zmiana interwału zapisu na 120s
+    const unsigned long SAVE_INTERVAL_MS = 120000; // Zmiana interwału zapisu na 120s tzw leniwe zapisywanie, aby zmniejszyć zużycie flasha
     const char* PREFS_NAMESPACE = "app_stats";
 
-    EnvStats envStats;
+    EnvStats envStats; 
     bool envDirty;
     unsigned long lastEnvSaveTime;
-    const unsigned long ENV_SAVE_INTERVAL_MS = 300000; // 5 minut
+    const unsigned long ENV_SAVE_INTERVAL_MS = 300000; // 5 minut (lazywriter co 5 minut dla ENV)
 
 public:
-      // do statystyk temperatury i wilgotności
+      // Funkcje do aktualizacji 
       void updateTemperature(float t);
       void updateHumidity(float h);
       EnvStats getEnvStats() const;
@@ -77,12 +77,12 @@ public:
     // Wywoływać w loop()
         void update() {
  
-    // zapis klików/kroków
+    // Zapis klików/kroków
     if (isDirty && (millis() - lastSaveTime > SAVE_INTERVAL_MS)) {
         saveStats();
     }
 
-    // zapis ENV
+    // Zapis ENV 
     if (envDirty && (millis() - lastEnvSaveTime > ENV_SAVE_INTERVAL_MS)) {
         prefs.begin(PREFS_NAMESPACE, false);
         prefs.putFloat("tmin", envStats.tempMin);

@@ -1,6 +1,5 @@
 #include "ModeManager.h"
 
-#include <WiFi.h>
 #include <Esp.h>
 #include <Arduino.h>
 
@@ -37,16 +36,12 @@ static void ensureHome() {
 // ZARZĄDZANIE WiFi
 // ============================================================================
 void wifiOn() {
-  // Najpierw wyłącz BT, aby uniknąć kolizji heap/IRQ
   if (btActive) {
     btOff();
   }
 
-  // Rozpocznij proces Wi-Fi (WiFiSync zajmie się połączeniem/NTP)
-  WiFi.mode(WIFI_STA);
-  WiFi.persistent(false);
-  WiFi.disconnect(true);
-
+  // ALL WiFi hardware init is now in WiFiSync background task (Core 1)
+  // No WiFi.mode/begin/disconnect here — prevents blocking main loop
   wifiActive = true;
   ensureHome();
   WiFiSync::startSync();

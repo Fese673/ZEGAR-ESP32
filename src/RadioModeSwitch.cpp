@@ -3,6 +3,7 @@
 #include <Esp.h>
 #include <esp_attr.h>  // Oficjalne makro RTC_NOINIT_ATTR
 #include "ModeManager.h"
+#include "StatsManager.h"
 
 // ============================================================================
 // RTC MEMORY - FLAGA PRZEJŚCIA (tymczasowa, ginie po power-off)
@@ -108,8 +109,10 @@ namespace RadioModeSwitch {
     // KROK 3: Log
     Serial.printf("[RadioModeSwitch] Flaga WiFi ustawiona. Czas zapisany: %02d:%02d:%02d, restart...\n",
                   rtc_state.hours, rtc_state.minutes, rtc_state.seconds);
+    // Ensure any pending stats are flushed to NVS before restarting
+    statsManager.saveStats();
     Serial.flush();
-    
+
     // KROK 4: Krótki delay i restart
     delay(100);
     esp_restart();
@@ -127,8 +130,10 @@ namespace RadioModeSwitch {
     // KROK 3: Log
     Serial.printf("[RadioModeSwitch] Flaga BT ustawiona. Czas zapisany: %02d:%02d:%02d, restart...\n",
                   rtc_state.hours, rtc_state.minutes, rtc_state.seconds);
+    // Ensure any pending stats are flushed to NVS before restarting
+    statsManager.saveStats();
     Serial.flush();
-    
+
     // KROK 4: Krótki delay i restart
     delay(100);
     esp_restart();
@@ -149,7 +154,7 @@ namespace RadioModeSwitch {
   void update() {
     // Opóźniona inicjalizacja trybu WiFi/BT
     // Czekamy aż system będzie w pełni gotowy (LCD, UI, itd.)
-    const unsigned long INIT_DELAY_MS = 1000;  // czekaj 1 sekundę po starcie
+    const unsigned long INIT_DELAY_MS = 200;   // min delay for LCD readiness
     
     if (!s_mode_initialized && s_initialized && (millis() - s_init_start_time >= INIT_DELAY_MS)) {
       s_mode_initialized = true;

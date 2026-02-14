@@ -1,23 +1,21 @@
-// To jest plik nagłówkowy
+// Nagłówek dla komunikacji z STM32 (BPM / SpO2)
 
-#ifndef STM32_Data_H
-#define STM32_Data_H
 #pragma once
+
+#ifndef STM32_DATA_H
+#define STM32_DATA_H
 
 #include <Arduino.h>
 
-// Publiczne zmienne , dzięki temu main.cpp będzie mógł je używać
-extern int bpmNumber;
-extern int spo2Number;
+// Dane od STM32 (aktualizowane przez STM32data_update)
+extern int bpmNumber;        // beats per minute
+extern int spo2Number;       // SpO2 (%)
+extern bool stmDataUpdated;  // ustawiana, gdy pojawią się nowe wartości
 
-extern bool stmDataUpdated; // To jest deklaracja zmiennej . Mówi kompilatorowi że można użyć jej 
-
-
-// Funkcje do uruchomienia komunikacji z stm32
+// Inicjalizacja połączenia (wywołać raz w setup)
 void STM32data_begin(HardwareSerial &serialPort, uint32_t baudRate, int rxPin, int txPin);
 
-// Funkcja która trzeba wywołać w loop()
-// Zajmuje sie ona całym programem w tym odbiorem i podziałem na bpmNumber i spo2Number
+// Obsługa odbioru - wywoływać cyklicznie z loop()
 void STM32data_update();
 
-#endif
+#endif // STM32_DATA_H

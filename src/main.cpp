@@ -32,7 +32,7 @@ constexpr unsigned long STOPER_DRAW_MS      = 100;  // odświeżanie stopera
 constexpr unsigned long WIFI_RETRY_DELAY_MS = 500;  // próba połączenia WiFi
 constexpr int           WIFI_MAX_RETRIES    = 20;   // max prób połączenia
 constexpr unsigned long MSG_DISPLAY_MS      = 1500; // wyświetlanie komunikatów
-constexpr unsigned long SETUP_DELAY_MS      = 800;  // opóźnienie w setup()
+constexpr unsigned long SETUP_DELAY_MS      = 100;  // min delay for serial init
 
 // ============================================================================
 // DEKLARACJE FUNKCJI (dla PlatformIO)
@@ -74,7 +74,7 @@ constexpr long UART_BAUD = 115200;
 HardwareSerial& uart = Serial2;
 
 // --- WiFi / NTP ---
-const char* const WIFI_SSID  = "IPhone";
+const char* const WIFI_SSID  = "Iphone";
 const char* const WIFI_PASS  = "12345678";
 const char* const NTP_SERVER = "pool.ntp.org";
 constexpr long GMT_OFFSET    = 3600;
@@ -350,17 +350,24 @@ constexpr unsigned long DHT_READ_INTERVAL_MS = 2000;
 void tickClock() {
   if (appState == STATE_SET_TIME) return;
 
-  if (millis() - lastTick >= CLOCK_TICK_MS) {
-    lastTick += CLOCK_TICK_MS;
-    seconds++;
+  // Catch up missed ticks if loop was blocked for multiple seconds
+  unsigned long now = millis();
+  if (now - lastTick >= CLOCK_TICK_MS) {
+    // Limit catch-up iterations to avoid long loops in extreme cases
+    int loops = 0;
+    while (now - lastTick >= CLOCK_TICK_MS && loops < 60) {
+      lastTick += CLOCK_TICK_MS;
+      seconds++;
 
-    if (seconds >= 60) {
-      seconds = 0;
-      minutes++;
-      if (minutes >= 60) {
-        minutes = 0;
-        hours = (hours + 1) % 24;
+      if (seconds >= 60) {
+        seconds = 0;
+        minutes++;
+        if (minutes >= 60) {
+          minutes = 0;
+          hours = (hours + 1) % 24;
+        }
       }
+      loops++;
     }
 
     if (appState != STATE_STOPER) {
@@ -555,10 +562,10 @@ void setup() {
 // ============================================================================
 
 void loop() {
-  // --- Obs\u0142uga enkodera ---
+  // --- Encoder handling ---
   const EncoderEvent evt = encoder_update();
   if (evt != ENC_NONE) {
-    // === REJESTRACJA STATYSTYK ===
+    // === REGISTER STATS ===
     if (evt == ENC_CLICK || evt == ENC_LONG) {
       statsManager.registerClick();
     } else if (evt == ENC_LEFT) {
@@ -567,22 +574,31 @@ void loop() {
       statsManager.registerStepRight();
     }
 
-    // Przekaż event do UI (jeśli WiFi nie jest zajęte ORAZ RadioModeSwitch się nie inicjalizuje)
+    // Pass event to UI (if WiFi is not busy AND RadioModeSwitch is not initializing)
     if (!WiFiSync::isBusy() && !RadioModeSwitch::isInitializing()) {
       ui_handleEvent(evt);
     }
   }
 
-  // --- Aktualizacja statystyk (zapis do NVS jeśli potrzeba) ---
+  // --- Stats update (save to NVS if needed) ---
   statsManager.update();
 
-  // --- Aktualizacja zasobów systemu ---
+  // LCD refresh watchdog: force HOME screen refresh every 500ms
+  // (prevents display freeze when other ops briefly block loop)
+  // BUT: disable during WiFi init (wfiInitTask on Core 1) to avoid I2C contention
+  static unsigned long lastLcdRefresh = 0;
+  if (appState == STATE_HOME && !WiFiSync::isBusy() && (millis() - lastLcdRefresh >= 500)) {
+    lastLcdRefresh = millis();
+    drawHome();
+  }
+
+  // --- System resources update ---
   updateSystemResources();
 
   // --- PMS5003 update ---
   PMS5003Sensor::update();
 
-  // --- Odświeżanie ekranu statystyk (dla żywej aktualizacji danych) ---
+  // --- Stats screen refresh (live data update) ---
   static unsigned long lastStatsRedraw = 0;
   if ((appState == STATE_STATS_RESOURCES_CPU || appState == STATE_STATS_RESOURCES_RAM ||
        appState == STATE_STATS_RESOURCES_FLASH || appState == STATE_STATS_RESOURCES ||
@@ -596,7 +612,7 @@ void loop() {
     drawStats();
   }
 
-  // --- Diagnostyka statusu co 2s (wyłączona w BT mode aby nie wpływać na audio) ---
+  // --- Status diagnostics every 2s (disabled in BT mode to not affect audio) ---
   static unsigned long last_status_diag = 0;
   if (!ModeManager::isBtOn() && (millis() - last_status_diag >= 2000)) {
     last_status_diag = millis();
@@ -614,25 +630,32 @@ void loop() {
       (RadioModeSwitch::getCurrentState() == RADIO_STATE_BT) ? "BT" : "WiFi");
   }
 
-  // --- Tykanie zegara ---
+  // --- Clock tick ---
   tickClock();
 
   // --- WiFi sync update ---
   WiFiSync::update();
 
-  // --- RadioModeSwitch update (opóźniona inicjalizacja WiFi/BT po starcie) ---
+  // --- RadioModeSwitch update (delayed WiFi/BT init after startup) ---
   RadioModeSwitch::update();
 
   // --- MQTT Control (start/stop based on WiFi mode) ---
   RadioModeSwitchState current_radio_mode = RadioModeSwitch::getCurrentState();
   
   if (current_radio_mode == RADIO_STATE_WIFI && !mqtt_initialized) {
-    // Start MQTT when switching to WiFi mode
-    Serial.println("[main] Activating MQTT for WiFi mode");
-    MQTTSync::begin(WIFI_SSID, WIFI_PASS);
-    MQTTSync::startCore1Task();
-    mqtt_initialized = true;
-    last_radio_mode = RADIO_STATE_WIFI;
+    // Start MQTT only when WiFi is ACTUALLY connected (not just in WiFi mode)
+    // Use periodic timer (every 2s) to avoid lock contention with WiFi.status() calls
+    static unsigned long lastWiFiCheck = 0;
+    if (millis() - lastWiFiCheck >= 2000) {
+      lastWiFiCheck = millis();
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("[main] WiFi connected! Activating MQTT");
+        MQTTSync::begin(WIFI_SSID, WIFI_PASS);
+        MQTTSync::startCore1Task();
+        mqtt_initialized = true;
+        last_radio_mode = RADIO_STATE_WIFI;
+      }
+    }
   } 
   else if (current_radio_mode == RADIO_STATE_BT && mqtt_initialized) {
     // Stop MQTT when switching to BT mode

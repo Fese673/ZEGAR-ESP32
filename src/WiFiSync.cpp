@@ -19,6 +19,13 @@ void setAppStatePtr(AppState* ptr) { pAppState = ptr; }
 static const char* ssid = nullptr;
 static const char* pass = nullptr;
 static const char* ntpServer = "pool.ntp.org";
+
+// Safe copies of credentials for background task (avoids pointer lifetime issues)
+static char ssidCopy[33] = {0};
+static char passCopy[65] = {0};
+
+// Flag: set by background task when WiFi connected
+static volatile bool wifiConnectedByTask = false;
 static long gmtOffsetSec = 3600;
 static int dstOffsetSec = 3600;
 
@@ -30,8 +37,46 @@ static int retryCount = 0;
 
 static void (*onStartCb)() = nullptr;
 static void (*onDoneCb)() = nullptr;
-// Control whether sync-related UI (LCD) should be shown
-static bool showSyncUi = false; // disabled by default per user request
+// Flag: whether to show WiFi sync UI on LCD
+static bool showSyncUi = true;  // enabled by default
+
+// Task handle for WiFi.begin() offload
+static TaskHandle_t wifiBeginTaskHandle = NULL;
+
+// Complete WiFi init task — runs ALL WiFi hardware on Core 1
+// WiFi.mode(), WiFi.begin(), and connection wait — fully non-blocking for Core 0
+static void wifiInitTask(void* param) {
+  Serial.println("[WiFiSync] wifiInitTask: started on Core 1");
+
+  // Step 1: WiFi driver init (this is the 2-8s blocker on Core 0 — now safe here)
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoConnect(false);
+  WiFi.setAutoReconnect(false);
+  Serial.println("[WiFiSync] wifiInitTask: WiFi.mode(STA) done");
+
+  vTaskDelay(50 / portTICK_PERIOD_MS);
+
+  // Step 2: Start connection
+  WiFi.begin(ssidCopy, passCopy);
+  Serial.println("[WiFiSync] wifiInitTask: WiFi.begin() called");
+
+  // Step 3: Wait for connection — use brief delay then check, avoid polling
+  // ESP32 WiFi connects asynchronously; we just need to wait a moment and check statuscpfornonce
+  // Avoid frequent WiFi.status() calls to prevent lock contention with main loop
+  vTaskDelay(5000 / portTICK_PERIOD_MS);  // Wait 5s for WiFi async connection
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnectedByTask = true;
+    Serial.printf("[WiFiSync] wifiInitTask: connected! IP=%s\n",
+                  WiFi.localIP().toString().c_str());
+  } else {
+    Serial.printf("[WiFiSync] wifiInitTask: not connected after 5s (status=%d)\n", WiFi.status());
+  }
+
+  wifiBeginTaskHandle = NULL;
+  vTaskDelete(NULL);
+}
 
 void setShowSyncUi(bool enable) {
   showSyncUi = enable;
@@ -58,16 +103,19 @@ void begin(const char* _ssid, const char* _pass,
            const char* _ntp_server, long _gmt_offset, int _dst_offset) {
   ssid = _ssid;
   pass = _pass;
+  // Safe copies for background task
+  strncpy(ssidCopy, _ssid ? _ssid : "", sizeof(ssidCopy) - 1);
+  ssidCopy[sizeof(ssidCopy) - 1] = '\0';
+  strncpy(passCopy, _pass ? _pass : "", sizeof(passCopy) - 1);
+  passCopy[sizeof(passCopy) - 1] = '\0';
   ntpServer = _ntp_server;
   gmtOffsetSec = _gmt_offset;
   dstOffsetSec = _dst_offset;
   state = S_IDLE;
   lastCheck = 0;
   retryCount = 0;
-  // Initialize periodic sync timer to avoid immediate trigger after boot
+  wifiConnectedByTask = false;
   lastPeriodicSync = millis();
-
-  // Auto-sync-on-connect feature removed per user request; no event handler registered
 }
 
 void setOnStart(void (*cb)()) { onStartCb = cb; }
@@ -116,17 +164,27 @@ void startSync() {
     return;
   }
 
-  // W przeciwnym razie rozpocznij łączenie
+  // Spawn FULL WiFi init on Core 1 — zero blocking on Core 0
   state = S_CONNECTING;
-  drawConnectingDots(0);
+  drawConnectingDots(0);  // Show initial "Łaczenie WiFi" state
 
-  if (ssid && pass) {
-    WiFi.begin(ssid, pass);
-  } else {
+  if (!ssidCopy[0]) {
     drawMessage("Brak SSID/PASS");
     state = S_DONE;
     lastCheck = millis();
+    return;
   }
+
+  wifiConnectedByTask = false;
+
+  // Kill leftover task if any
+  if (wifiBeginTaskHandle != NULL) {
+    vTaskDelete(wifiBeginTaskHandle);
+    wifiBeginTaskHandle = NULL;
+  }
+
+  xTaskCreatePinnedToCore(wifiInitTask, "wifiInit", 4096, NULL, 5, &wifiBeginTaskHandle, 1);
+  Serial.println("[WiFiSync] startSync: WiFi init task spawned to Core 1");
 }
 
 void setAutoSyncOnConnect(bool enable) {
@@ -134,17 +192,19 @@ void setAutoSyncOnConnect(bool enable) {
 }
 
 void stop() {
-  // Zatrzymanie procesu Wi-Fi/NTP bez całkowitego deinicjalizowania drivera
-  // (bo to uniemożliwia handler events przy ponownym włączeniu WiFi)
   state = S_IDLE;
   retryCount = 0;
-  
-  WiFi.disconnect(true);    // Disconnect and turn off radio, ale nie deinicjalizuj driver
-  WiFi.mode(WIFI_OFF);      // Set mode OFF
-  
-  // NIE wywoływać esp_wifi_stop() ani esp_wifi_deinit() - to blokuje handler events
-  // przy ponownym włączeniu WiFi. Handler będzie działać gdy WiFi.begin() będzie wywoływane
-  
+  wifiConnectedByTask = false;
+
+  // Kill background init task if still running
+  if (wifiBeginTaskHandle != NULL) {
+    vTaskDelete(wifiBeginTaskHandle);
+    wifiBeginTaskHandle = NULL;
+  }
+
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+
   if (pAppState) *pAppState = STATE_HOME;
   if (onDoneCb) onDoneCb();
 }
@@ -169,10 +229,13 @@ void update() {
   if (state == S_IDLE) return;
 
   if (state == S_CONNECTING) {
-    if (WiFi.status() == WL_CONNECTED) {
+    // Background task (Core 1) handles WiFi.mode + WiFi.begin + wait
+    // Poll wifiConnectedByTask flag set by background task — avoids lock contention
+    if (wifiConnectedByTask) {
       state = S_SYNCING_TIME;
       lastCheck = now;
-
+      wifiConnectedByTask = false;
+      Serial.println("[WiFiSync] WiFi connected, calling configTime()");
       configTime(gmtOffsetSec, dstOffsetSec, ntpServer);
       drawMessage("Połączono, NTP...");
     } else if (now - lastCheck >= WIFI_RETRY_DELAY_MS) {
@@ -189,7 +252,7 @@ void update() {
   }
   else if (state == S_SYNCING_TIME) {
     struct tm timeinfo;
-    if (getLocalTime(&timeinfo)) {
+    if (getLocalTime(&timeinfo, 10)) {  // 10ms timeout — non-blocking poll
       // jeśli przekazano referencje do zmiennych czasu, ustaw je
       if (pHours)   *pHours   = timeinfo.tm_hour;
       if (pMinutes) *pMinutes = timeinfo.tm_min;

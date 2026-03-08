@@ -4,6 +4,7 @@
 #include "ModeManager.h"
 #include "RadioModeSwitch.h"
 #include "PMS_Czujnik.h"
+#include "ENS160AHT21Screen.h"
 #include "UI_Draw.h"
 
 // ============================================================================
@@ -53,6 +54,8 @@ extern int pms5003ATMMenuIndex;
 extern int pms5003ATMMenuCount;
 extern int pms5003ParticlesMenuIndex;
 extern int pms5003ParticlesMenuCount;
+extern int ens160MenuIndex;
+extern int ens160MenuCount;
 
 // --- Dane PMS5003 ---
 extern uint16_t pms5003_PM1_0_CF1;
@@ -212,6 +215,12 @@ void ui_handleEvent(EncoderEvent e) {
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         break;
 
+      case STATE_ENS160_AHT21:
+        ens160MenuIndex = constrain(ens160MenuIndex + dir, 0, ens160MenuCount - 1);
+        ENS160AHT21Screen::markScreenDirty();
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        break;
+
       case STATE_SETTINGS:
         settingsMenuIndex = constrain(settingsMenuIndex + dir, 0, settingsMenuCount - 1);
         if (s_callbacks.drawStats) s_callbacks.drawStats();
@@ -306,31 +315,38 @@ void ui_handleEvent(EncoderEvent e) {
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           return;
 
-        case 7:  // Temperatura
+        case 7:  // AHT21 + ENS160
+          appState = STATE_ENS160_AHT21;
+          ens160MenuIndex = 0;
+          ENS160AHT21Screen::markScreenDirty();
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          return;
+
+        case 8:  // Temperatura
           appState = STATE_TEMPERATURE;
           drawTemperature();
           showTemperature7Seg();
           return;
 
-        case 8:  // Wilgotność
+        case 9:  // Wilgotność
           appState = STATE_HUMIDITY;
           drawHumidity();
           showHumidity7Seg();
           return;
 
-        case 9:  // Ustawienia
+        case 10:  // Ustawienia
           appState        = STATE_SETTINGS;
           settingsMenuIndex = 0;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           return;
 
-        case 10:  // Wyjście
+        case 11:  // Wyjście
           appState = STATE_HOME;
           if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
           if (s_callbacks.drawHome) s_callbacks.drawHome();
           return;
 
-        case 11:  // Radio Toggle (WiFi ↔ Bluetooth)
+        case 12:  // Radio Toggle (WiFi ↔ Bluetooth)
           // Przełącz na inny tryb z resetem - BEZ żadnych operacji LCD!
           if (radioMode == WIFI_ONLY) {
             // Przejdź na Bluetooth
@@ -532,6 +548,45 @@ void ui_handleEvent(EncoderEvent e) {
       return;
     }
 
+    // --- LOGIKA MENU ENS160 + AHT21 ---
+    if (appState == STATE_ENS160_AHT21) {
+      switch (ens160MenuIndex) {
+        case 0:
+          appState = STATE_ENS160_AHT21_GAS_AQI;
+          ENS160AHT21Screen::markScreenDirty();
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 1:
+          appState = STATE_ENS160_AHT21_GAS_TVOC;
+          ENS160AHT21Screen::markScreenDirty();
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 2:
+          appState = STATE_ENS160_AHT21_GAS_ECO2;
+          ENS160AHT21Screen::markScreenDirty();
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 3:
+          appState = STATE_ENS160_AHT21_CLIMATE_TEMP;
+          ENS160AHT21Screen::markScreenDirty();
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 4:
+          appState = STATE_ENS160_AHT21_CLIMATE_HUM;
+          ENS160AHT21Screen::markScreenDirty();
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 5:
+          appState = STATE_ENS160_AHT21_STATUS;
+          ENS160AHT21Screen::markScreenDirty();
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        default:
+          break;
+      }
+      return;
+    }
+
     // --- LOGIKA MENU USTAWIEŃ (Settings) ---
     if (appState == STATE_SETTINGS) {
       switch (settingsMenuIndex) {
@@ -718,6 +773,25 @@ void ui_handleEvent(EncoderEvent e) {
 
       case STATE_PMS5003:
         // Menu PMS5003 -> menu główne
+        appState = STATE_MENU;
+        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        return;
+
+      case STATE_ENS160_AHT21_SUMMARY:
+      case STATE_ENS160_AHT21_STATUS:
+      case STATE_ENS160_AHT21_GAS:
+      case STATE_ENS160_AHT21_CLIMATE:
+      case STATE_ENS160_AHT21_GAS_AQI:
+      case STATE_ENS160_AHT21_GAS_TVOC:
+      case STATE_ENS160_AHT21_GAS_ECO2:
+      case STATE_ENS160_AHT21_CLIMATE_TEMP:
+      case STATE_ENS160_AHT21_CLIMATE_HUM:
+        appState = STATE_ENS160_AHT21;
+        ENS160AHT21Screen::markScreenDirty();
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        return;
+
+      case STATE_ENS160_AHT21:
         appState = STATE_MENU;
         if (s_callbacks.drawMenu) s_callbacks.drawMenu();
         return;

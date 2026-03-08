@@ -4,6 +4,7 @@
 #include <LiquidCrystal_I2C.h>
 #include <Esp.h>
 #include "PMS_Czujnik.h"
+#include "ENS160AHT21Screen.h"
 
 extern LiquidCrystal_I2C lcd;
 
@@ -43,6 +44,9 @@ extern int pms5003ATMMenuCount;
 extern int pms5003ParticlesMenuIndex;
 extern const char* pms5003ParticlesMenuItems[];
 extern int pms5003ParticlesMenuCount;
+extern int ens160MenuIndex;
+extern const char* ens160MenuItems[];
+extern int ens160MenuCount;
 
 // --- Dane PMS5003 ---
 extern uint16_t pms5003_PM1_0_CF1;
@@ -218,7 +222,7 @@ void drawMenu() {
     LCD_SET(0, i);
     LCD_PRINT(item == menuIndex ? ">" : " ");
 
-    if (item == 11) {  // Pozycja radio toggle (teraz na indeksie 11 po dodaniu Ustawienia)
+    if (item == 12) {
       if (radioMode == WIFI_ONLY) {
         LCD_PRINT("BLUETOOTH MODE");  // Teraz w WiFi, przełącz na BT
       } else {
@@ -330,6 +334,169 @@ void printVal(int v, bool sel) {
 
 constexpr int STATS_ITEMS_PER_PAGE = 3;
 
+static bool isEns160State(AppState state) {
+  return state == STATE_ENS160_AHT21 ||
+         state == STATE_ENS160_AHT21_SUMMARY ||
+         state == STATE_ENS160_AHT21_GAS_AQI ||
+         state == STATE_ENS160_AHT21_GAS_TVOC ||
+         state == STATE_ENS160_AHT21_GAS_ECO2 ||
+         state == STATE_ENS160_AHT21_CLIMATE_TEMP ||
+         state == STATE_ENS160_AHT21_CLIMATE_HUM ||
+         state == STATE_ENS160_AHT21_GAS ||
+         state == STATE_ENS160_AHT21_CLIMATE ||
+         state == STATE_ENS160_AHT21_STATUS;
+}
+
+static void printEnsFloatOrDash(bool available, float value, uint8_t width = 4, uint8_t precision = 1) {
+  if (!available) {
+    LCD_PRINT("--");
+    return;
+  }
+
+  char buffer[12];
+  dtostrf(value, width, precision, buffer);
+  LCD_PRINT(buffer);
+}
+
+static void printEnsAgeSeconds(uint32_t lastUpdateMs) {
+  if (lastUpdateMs == 0) {
+    LCD_PRINT("--s");
+    return;
+  }
+
+  LCD_PRINT((millis() - lastUpdateMs) / 1000UL);
+  LCD_PRINT("s");
+}
+
+struct Ens160UiHistory {
+  bool hasAqi = false;
+  bool hasTvoc = false;
+  bool hasEco2 = false;
+  bool hasTemp = false;
+  bool hasHum = false;
+  uint8_t minAqi = 0;
+  uint8_t maxAqi = 0;
+  uint16_t minTvoc = 0;
+  uint16_t maxTvoc = 0;
+  uint16_t minEco2 = 0;
+  uint16_t maxEco2 = 0;
+  float minTemp = 0.0f;
+  float maxTemp = 0.0f;
+  float minHum = 0.0f;
+  float maxHum = 0.0f;
+  uint32_t lastProcessedUpdateMs = 0;
+};
+
+static Ens160UiHistory s_ens160UiHistory;
+
+static void updateEns160UiHistory(const ENS160AHT21Screen::RuntimeData& data) {
+  if (data.lastUpdateMs == 0 || data.lastUpdateMs == s_ens160UiHistory.lastProcessedUpdateMs) {
+    return;
+  }
+
+  s_ens160UiHistory.lastProcessedUpdateMs = data.lastUpdateMs;
+
+  if (data.hasGasSample) {
+    if (!s_ens160UiHistory.hasAqi) {
+      s_ens160UiHistory.minAqi = data.aqi;
+      s_ens160UiHistory.maxAqi = data.aqi;
+      s_ens160UiHistory.hasAqi = true;
+    } else {
+      s_ens160UiHistory.minAqi = min<uint8_t>(s_ens160UiHistory.minAqi, data.aqi);
+      s_ens160UiHistory.maxAqi = max<uint8_t>(s_ens160UiHistory.maxAqi, data.aqi);
+    }
+
+    if (!s_ens160UiHistory.hasTvoc) {
+      s_ens160UiHistory.minTvoc = data.tvoc;
+      s_ens160UiHistory.maxTvoc = data.tvoc;
+      s_ens160UiHistory.hasTvoc = true;
+    } else {
+      s_ens160UiHistory.minTvoc = min<uint16_t>(s_ens160UiHistory.minTvoc, data.tvoc);
+      s_ens160UiHistory.maxTvoc = max<uint16_t>(s_ens160UiHistory.maxTvoc, data.tvoc);
+    }
+
+    if (!s_ens160UiHistory.hasEco2) {
+      s_ens160UiHistory.minEco2 = data.eco2;
+      s_ens160UiHistory.maxEco2 = data.eco2;
+      s_ens160UiHistory.hasEco2 = true;
+    } else {
+      s_ens160UiHistory.minEco2 = min<uint16_t>(s_ens160UiHistory.minEco2, data.eco2);
+      s_ens160UiHistory.maxEco2 = max<uint16_t>(s_ens160UiHistory.maxEco2, data.eco2);
+    }
+  }
+
+  if (data.hasClimateSample) {
+    if (!s_ens160UiHistory.hasTemp) {
+      s_ens160UiHistory.minTemp = data.temperatureC;
+      s_ens160UiHistory.maxTemp = data.temperatureC;
+      s_ens160UiHistory.hasTemp = true;
+    } else {
+      s_ens160UiHistory.minTemp = min(s_ens160UiHistory.minTemp, data.temperatureC);
+      s_ens160UiHistory.maxTemp = max(s_ens160UiHistory.maxTemp, data.temperatureC);
+    }
+
+    if (!s_ens160UiHistory.hasHum) {
+      s_ens160UiHistory.minHum = data.humidityPct;
+      s_ens160UiHistory.maxHum = data.humidityPct;
+      s_ens160UiHistory.hasHum = true;
+    } else {
+      s_ens160UiHistory.minHum = min(s_ens160UiHistory.minHum, data.humidityPct);
+      s_ens160UiHistory.maxHum = max(s_ens160UiHistory.maxHum, data.humidityPct);
+    }
+  }
+}
+
+static void printEnsMenuValue(int itemIndex, const ENS160AHT21Screen::RuntimeData& data) {
+  switch (itemIndex) {
+    case 0:
+      LCD_PRINT("AQI: ");
+      if (data.hasGasSample) {
+        LCD_PRINT(data.aqi);
+      } else {
+        LCD_PRINT("--");
+      }
+      break;
+    case 1:
+      LCD_PRINT("TVOC: ");
+      if (data.hasGasSample) {
+        LCD_PRINT(data.tvoc);
+      } else {
+        LCD_PRINT("--");
+      }
+      break;
+    case 2:
+      LCD_PRINT("eCO2: ");
+      if (data.hasGasSample) {
+        LCD_PRINT(data.eco2);
+      } else {
+        LCD_PRINT("--");
+      }
+      break;
+    case 3:
+      LCD_PRINT("Temp: ");
+      printEnsFloatOrDash(data.hasClimateSample, data.temperatureC, 4, 1);
+      if (data.hasClimateSample) {
+        LCD_PRINT(" C");
+      }
+      break;
+    case 4:
+      LCD_PRINT("Hum: ");
+      printEnsFloatOrDash(data.hasClimateSample, data.humidityPct, 3, 0);
+      if (data.hasClimateSample) {
+        LCD_PRINT(" %");
+      }
+      break;
+    case 5:
+      LCD_PRINT("Status: ");
+      for (uint8_t idx = 0; idx < 10 && data.statusText[idx] != '\0'; ++idx) {
+        LCD_PRINT(data.statusText[idx]);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 void drawStats() {
   // Optymalizacja dla ekranów PMS5003: rysuj tylko gdy są nowe dane
   if (appState == STATE_PMS5003 || appState == STATE_PMS5003_CF1 ||
@@ -345,8 +512,17 @@ void drawStats() {
     pmsScreenDirty = false;
   }
 
+  if (isEns160State(appState)) {
+    static uint32_t lastEns160Seen = 0;
+    const uint32_t lu = ENS160AHT21Screen::runtimeData.lastUpdateMs;
+    if (!ENS160AHT21Screen::screenDirty && lu == lastEns160Seen) return;
+    lastEns160Seen = lu;
+    ENS160AHT21Screen::screenDirty = false;
+  }
+
   LCD_CLEAR();
   const AppStats stats = statsManager.getStats();
+  updateEns160UiHistory(ENS160AHT21Screen::runtimeData);
 
   // === 1. MENU STATYSTYK (LISTA Z LICZBAMI) ===
   if (appState == STATE_STATS) {
@@ -401,6 +577,157 @@ void drawStats() {
       LCD_PRINT(i == pms5003MenuIndex ? "> " : "  ");
       LCD_PRINT(pms5003MenuItems[i]);
     }
+  }
+  else if (appState == STATE_ENS160_AHT21) {
+    LCD_SET(1, 0);
+    LCD_PRINT("AHT21 + ENS160");
+
+    const int first = (ens160MenuIndex / 3) * 3;
+    for (int row = 0; row < 3; row++) {
+      const int i = first + row;
+      if (i >= ens160MenuCount) break;
+
+      LCD_SET(0, row + 1);
+      LCD_PRINT(i == ens160MenuIndex ? "> " : "  ");
+      printEnsMenuValue(i, ENS160AHT21Screen::runtimeData);
+    }
+  }
+  else if (appState == STATE_ENS160_AHT21_GAS_AQI) {
+    const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT("AQI");
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    if (data.hasGasSample) {
+      LCD_PRINT(data.aqi);
+    } else {
+      LCD_PRINT("--");
+    }
+    LCD_SET(0, 2);
+    if (s_ens160UiHistory.hasAqi) {
+      LCD_PRINT("Min:");
+      LCD_PRINT(s_ens160UiHistory.minAqi);
+      LCD_PRINT(" Max:");
+      LCD_PRINT(s_ens160UiHistory.maxAqi);
+    } else {
+      LCD_PRINT("Min:-- Max:--");
+    }
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  else if (appState == STATE_ENS160_AHT21_GAS_TVOC) {
+    const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT("TVOC");
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    if (data.hasGasSample) {
+      LCD_PRINT(data.tvoc);
+      LCD_PRINT(" ppb");
+    } else {
+      LCD_PRINT("--");
+    }
+    LCD_SET(0, 2);
+    if (s_ens160UiHistory.hasTvoc) {
+      LCD_PRINT("Min:");
+      LCD_PRINT(s_ens160UiHistory.minTvoc);
+      LCD_PRINT(" Max:");
+      LCD_PRINT(s_ens160UiHistory.maxTvoc);
+    } else {
+      LCD_PRINT("Min:-- Max:--");
+    }
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  else if (appState == STATE_ENS160_AHT21_GAS_ECO2) {
+    const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT("eCO2");
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    if (data.hasGasSample) {
+      LCD_PRINT(data.eco2);
+      LCD_PRINT(" ppm");
+    } else {
+      LCD_PRINT("--");
+    }
+    LCD_SET(0, 2);
+    if (s_ens160UiHistory.hasEco2) {
+      LCD_PRINT("Min:");
+      LCD_PRINT(s_ens160UiHistory.minEco2);
+      LCD_PRINT(" Max:");
+      LCD_PRINT(s_ens160UiHistory.maxEco2);
+    } else {
+      LCD_PRINT("Min:-- Max:--");
+    }
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  else if (appState == STATE_ENS160_AHT21_CLIMATE_TEMP) {
+    const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT("Temperatura");
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    printEnsFloatOrDash(data.hasClimateSample, data.temperatureC);
+    if (data.hasClimateSample) {
+      LCD_PRINT(" C");
+    }
+    LCD_SET(0, 2);
+    if (s_ens160UiHistory.hasTemp) {
+      LCD_PRINT("Min:");
+      printEnsFloatOrDash(true, s_ens160UiHistory.minTemp, 4, 1);
+      LCD_PRINT(" Max:");
+      printEnsFloatOrDash(true, s_ens160UiHistory.maxTemp, 4, 1);
+    } else {
+      LCD_PRINT("Min:-- Max:--");
+    }
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  else if (appState == STATE_ENS160_AHT21_CLIMATE_HUM) {
+    const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT("Wilgotnosc");
+    LCD_SET(0, 1);
+    LCD_PRINT("Biezaca: ");
+    printEnsFloatOrDash(data.hasClimateSample, data.humidityPct);
+    if (data.hasClimateSample) {
+      LCD_PRINT(" %");
+    }
+    LCD_SET(0, 2);
+    if (s_ens160UiHistory.hasHum) {
+      LCD_PRINT("Min:");
+      printEnsFloatOrDash(true, s_ens160UiHistory.minHum, 3, 0);
+      LCD_PRINT(" Max:");
+      printEnsFloatOrDash(true, s_ens160UiHistory.maxHum, 3, 0);
+    } else {
+      LCD_PRINT("Min:-- Max:--");
+    }
+    LCD_SET(0, 3);
+    LCD_PRINT("Dlugi -> Powrot");
+  }
+  else if (appState == STATE_ENS160_AHT21_STATUS) {
+    const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT("Status");
+    LCD_SET(0, 1);
+    LCD_PRINT("Status: ");
+    LCD_PRINT(data.statusText);
+    LCD_SET(0, 2);
+    LCD_PRINT("Gaz:");
+    LCD_PRINT(data.hasGasSample ? "OK" : "--");
+    LCD_PRINT(" Klim:");
+    LCD_PRINT(data.hasClimateSample ? "OK" : "--");
+    LCD_SET(0, 3);
+    LCD_PRINT("Ostatnia: ");
+    printEnsAgeSeconds(data.lastUpdateMs);
   }
   // === 1c. MENU USTAWIEŃ (Settings) ===
   else if (appState == STATE_SETTINGS) {

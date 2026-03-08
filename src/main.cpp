@@ -18,7 +18,10 @@
 #include "ModeManager.h"
 #include "RadioModeSwitch.h"
 #include "PMS_Czujnik.h"
+#include "ENS160AHT21Screen.h"
+#include "ENS160AHT21Sensor.h"
 #include <DHT.h>
+#include "TemperatureConfig.h"
 
 // ============================================================================
 // STAŁE CZASOWE (zamiast magic numbers)
@@ -123,13 +126,14 @@ const char* menuItems[] = {
   "Statystyki",
   "Debug STM32",
   "PMS5003",
+  "AHT21 + ENS160",
   "Temperatura",
   "Wilgotnosc",
   "Ustawienia",
   "Wyjscie",
   "Radio: Toggle"
 };
-constexpr int MENU_COUNT = 12;
+constexpr int MENU_COUNT = 13;
 int menuCount = MENU_COUNT;
 
 // Diagnostyka pamięci
@@ -169,6 +173,19 @@ const char* pms5003MenuItems[] = {
 };
 constexpr int PMS5003_MENU_COUNT = 5;
 int pms5003MenuCount = PMS5003_MENU_COUNT;
+
+// --- Menu ENS160 + AHT21 ---
+int ens160MenuIndex = 0;
+const char* ens160MenuItems[] = {
+  "AQI",
+  "TVOC",
+  "eCO2",
+  "Temperature",
+  "Humidity",
+  "Status"
+};
+constexpr int ENS160_MENU_COUNT = 6;
+int ens160MenuCount = ENS160_MENU_COUNT;
 
 // --- Menu PMS5003 CF=1 (Wybór PM do szczegółów) ---
 int pms5003CF1MenuIndex = 0;
@@ -334,7 +351,8 @@ bool timeSaved      = false;
 bool pmsScreenDirty = true;
 
 // Odczyty DHT
-float dhtTemperature = 0.0f;
+float dhtTemperature = 0.0f; // compensated (used by app)
+float dhtTemperatureRaw = 0.0f; // raw sensor reading for diagnostics
 float dhtHumidity    = 0.0f;
 
 // Stabilizacja odczytów
@@ -517,6 +535,8 @@ void setup() {
 
   // --- PMS5003 Czujnik pyłu ---
   PMS5003Sensor::begin();
+  ENS160AHT21Screen::resetRuntimeData();
+  ENS160AHT21Sensor::begin();
 
   // ===== UI CONTROLLER =====
   UI_Callbacks callbacks;
@@ -598,6 +618,9 @@ void loop() {
   // --- PMS5003 update ---
   PMS5003Sensor::update();
 
+  // --- ENS160 + AHT21 update ---
+  ENS160AHT21Sensor::update();
+
   // --- Stats screen refresh (live data update) ---
   static unsigned long lastStatsRedraw = 0;
   if ((appState == STATE_STATS_RESOURCES_CPU || appState == STATE_STATS_RESOURCES_RAM ||
@@ -606,7 +629,11 @@ void loop() {
        appState == STATE_PMS5003_CF1 || appState == STATE_PMS5003_CF1_PM1 || appState == STATE_PMS5003_CF1_PM25 || appState == STATE_PMS5003_CF1_PM10 ||
        appState == STATE_PMS5003_ATM || appState == STATE_PMS5003_ATM_PM1 || appState == STATE_PMS5003_ATM_PM25 || appState == STATE_PMS5003_ATM_PM10 ||
        appState == STATE_PMS5003_PARTICLES || appState == STATE_PMS5003_PARTICLES_0_3 || appState == STATE_PMS5003_PARTICLES_0_5 || appState == STATE_PMS5003_PARTICLES_1_0 || appState == STATE_PMS5003_PARTICLES_2_5 || appState == STATE_PMS5003_PARTICLES_5_0 || appState == STATE_PMS5003_PARTICLES_10_0 ||
-       appState == STATE_PMS5003_TELEMETRY) &&
+      appState == STATE_PMS5003_TELEMETRY ||
+      appState == STATE_ENS160_AHT21 || appState == STATE_ENS160_AHT21_SUMMARY || appState == STATE_ENS160_AHT21_GAS ||
+      appState == STATE_ENS160_AHT21_GAS_AQI || appState == STATE_ENS160_AHT21_GAS_TVOC || appState == STATE_ENS160_AHT21_GAS_ECO2 ||
+      appState == STATE_ENS160_AHT21_CLIMATE || appState == STATE_ENS160_AHT21_CLIMATE_TEMP || appState == STATE_ENS160_AHT21_CLIMATE_HUM ||
+      appState == STATE_ENS160_AHT21_STATUS) &&
       millis() - lastStatsRedraw >= 1000) {
     lastStatsRedraw = millis();
     drawStats();
@@ -792,9 +819,10 @@ void updateDHT() {
   const float h = dht.readHumidity();     // ~2-3ms blokada
 
   if (!isnan(t) && !isnan(h)) {
-    dhtTemperature = t;
+    dhtTemperatureRaw = t;
+    dhtTemperature = dhtTemperatureRaw + TempConfig::TEMPERATURE_OFFSET_C;
     dhtHumidity    = h;
-    statsManager.updateTemperature(t);
+    statsManager.updateTemperature(dhtTemperature);
     statsManager.updateHumidity(h);
 
     if (!dhtReady) {

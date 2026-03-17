@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"name": "esp32-rtc-eeprom",
+			"path": "../../../Users/PC/Documents/PlatformIO/Projects/esp32-rtc-eeprom"
+		}
+	],
+	"settings": {}
+}

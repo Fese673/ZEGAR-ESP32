@@ -113,8 +113,8 @@ static void mqtt_reconnect() {
         Serial.println("[MQTT] ✅ Connected to HiveMQ Cloud!");
         mqttConnected = true;
         // Trigger immediate NTP sync when MQTT becomes connected
-        Serial.println("[MQTT] Triggering immediate NTP sync via WiFiSync::startSync()");
-        WiFiSync::startSync();
+        Serial.println("[MQTT] Requesting background NTP sync via WiFiSync::requestTimeSync()");
+        WiFiSync::requestTimeSync();
         
         // Publish-only mode: do not subscribe to any topics
         // mqttClient.subscribe("sensors/device1/cmd");

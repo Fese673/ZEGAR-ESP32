@@ -2,46 +2,53 @@
 #define WIFISYNC_H
 
 #include <Arduino.h>
-#include <WiFi.h>
 #include <time.h>
 
-#include "LCDMirror.h"
-#include "AppState.h"
+// NOTE: This module intentionally has no LCD/UI dependencies.
 
 namespace WiFiSync {
 
-/*
-  API:
-    begin(ssid, pass, ntp, gmt, dst)
-    startSync()
-    update()     -> call from loop()
-    isBusy()
-    setOnStart(cb)
-    setOnDone(cb)
-    setTimeRefs(hours, minutes, seconds, lastTick)
-    setAppStatePtr(&appState)
-*/
+enum class SyncState : uint8_t {
+  Idle,
+  WifiConnecting,
+  TimeSyncing,
+  Backoff,
+};
+
+enum class SyncError : uint8_t {
+  None,
+  MissingCredentials,
+  Wifi,
+  Ntp,
+};
 
 void begin(const char* ssid, const char* pass,
-           const char* ntp_server = "pool.ntp.org",
-           long gmt_offset = 3600, int dst_offset = 3600);
+           const char* ntp_server = "pool.ntp.org");
 
+// Request background time sync; WiFi connection will be started automatically
+// if WiFi mode is enabled and WiFi is not connected.
+void requestTimeSync();
+
+// Backwards-compatible helper: requests WiFi connect + time sync immediately.
 void startSync();
 void stop();
 void update();
 bool isBusy();
 
+SyncState getState();
+SyncError getLastError();
+
 void setOnStart(void (*cb)());
 void setOnDone(void (*cb)());
-
-// Automatyczne wywoływanie synchronizacji po uzyskaniu adresu IP
-void setAutoSyncOnConnect(bool enable);
 
 // przekazanie referencji do globalnych zmiennych czasu (opcjonalne, dla kompatybilności)
 void setTimeRefs(int &hoursRef, int &minutesRef, int &secondsRef, unsigned long &lastTickRef);
 
-// opcjonalnie: wskaźnik do appState (jeśli chcesz, by biblioteka zmieniała stan UI)
-void setAppStatePtr(AppState *appStatePtr);
+// Czas ostatniej skutecznej synchronizacji z NTP (millis z momentu ustawienia)
+unsigned long getLastNtpSyncTime();
+
+// Zwraca true, jeśli NTP zostało zsynchronizowane choć raz od restartu
+bool hasNtpSynced();
 
 } // namespace WiFiSync
 

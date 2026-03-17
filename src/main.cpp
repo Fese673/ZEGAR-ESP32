@@ -12,6 +12,9 @@
 #include "AppState.h"
 #include "UI_Draw.h"
 #include "WiFiSync.h"
+#include "RTCService.h"
+
+#include <sys/time.h>
 #include "MQTTSync.h"
 #include "StatsManager.h" 
 #include "AudioBT.h" 
@@ -77,11 +80,9 @@ constexpr long UART_BAUD = 115200;
 HardwareSerial& uart = Serial2;
 
 // --- WiFi / NTP ---
-const char* const WIFI_SSID  = "Iphone";
-const char* const WIFI_PASS  = "12345678";
+const char* const WIFI_SSID  = "Orange_Swiatlowod_98E2";
+const char* const WIFI_PASS  = "x1Z6P(~8pry<St.";
 const char* const NTP_SERVER = "pool.ntp.org";
-constexpr long GMT_OFFSET    = 3600;
-constexpr int  DST_OFFSET    = 3600;
 
 // --- LCD Custom Character ---
 byte alarmIcon[8] = {
@@ -335,6 +336,119 @@ unsigned long lastTick = 0;
 // --- Flaga do przywrócenia czasu z RTC (po soft reset) ---
 static bool timeRestored = false;
 
+// DS3231 persistence: write system time to RTC after successful NTP sync
+static bool rtcWritePending = false;
+static unsigned long lastRtcWriteAttemptMillis = 0;
+static unsigned long rtcWriteNotBeforeMillis = 0;
+static uint8_t rtcWriteFailureCount = 0;
+static time_t rtcPendingEpoch = 0;
+static unsigned long lastSeenNtpSyncMillis = 0;
+
+static const char* TZ_POLAND = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+static bool isSystemTimeValid() {
+  // 2021-01-01 00:00:00 UTC
+  return time(nullptr) >= 1609459200;
+}
+
+static unsigned long rtcComputeBackoffMs(uint8_t failures) {
+  // 0->0ms, 1->1s, 2->2s, 3->5s, 4->10s, 5->20s, >=6->60s
+  if (failures == 0) return 0;
+  if (failures == 1) return 1000;
+  if (failures == 2) return 2000;
+  if (failures == 3) return 5000;
+  if (failures == 4) return 10000;
+  if (failures == 5) return 20000;
+  return 60000;
+}
+
+static void scheduleRtcWriteFromSystemTime() {
+  if (!isSystemTimeValid()) return;
+  rtcPendingEpoch = time(nullptr);
+  rtcWritePending = true;
+  rtcWriteFailureCount = 0;
+
+  // Give the loop a moment after SNTP update (and reduce chance of I2C collisions)
+  rtcWriteNotBeforeMillis = millis() + 2000UL;
+}
+
+static void syncLocalClockFromSystemTime() {
+  time_t now = time(nullptr);
+  struct tm ti;
+  localtime_r(&now, &ti);
+  hours = ti.tm_hour;
+  minutes = ti.tm_min;
+  seconds = ti.tm_sec;
+}
+
+static void tryRestoreSystemTimeFromDs3231() {
+  RTCService::Config rtcCfg;
+  rtcCfg.wire = &Wire;
+  rtcCfg.sdaPin = 21;
+  rtcCfg.sclPin = 22;
+  rtcCfg.i2cClockHz = 400000;
+  rtcCfg.i2cTimeoutMs = 10;
+  rtcCfg.i2cRetries = 2;
+  rtcCfg.initI2cMaster = false; // Wire.begin() already done in setup()
+  rtcCfg.enableI2cDiagnostics = true;
+
+  const RTCService::Status st = RTCService::begin(rtcCfg);
+  Serial.printf("[RTC] begin: %s\n", RTCService::statusToString(st));
+  if (st != RTCService::Status::Ok) {
+    return;
+  }
+
+  time_t epoch = 0;
+  const RTCService::Status rd = RTCService::getEpoch(&epoch);
+  Serial.printf("[RTC] getEpoch: %s epoch=%ld\n", RTCService::statusToString(rd), (long)epoch);
+  if (rd != RTCService::Status::Ok) {
+    return;
+  }
+
+  // Additional sanity: ignore clearly invalid timestamps.
+  if (epoch < 1609459200) {
+    Serial.println("[RTC] epoch too old/invalid; ignoring");
+    return;
+  }
+
+  timeval tv;
+  tv.tv_sec = epoch;
+  tv.tv_usec = 0;
+  settimeofday(&tv, nullptr);
+
+  lastTick = millis();
+  syncLocalClockFromSystemTime();
+  Serial.printf("[RTC] system time restored from DS3231 (local %02d:%02d:%02d)\n", hours, minutes, seconds);
+}
+
+static void handleRtcWriteIfPending() {
+  if (!rtcWritePending) return;
+  if (!RTCService::isReady()) return;
+  if (!isSystemTimeValid()) return;
+
+  const unsigned long nowMs = millis();
+
+  if (nowMs < rtcWriteNotBeforeMillis) return;
+  // Avoid hammering the device on repeated failures.
+  if (lastRtcWriteAttemptMillis != 0 && (nowMs - lastRtcWriteAttemptMillis) < 1000UL) return;
+
+  const time_t epochToWrite = (rtcPendingEpoch != 0) ? rtcPendingEpoch : time(nullptr);
+  const RTCService::Status st = RTCService::setEpoch(epochToWrite, true);
+  Serial.printf("[RTC] setEpoch: %s epoch=%ld\n", RTCService::statusToString(st), (long)epochToWrite);
+  lastRtcWriteAttemptMillis = nowMs;
+
+  if (st == RTCService::Status::Ok) {
+    rtcWritePending = false;
+    rtcPendingEpoch = 0;
+    rtcWriteFailureCount = 0;
+    rtcWriteNotBeforeMillis = 0;
+    return;
+  }
+
+  rtcWriteFailureCount++;
+  rtcWriteNotBeforeMillis = nowMs + rtcComputeBackoffMs(rtcWriteFailureCount);
+}
+
 // --- MQTT Mode Control ---
 static bool mqtt_initialized = false;
 static RadioModeSwitchState last_radio_mode = RADIO_STATE_WIFI;
@@ -368,9 +482,38 @@ constexpr unsigned long DHT_READ_INTERVAL_MS = 2000;
 void tickClock() {
   if (appState == STATE_SET_TIME) return;
 
+  // Prefer system time when it's valid (keeps HH:MM:SS consistent with date and NTP corrections)
+  const unsigned long nowMs = millis();
+  if (isSystemTimeValid()) {
+    if (nowMs - lastTick >= CLOCK_TICK_MS) {
+      // Align to 1s tick cadence
+      lastTick = nowMs - ((nowMs - lastTick) % CLOCK_TICK_MS);
+      syncLocalClockFromSystemTime();
+
+      if (appState != STATE_STOPER) {
+        updateSevenSeg();
+      }
+      if (appState == STATE_HOME) {
+        drawHome();
+      }
+    }
+
+    // Alarm logic uses hours/minutes/seconds updated above
+    const bool alarmShouldTrigger = alarmEnabled && !alarmRinging &&
+                                     hours == alarmHour &&
+                                     minutes == alarmMinute &&
+                                     seconds == 0;
+    if (alarmShouldTrigger) {
+      alarmRinging   = true;
+      alarmStartTime = millis();
+      lastMelodyStep = 0;
+    }
+    return;
+  }
+
   // Catch up missed ticks if loop was blocked for multiple seconds
-  unsigned long now = millis();
-  if (now - lastTick >= CLOCK_TICK_MS) {
+  unsigned long now = nowMs;
+  if (nowMs - lastTick >= CLOCK_TICK_MS) {
     // Limit catch-up iterations to avoid long loops in extreme cases
     int loops = 0;
     while (now - lastTick >= CLOCK_TICK_MS && loops < 60) {
@@ -471,6 +614,11 @@ void setup() {
   Serial.begin(UART_BAUD);
   delay(SETUP_DELAY_MS);
 
+  // Set TZ early so localtime_r() is correct even before WiFiSync begins.
+  if (setenv("TZ", TZ_POLAND, 1) == 0) {
+    tzset();
+  }
+
   heapBaseline = ESP.getFreeHeap();
   Serial.printf("[diag] baseline_heap=%u\n", heapBaseline);
   ModeManager::logDiag("boot");
@@ -513,6 +661,10 @@ void setup() {
   // USTAWIENIE I2C: zwiększone do 400 kHz aby przyspieszyć komunikację z LCD/i2c
   // ZMIANA: domyślnie było 100 kHz; zwiększam do 400 kHz (Fast-mode)
   Wire.setClock(400000);
+
+  // ===== DS3231: restore system time early (before heavy UI/I2C traffic) =====
+  tryRestoreSystemTimeFromDs3231();
+
   lcd.init();
   lcd.backlight();
   lcd.createChar(0, alarmIcon);
@@ -556,9 +708,15 @@ void setup() {
 
   // ===== WiFi / NTP Sync =====
   WiFiSync::setTimeRefs(hours, minutes, seconds, lastTick);        // referencje do zmiennych czasu
-  WiFiSync::setAppStatePtr(&appState);                             // wskaźnik do appState
-  WiFiSync::setOnDone([]() { drawHome(); });                       // callback po zakończeniu sync
-  WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER, GMT_OFFSET, DST_OFFSET);
+  WiFiSync::setOnDone([]() {
+    const unsigned long ntpSyncMs = WiFiSync::getLastNtpSyncTime();
+    if (ntpSyncMs != 0 && ntpSyncMs != lastSeenNtpSyncMillis) {
+      lastSeenNtpSyncMillis = ntpSyncMs;
+      scheduleRtcWriteFromSystemTime();
+    }
+    drawHome();
+  });
+  WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER);
 
   // ===== MQTT Sync (Core 1) - initialized only in WiFi mode =====
   // MQTTSync will be initialized later in RadioModeSwitch::update() when WiFi mode is confirmed
@@ -594,8 +752,8 @@ void loop() {
       statsManager.registerStepRight();
     }
 
-    // Pass event to UI (if WiFi is not busy AND RadioModeSwitch is not initializing)
-    if (!WiFiSync::isBusy() && !RadioModeSwitch::isInitializing()) {
+    // Pass event to UI (unless RadioModeSwitch is initializing)
+    if (!RadioModeSwitch::isInitializing()) {
       ui_handleEvent(evt);
     }
   }
@@ -605,9 +763,8 @@ void loop() {
 
   // LCD refresh watchdog: force HOME screen refresh every 500ms
   // (prevents display freeze when other ops briefly block loop)
-  // BUT: disable during WiFi init (wfiInitTask on Core 1) to avoid I2C contention
   static unsigned long lastLcdRefresh = 0;
-  if (appState == STATE_HOME && !WiFiSync::isBusy() && (millis() - lastLcdRefresh >= 500)) {
+  if (appState == STATE_HOME && (millis() - lastLcdRefresh >= 500)) {
     lastLcdRefresh = millis();
     drawHome();
   }
@@ -662,6 +819,9 @@ void loop() {
 
   // --- WiFi sync update ---
   WiFiSync::update();
+
+  // --- Persist current system time to DS3231 when requested ---
+  handleRtcWriteIfPending();
 
   // --- RadioModeSwitch update (delayed WiFi/BT init after startup) ---
   RadioModeSwitch::update();

@@ -1,6 +1,7 @@
 #include "WiFiSync.h"
 #include <WiFi.h>
-#include "esp_wifi.h"
+#include <stdlib.h>
+#include <string.h>
 #include "ModeManager.h"
 
 namespace WiFiSync {
@@ -10,10 +11,6 @@ static int* pHours = nullptr;
 static int* pMinutes = nullptr;
 static int* pSeconds = nullptr;
 static unsigned long* pLastTick = nullptr;
-
-// wskaźnik na appState (opcjonalny)
-static AppState* pAppState = nullptr;
-void setAppStatePtr(AppState* ptr) { pAppState = ptr; }
 
 // konfiguracja i stan wewnętrzny
 static const char* ssid = nullptr;
@@ -26,19 +23,45 @@ static char passCopy[65] = {0};
 
 // Flag: set by background task when WiFi connected
 static volatile bool wifiConnectedByTask = false;
-static long gmtOffsetSec = 3600;
-static int dstOffsetSec = 3600;
+static volatile bool wifiFailedByTask = false;
 
-enum InternalState { S_IDLE, S_CONNECTING, S_SYNCING_TIME, S_DONE };
-static InternalState state = S_IDLE;
+// NTP tracking
+static unsigned long lastNtpSyncMillis = 0;
+static bool ntpSynced = false;
 
-static unsigned long lastCheck = 0;
-static int retryCount = 0;
+// Poland timezone with automatic DST switching:
+// CET (UTC+1) in winter and CEST (UTC+2) in summer.
+// NOTE: Use a POSIX TZ string format that is widely supported on embedded newlib.
+static const char* TZ_POLAND = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+static SyncState state = SyncState::Idle;
+static SyncError lastError = SyncError::None;
+
+static bool timeSyncRequested = false;
+static bool wifiConnectRequested = false;
+
+static unsigned long syncStartMillis = 0;
+static unsigned long backoffUntilMillis = 0;
+static uint8_t wifiFailureCount = 0;
+static uint8_t ntpFailureCount = 0;
+
+static bool sntpConfigured = false;
+
+static void ensureTzSet() {
+  const char* current = getenv("TZ");
+  if (current != nullptr && strcmp(current, TZ_POLAND) == 0) {
+    return;
+  }
+
+  if (setenv("TZ", TZ_POLAND, 1) == 0) {
+    tzset();
+  } else {
+    Serial.println("[WiFiSync] WARNING: failed to set TZ, localtime may be incorrect");
+  }
+}
 
 static void (*onStartCb)() = nullptr;
 static void (*onDoneCb)() = nullptr;
-// Flag: whether to show WiFi sync UI on LCD
-static bool showSyncUi = true;  // enabled by default
 
 // Task handle for WiFi.begin() offload
 static TaskHandle_t wifiBeginTaskHandle = NULL;
@@ -61,36 +84,46 @@ static void wifiInitTask(void* param) {
   WiFi.begin(ssidCopy, passCopy);
   Serial.println("[WiFiSync] wifiInitTask: WiFi.begin() called");
 
-  // Step 3: Wait for connection — use brief delay then check, avoid polling
-  // ESP32 WiFi connects asynchronously; we just need to wait a moment and check statuscpfornonce
-  // Avoid frequent WiFi.status() calls to prevent lock contention with main loop
-  vTaskDelay(5000 / portTICK_PERIOD_MS);  // Wait 5s for WiFi async connection
+  // Step 3: Wait for connection with timeout. Runs on Core 1 so it won't block UI.
+  constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
+  unsigned long start = millis();
+  while (millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiConnectedByTask = true;
+      wifiFailedByTask = false;
+      Serial.printf("[WiFiSync] wifiInitTask: connected! IP=%s\n",
+                    WiFi.localIP().toString().c_str());
+      break;
+    }
+    vTaskDelay(250 / portTICK_PERIOD_MS);
+  }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    wifiConnectedByTask = true;
-    Serial.printf("[WiFiSync] wifiInitTask: connected! IP=%s\n",
-                  WiFi.localIP().toString().c_str());
-  } else {
-    Serial.printf("[WiFiSync] wifiInitTask: not connected after 5s (status=%d)\n", WiFi.status());
+  if (!wifiConnectedByTask) {
+    wifiFailedByTask = true;
+    Serial.printf("[WiFiSync] wifiInitTask: connection timeout (status=%d)\n", WiFi.status());
   }
 
   wifiBeginTaskHandle = NULL;
   vTaskDelete(NULL);
 }
 
-void setShowSyncUi(bool enable) {
-  showSyncUi = enable;
-}
-
-// (Auto-sync-on-connect removed - feature disabled)
-
-static constexpr unsigned long WIFI_RETRY_DELAY_MS = 500;
-static constexpr int WIFI_MAX_RETRIES = 20;
-static constexpr unsigned long NTP_TIMEOUT_MS = 5000;
-static constexpr unsigned long MSG_DISPLAY_MS = 1500;
-// Periodic automatic sync interval (1 hour)
+static constexpr unsigned long NTP_TIMEOUT_MS = 10000;
 static constexpr unsigned long PERIODIC_SYNC_INTERVAL_MS = 3600000UL;
+
 static unsigned long lastPeriodicSync = 0;
+
+static unsigned long computeBackoffMs(uint8_t failures) {
+  // Exponential-ish backoff with upper bound.
+  // 0->0ms, 1->1s, 2->2s, 3->4s, 4->8s, 5->16s, 6->30s, >=7->60s
+  if (failures == 0) return 0;
+  if (failures == 1) return 1000;
+  if (failures == 2) return 2000;
+  if (failures == 3) return 4000;
+  if (failures == 4) return 8000;
+  if (failures == 5) return 16000;
+  if (failures == 6) return 30000;
+  return 60000;
+}
 
 void setTimeRefs(int &hoursRef, int &minutesRef, int &secondsRef, unsigned long &lastTickRef) {
   pHours = &hoursRef;
@@ -100,7 +133,7 @@ void setTimeRefs(int &hoursRef, int &minutesRef, int &secondsRef, unsigned long 
 }
 
 void begin(const char* _ssid, const char* _pass,
-           const char* _ntp_server, long _gmt_offset, int _dst_offset) {
+           const char* _ntp_server) {
   ssid = _ssid;
   pass = _pass;
   // Safe copies for background task
@@ -109,92 +142,52 @@ void begin(const char* _ssid, const char* _pass,
   strncpy(passCopy, _pass ? _pass : "", sizeof(passCopy) - 1);
   passCopy[sizeof(passCopy) - 1] = '\0';
   ntpServer = _ntp_server;
-  gmtOffsetSec = _gmt_offset;
-  dstOffsetSec = _dst_offset;
-  state = S_IDLE;
-  lastCheck = 0;
-  retryCount = 0;
+
+  // Keep system time in UTC and convert to local time via TZ.
+  // Defensive: some components may overwrite TZ at runtime.
+  ensureTzSet();
+
+  state = SyncState::Idle;
+  lastError = SyncError::None;
+  timeSyncRequested = false;
+  wifiConnectRequested = false;
+  syncStartMillis = 0;
+  backoffUntilMillis = 0;
+  wifiFailureCount = 0;
+  ntpFailureCount = 0;
+  sntpConfigured = false;
+
   wifiConnectedByTask = false;
+  wifiFailedByTask = false;
   lastPeriodicSync = millis();
 }
 
 void setOnStart(void (*cb)()) { onStartCb = cb; }
 void setOnDone(void (*cb)())  { onDoneCb  = cb; }
 
-static void drawConnectingDots(int dots) {
-  if (!showSyncUi) return;
-  LCD_CLEAR();
-  LCD_SET(0, 0);
-  LCD_PRINT("Laczenie WiFi");
-  LCD_SET(0, 1);
-  for (int i = 0; i < dots; ++i) LCD_PRINT(".");
-  LCD_DUMP();
+void requestTimeSync() {
+  timeSyncRequested = true;
 }
 
-static void drawMessage(const char* msg) {
-  if (!showSyncUi) return;
-  LCD_CLEAR();
-  LCD_SET(0, 0);
-  LCD_PRINT(msg);
-  LCD_DUMP();
+static void requestWifiConnect() {
+  wifiConnectRequested = true;
 }
 
 void startSync() {
   Serial.println("[WiFiSync] startSync() called");
-  if (state != S_IDLE) {
-    Serial.println("[WiFiSync] startSync() aborted because not in S_IDLE");
-    return;
-  }
-
-  // ustaw appState, jeśli przekazano wskaźnik
-  if (pAppState) *pAppState = STATE_WIFI_SYNC;
-
-  retryCount = 0;
-  lastCheck = millis();
-
-  if (onStartCb) onStartCb();
-
-  // Jeśli już jesteśmy połączeni, przejdź od razu do synchronizacji czasu
-  if (WiFi.status() == WL_CONNECTED) {
-    state = S_SYNCING_TIME;
-    lastCheck = millis();
-    Serial.println("[WiFiSync] WiFi already connected -> S_SYNCING_TIME");
-    configTime(gmtOffsetSec, dstOffsetSec, ntpServer);
-    drawMessage("Połączono, NTP...");
-    return;
-  }
-
-  // Spawn FULL WiFi init on Core 1 — zero blocking on Core 0
-  state = S_CONNECTING;
-  drawConnectingDots(0);  // Show initial "Łaczenie WiFi" state
-
-  if (!ssidCopy[0]) {
-    drawMessage("Brak SSID/PASS");
-    state = S_DONE;
-    lastCheck = millis();
-    return;
-  }
-
-  wifiConnectedByTask = false;
-
-  // Kill leftover task if any
-  if (wifiBeginTaskHandle != NULL) {
-    vTaskDelete(wifiBeginTaskHandle);
-    wifiBeginTaskHandle = NULL;
-  }
-
-  xTaskCreatePinnedToCore(wifiInitTask, "wifiInit", 4096, NULL, 5, &wifiBeginTaskHandle, 1);
-  Serial.println("[WiFiSync] startSync: WiFi init task spawned to Core 1");
-}
-
-void setAutoSyncOnConnect(bool enable) {
-  // noop: auto-sync-on-connect feature disabled
+  // Backwards compatible: request both WiFi connect and time sync.
+  requestWifiConnect();
+  requestTimeSync();
 }
 
 void stop() {
-  state = S_IDLE;
-  retryCount = 0;
+  state = SyncState::Idle;
   wifiConnectedByTask = false;
+  wifiFailedByTask = false;
+  wifiConnectRequested = false;
+  timeSyncRequested = false;
+  backoffUntilMillis = 0;
+  lastError = SyncError::None;
 
   // Kill background init task if still running
   if (wifiBeginTaskHandle != NULL) {
@@ -204,77 +197,184 @@ void stop() {
 
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
-
-  if (pAppState) *pAppState = STATE_HOME;
-  if (onDoneCb) onDoneCb();
 }
 
 bool isBusy() {
-  return state != S_IDLE;
+  return state != SyncState::Idle;
+}
+
+SyncState getState() {
+  return state;
+}
+
+SyncError getLastError() {
+  return lastError;
+}
+
+static void ensureSntpConfigured() {
+  if (sntpConfigured) return;
+  ensureTzSet();
+  Serial.println("[WiFiSync] Configuring SNTP via configTzTime()");
+  configTzTime(TZ_POLAND, ntpServer);
+  sntpConfigured = true;
+}
+
+static void scheduleBackoff(unsigned long now, uint8_t failures) {
+  const unsigned long delayMs = computeBackoffMs(failures);
+  backoffUntilMillis = now + delayMs;
+  state = (delayMs > 0) ? SyncState::Backoff : SyncState::Idle;
 }
 
 void update() {
   unsigned long now = millis();
 
   // Periodic sync: if device is in WiFi mode, connected and idle, run sync every interval
-  if (ModeManager::isWifiOn() && WiFi.status() == WL_CONNECTED && state == S_IDLE) {
+  if (ModeManager::isWifiOn() && WiFi.status() == WL_CONNECTED && state == SyncState::Idle) {
     if (now - lastPeriodicSync >= PERIODIC_SYNC_INTERVAL_MS) {
-      Serial.println("[WiFiSync] Periodic autoSync triggered (hourly)");
+      Serial.println("[WiFiSync] Periodic time sync requested (hourly)");
       lastPeriodicSync = now;
-      startSync();
+      requestTimeSync();
+    }
+  }
+
+  // Transition out of Backoff when time elapsed
+  if (state == SyncState::Backoff && now >= backoffUntilMillis) {
+    state = SyncState::Idle;
+  }
+
+  // Nothing to do
+  if (state == SyncState::Idle) {
+    // Respect backoff window if requests are pending
+    if ((timeSyncRequested || wifiConnectRequested) && now < backoffUntilMillis) {
+      state = SyncState::Backoff;
       return;
     }
-  }
 
-  if (state == S_IDLE) return;
-
-  if (state == S_CONNECTING) {
-    // Background task (Core 1) handles WiFi.mode + WiFi.begin + wait
-    // Poll wifiConnectedByTask flag set by background task — avoids lock contention
-    if (wifiConnectedByTask) {
-      state = S_SYNCING_TIME;
-      lastCheck = now;
-      wifiConnectedByTask = false;
-      Serial.println("[WiFiSync] WiFi connected, calling configTime()");
-      configTime(gmtOffsetSec, dstOffsetSec, ntpServer);
-      drawMessage("Połączono, NTP...");
-    } else if (now - lastCheck >= WIFI_RETRY_DELAY_MS) {
-      retryCount++;
-      drawConnectingDots(retryCount % 5);
-      if (retryCount >= WIFI_MAX_RETRIES) {
-        drawMessage("Blad WiFi");
-        state = S_DONE;
-        lastCheck = now;
-      } else {
-        lastCheck = now;
-      }
+    // If WiFi mode is off, don't try to connect/sync.
+    if (!ModeManager::isWifiOn()) {
+      return;
     }
+
+    // If time sync requested, ensure WiFi connect is requested too when not connected.
+    if (timeSyncRequested && WiFi.status() != WL_CONNECTED) {
+      requestWifiConnect();
+    }
+
+    // Connect WiFi if requested and not connected.
+    if (wifiConnectRequested && WiFi.status() != WL_CONNECTED) {
+      if (!ssidCopy[0]) {
+        lastError = SyncError::MissingCredentials;
+        // Keep state idle; nothing to retry.
+        timeSyncRequested = false;
+        wifiConnectRequested = false;
+        return;
+      }
+
+      // Kill leftover task if any
+      if (wifiBeginTaskHandle != NULL) {
+        vTaskDelete(wifiBeginTaskHandle);
+        wifiBeginTaskHandle = NULL;
+      }
+
+      wifiConnectedByTask = false;
+      wifiFailedByTask = false;
+
+      state = SyncState::WifiConnecting;
+      if (onStartCb) onStartCb();
+      xTaskCreatePinnedToCore(wifiInitTask, "wifiInit", 4096, NULL, 5, &wifiBeginTaskHandle, 1);
+      Serial.println("[WiFiSync] update: WiFi init task spawned to Core 1");
+      return;
+    }
+
+    // Start time sync if requested and WiFi is connected.
+    if (timeSyncRequested && WiFi.status() == WL_CONNECTED) {
+      state = SyncState::TimeSyncing;
+      syncStartMillis = now;
+      ensureSntpConfigured();
+      Serial.println("[WiFiSync] update: Time syncing started");
+      return;
+    }
+
+    return;
   }
-  else if (state == S_SYNCING_TIME) {
+
+  if (state == SyncState::WifiConnecting) {
+    if (wifiConnectedByTask || WiFi.status() == WL_CONNECTED) {
+      wifiConnectedByTask = false;
+      wifiFailedByTask = false;
+      wifiConnectRequested = false;
+      wifiFailureCount = 0;
+      lastError = SyncError::None;
+      Serial.println("[WiFiSync] update: WiFi connected");
+
+      // If time sync is requested, go straight to time sync.
+      if (timeSyncRequested) {
+        state = SyncState::TimeSyncing;
+        syncStartMillis = now;
+        ensureSntpConfigured();
+      } else {
+        state = SyncState::Idle;
+        if (onDoneCb) onDoneCb();
+      }
+      return;
+    }
+
+    if (wifiFailedByTask) {
+      wifiFailedByTask = false;
+      lastError = SyncError::Wifi;
+      wifiFailureCount++;
+      Serial.printf("[WiFiSync] update: WiFi connect failed (failures=%u)\n", wifiFailureCount);
+      scheduleBackoff(now, wifiFailureCount);
+      return;
+    }
+
+    return;
+  }
+
+  if (state == SyncState::TimeSyncing) {
+    // Defensive: ensure TZ wasn't overwritten between sync cycles.
+    ensureTzSet();
     struct tm timeinfo;
     if (getLocalTime(&timeinfo, 10)) {  // 10ms timeout — non-blocking poll
-      // jeśli przekazano referencje do zmiennych czasu, ustaw je
       if (pHours)   *pHours   = timeinfo.tm_hour;
       if (pMinutes) *pMinutes = timeinfo.tm_min;
       if (pSeconds) *pSeconds = timeinfo.tm_sec;
       if (pLastTick) *pLastTick = millis();
 
-      drawMessage("Czas ustawiony");
-      state = S_DONE;
-      lastCheck = now;
-    } else if (now - lastCheck >= NTP_TIMEOUT_MS) {
-      drawMessage("Blad NTP");
-      state = S_DONE;
-      lastCheck = now;
-    }
-  }
-  else if (state == S_DONE) {
-    if (now - lastCheck >= MSG_DISPLAY_MS) {
-      state = S_IDLE;
-      if (pAppState) *pAppState = STATE_HOME;
+      lastNtpSyncMillis = millis();
+      ntpSynced = true;
+      lastError = SyncError::None;
+      ntpFailureCount = 0;
+      timeSyncRequested = false;
+
+      Serial.printf("[WiFiSync] NTP synced: %02d:%02d:%02d (DST=%d)\n",
+                    timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, timeinfo.tm_isdst);
+
+      state = SyncState::Idle;
       if (onDoneCb) onDoneCb();
+      return;
     }
+
+    if (now - syncStartMillis >= NTP_TIMEOUT_MS) {
+      lastError = SyncError::Ntp;
+      ntpFailureCount++;
+      Serial.printf("[WiFiSync] NTP sync timeout (failures=%u)\n", ntpFailureCount);
+      scheduleBackoff(now, ntpFailureCount);
+      // Keep timeSyncRequested=true to retry later.
+      timeSyncRequested = true;
+      return;
+    }
+
+    return;
   }
+}
+
+unsigned long getLastNtpSyncTime() {
+  return lastNtpSyncMillis;
+}
+
+bool hasNtpSynced() {
+  return ntpSynced;
 }
 
 } // namespace WiFiSync

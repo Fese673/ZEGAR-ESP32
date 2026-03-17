@@ -1,6 +1,7 @@
 #include "UI_Draw.h"
 #include "LCDMirror.h"
 #include "StatsManager.h"
+#include "WiFiSync.h"
 #include <LiquidCrystal_I2C.h>
 #include <Esp.h>
 #include "PMS_Czujnik.h"
@@ -195,18 +196,66 @@ void updateSevenSegStoper(int mins, int secs, int centisec) {
 // ============================================================================
 
 // --- Ekran główny ---
+static const char* polishMonths[] = {
+    "sty", "lut", "mar", "kwi", "maj", "cze",
+  "lip", "sie", "wrz", "paz", "lis", "gru"
+};
+
 void drawHome() {
   LCD_CLEAR();
-  LCD_SET(4, 1);
-  printTime(false);
+
+  // Wiersz 0: Nagłówek wyśrodkowany
+  LCD_SET(3, 0); 
+  LCD_PRINT("~ Wejherowo ~");
 
   if (alarmEnabled) {
-    LCD_SET(0, 1);
-    LCD_WRITE(byte(0));  // Ikona budzika
+    LCD_SET(19, 0); // Prawy górny róg dla aktywnego budzika
+    LCD_WRITE(byte(0));  
   }
 
-  LCD_SET(2, 3);
-  LCD_PRINT("Klik -> MENU");
+  // Wiersz 1: Znacznik synchronizacji NTP widoczny przez 1 godzinę (3600000 ms) po synchronizacji
+  if (WiFiSync::hasNtpSynced() && (millis() - WiFiSync::getLastNtpSyncTime() <= 3600000UL)) {
+    LCD_SET(17, 1);
+    LCD_PRINT("(N)");
+  }
+
+  // System time fetch dla daty
+  time_t now = time(nullptr);
+  struct tm timeinfo;
+  localtime_r(&now, &timeinfo);
+
+  // Wiersz 2: Data, np. "17 marca 2026"
+  // tm_year == lata od 1900, więc tm_year > 120 to rok po 2020 (NTP ok)
+  if (timeinfo.tm_year > 120) {
+    char dateBuf[25];
+    int day = timeinfo.tm_mday;
+    int monIndex = timeinfo.tm_mon; // 0-11
+    int year = timeinfo.tm_year + 1900;
+    
+    snprintf(dateBuf, sizeof(dateBuf), "%d %s %d", day, polishMonths[monIndex], year);
+    
+    int len = strlen(dateBuf);
+    int pad = (20 - len) / 2;
+    if (pad < 0) pad = 0;
+    
+    LCD_SET(pad, 2);
+    LCD_PRINT(dateBuf);
+  } else {
+    // Brak lub słaba synchronizacja NTP
+    LCD_SET(1, 2);
+    LCD_PRINT("-- brak daty NTP --");
+  }
+
+  // Wiersz 3: Aktywny zsynchronizowany, globalny czas z obramowaniem
+  char timeBuf[25];
+  snprintf(timeBuf, sizeof(timeBuf), ">> %02d:%02d:%02d <<", hours, minutes, seconds);
+  
+  int tLen = strlen(timeBuf);
+  int tPad = (20 - tLen) / 2;
+  
+  LCD_SET(tPad, 3);
+  LCD_PRINT(timeBuf);
+
   LCD_DUMP();
 }
 

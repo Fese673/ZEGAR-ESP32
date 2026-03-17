@@ -49,8 +49,6 @@ void wifiOn() {
 
 void wifiOff() {
   WiFiSync::stop();
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
   wifiActive = false;
   ensureHome();
 }

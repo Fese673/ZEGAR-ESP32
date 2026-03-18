@@ -38,6 +38,96 @@ constexpr unsigned long STOPER_DRAW_MS      = 100;  // odświeżanie stopera
 constexpr unsigned long WIFI_RETRY_DELAY_MS = 500;  // próba połączenia WiFi
 constexpr int           WIFI_MAX_RETRIES    = 20;   // max prób połączenia
 constexpr unsigned long MSG_DISPLAY_MS      = 1500; // wyświetlanie komunikatów
+
+// ============================================================================
+// HOME LCD refresh policy
+// ============================================================================
+// Wymóg: ekran HOME (LCD + UART mirror) ma odświeżać się maks. 1x/s.
+// Zamiast wołać drawHome() bezpośrednio z wielu miejsc, używamy bramki:
+// - requestHomeRedraw(): zaznacza, że HOME wymaga odświeżenia
+// - serviceHomeRedraw(): wykonuje drawHome() nie częściej niż co 1000ms
+static bool          s_homeRedrawDirty      = true;
+static unsigned long s_lastHomeRedrawMs    = 0;
+static constexpr unsigned long HOME_REDRAW_MIN_INTERVAL_MS = 1000;
+
+// Rotacja zawartości HOME: na zmianę klasyczny HOME i ekran powietrza.
+// Wymóg: nie zwiększać częstotliwości rysowania (nadal max 1Hz).
+enum class HomeOverlay : uint8_t {
+  Time = 0,
+  Air  = 1,
+};
+
+static HomeOverlay   s_homeOverlay          = HomeOverlay::Time;
+static unsigned long s_homeOverlaySinceMs  = 0;
+// Runtime-configurable overlay switch interval (ms). Persisted via Preferences as seconds.
+unsigned long s_homeOverlaySwitchMs = 7000; // default 7s
+int settingsRotationSec = 7;               // 1..10 seconds (user-facing)
+int s_prevSettingsRotationSec = 7;         // used to restore on cancel
+
+// Preferences namespace object (for persistent settings)
+#include <Preferences.h>
+Preferences s_prefs;
+
+static void requestHomeRedraw() {
+  s_homeRedrawDirty = true;
+}
+
+static void serviceHomeRedraw() {
+  if (appState != STATE_HOME) return;
+  if (!s_homeRedrawDirty) return;
+
+  const unsigned long nowMs = millis();
+  if (s_lastHomeRedrawMs != 0 && (nowMs - s_lastHomeRedrawMs) < HOME_REDRAW_MIN_INTERVAL_MS) {
+    return;
+  }
+
+  s_lastHomeRedrawMs = nowMs;
+  s_homeRedrawDirty  = false;
+
+  // Jedyna ścieżka, która fizycznie rysuje na LCD (+ mirror UART).
+  if (s_homeOverlay == HomeOverlay::Air) {
+    drawAirScreen();
+  } else {
+    drawHome();
+  }
+}
+
+// Zamiast bezpośredniego drawHome() w kodzie aplikacji wywołuj to.
+static void drawHomeThrottled() {
+  requestHomeRedraw();
+  serviceHomeRedraw();
+}
+
+static void serviceHomeOverlayRotation() {
+  if (appState != STATE_HOME) return;
+
+  const unsigned long nowMs = millis();
+  if (s_homeOverlaySinceMs == 0) {
+    s_homeOverlaySinceMs = nowMs;
+    s_homeOverlay = HomeOverlay::Time;
+    requestHomeRedraw();
+    return;
+  }
+  if (nowMs - s_homeOverlaySinceMs >= s_homeOverlaySwitchMs) {
+    s_homeOverlaySinceMs = nowMs;
+    s_homeOverlay = (s_homeOverlay == HomeOverlay::Time) ? HomeOverlay::Air : HomeOverlay::Time;
+    requestHomeRedraw();
+  }
+}
+
+static void handleHomeEntryIfStateChanged() {
+  static AppState lastState = STATE_HOME;
+  if (appState == lastState) return;
+
+  // We just entered HOME: start from TIME view for 3 seconds.
+  if (appState == STATE_HOME) {
+    s_homeOverlay = HomeOverlay::Time;
+    s_homeOverlaySinceMs = millis();
+    requestHomeRedraw();
+  }
+
+  lastState = appState;
+}
 constexpr unsigned long SETUP_DELAY_MS      = 100;  // min delay for serial init
 
 // ============================================================================
@@ -121,9 +211,9 @@ void showHumidity7Seg();
 int menuIndex = 0;
 const char* menuItems[] = {
   "Ustaw czas",
+  "Minutnik",
   "Stoper",
   "Budzik",
-  "Czas z WiFi",
   "Statystyki",
   "Debug STM32",
   "PMS5003",
@@ -226,10 +316,17 @@ int settingsMenuIndex = 0;
 const char* settingsMenuItems[] = {
   "PMS5003",
   "Buzzer",
+  "MQTT",
+  "Synchronizacja",
+  "Rotacja Ekranu",
   "Wyjscie"
 };
-constexpr int SETTINGS_MENU_COUNT = 3;
+constexpr int SETTINGS_MENU_COUNT = 6;
 int settingsMenuCount = SETTINGS_MENU_COUNT;
+
+// --- Menu: Synchronizacja (NTP) ---
+int settingsSyncMinutes = 60; // default 60 minutes
+int s_prevSettingsSyncMin = 60;
 
 // --- Menu Ustawienia PMS5003 (włącz/wyłącz) ---
 int settingsPmsMenuIndex = 0;
@@ -248,6 +345,15 @@ const char* settingsBuzzerMenuItems[] = {
 };
 constexpr int SETTINGS_BUZZER_MENU_COUNT = 2;
 int settingsBuzzerMenuCount = SETTINGS_BUZZER_MENU_COUNT;
+
+// --- Menu Ustawienia MQTT (włącz/wyłącz) ---
+int settingsMqttMenuIndex = 0;
+const char* settingsMqttMenuItems[] = {
+  "Wlaczony",
+  "Wylaczony"
+};
+constexpr int SETTINGS_MQTT_MENU_COUNT = 2;
+int settingsMqttMenuCount = SETTINGS_MQTT_MENU_COUNT;
 
 // --- Dane PMS5003 TELEMETRIA ---
 uint16_t pms5003_errorCount_current = 0;
@@ -313,6 +419,15 @@ bool alarmRinging    = false;
 unsigned long alarmStartTime  = 0;
 unsigned long lastMelodyStep  = 0;
 int  melodyStep      = 0;
+
+// --- Minutnik (Timer) ---
+int  timerSetMinutes  = 0;    // ustawiane przez użytkownika
+int  timerSetSeconds  = 0;
+bool timerRunning     = false;
+unsigned long timerStartMillis = 0;
+unsigned long timerDurationMs  = 0;
+
+int  timerSetHours    = 0;
 
 // --- STM32 DANE (UART) ---
 unsigned long lastSTM32Update       = 0;
@@ -452,6 +567,7 @@ static void handleRtcWriteIfPending() {
 // --- MQTT Mode Control ---
 static bool mqtt_initialized = false;
 static RadioModeSwitchState last_radio_mode = RADIO_STATE_WIFI;
+bool mqttEnabled = true;
 
 // --- DHT Sensor ---
 DHT dht(DHT_PIN, DHT_TYPE);
@@ -494,7 +610,7 @@ void tickClock() {
         updateSevenSeg();
       }
       if (appState == STATE_HOME) {
-        drawHome();
+        requestHomeRedraw();
       }
     }
 
@@ -507,6 +623,21 @@ void tickClock() {
       alarmRinging   = true;
       alarmStartTime = millis();
       lastMelodyStep = 0;
+    }
+    // Timer handling (when running) - check expiration
+    if (timerRunning) {
+      unsigned long elapsed = nowMs - timerStartMillis;
+      if (elapsed >= timerDurationMs) {
+        timerRunning = false;
+        // reuse alarm ringing machinery to play melody
+        alarmRinging = true;
+        alarmStartTime = millis();
+        lastMelodyStep = 0;
+        // After finishing, return to editable timer form (hours editing)
+        editState = EDIT_HOURS;
+        timerStartMillis = 0;
+        timerDurationMs = 0;
+      }
     }
     return;
   }
@@ -535,7 +666,7 @@ void tickClock() {
       updateSevenSeg();
     }
     if (appState == STATE_HOME) {
-      drawHome();
+      requestHomeRedraw();
     }
   }
 
@@ -548,6 +679,22 @@ void tickClock() {
     alarmRinging   = true;
     alarmStartTime = millis();
     lastMelodyStep = 0;
+  }
+
+  // Timer handling (when running) - check expiration
+  if (timerRunning) {
+    unsigned long nowMs2 = millis();
+    unsigned long elapsed = nowMs2 - timerStartMillis;
+    if (elapsed >= timerDurationMs) {
+      timerRunning = false;
+      alarmRinging = true;
+      alarmStartTime = nowMs2;
+      lastMelodyStep = 0;
+      // Return to editable timer form
+      editState = EDIT_HOURS;
+      timerStartMillis = 0;
+      timerDurationMs = 0;
+    }
   }
 }
 
@@ -692,10 +839,11 @@ void setup() {
 
   // ===== UI CONTROLLER =====
   UI_Callbacks callbacks;
-  callbacks.drawHome            = drawHome;
+  callbacks.drawHome            = drawHomeThrottled;
   callbacks.drawMenu            = drawMenu;
   callbacks.drawSetTime         = drawSetTime;
   callbacks.drawAlarm           = drawAlarm;
+  callbacks.drawTimer           = drawTimer;
   callbacks.drawStoper          = drawStoper;
   callbacks.drawDebugSTM32      = drawDebugSTM32;
   callbacks.updateSevenSeg      = updateSevenSeg;
@@ -704,7 +852,17 @@ void setup() {
   callbacks.drawSystemResources = drawSystemResources; // Zasoby systemu (RAM/FLASH)
 
   ui_begin(callbacks);
-  drawHome();
+  // ui_begin() calls drawHome callback already; keep HOME refresh centrally throttled.
+
+  // Load persisted rotation interval (seconds) from NVS/Preferences if present
+  s_prefs.begin("zegar", false);
+  settingsRotationSec = s_prefs.getUShort("homeOverlaySec", (uint16_t)settingsRotationSec);
+  if (settingsRotationSec < 1) settingsRotationSec = 1;
+  if (settingsRotationSec > 10) settingsRotationSec = 10;
+  s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
+  s_prevSettingsRotationSec = settingsRotationSec;
+  mqttEnabled = s_prefs.getBool("mqttEnabled", true);
+  settingsMqttMenuIndex = mqttEnabled ? 0 : 1;
 
   // ===== WiFi / NTP Sync =====
   WiFiSync::setTimeRefs(hours, minutes, seconds, lastTick);        // referencje do zmiennych czasu
@@ -714,7 +872,7 @@ void setup() {
       lastSeenNtpSyncMillis = ntpSyncMs;
       scheduleRtcWriteFromSystemTime();
     }
-    drawHome();
+    drawHomeThrottled();
   });
   WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER);
 
@@ -740,6 +898,8 @@ void setup() {
 // ============================================================================
 
 void loop() {
+  handleHomeEntryIfStateChanged();
+
   // --- Encoder handling ---
   const EncoderEvent evt = encoder_update();
   if (evt != ENC_NONE) {
@@ -761,13 +921,12 @@ void loop() {
   // --- Stats update (save to NVS if needed) ---
   statsManager.update();
 
-  // LCD refresh watchdog: force HOME screen refresh every 500ms
-  // (prevents display freeze when other ops briefly block loop)
-  static unsigned long lastLcdRefresh = 0;
-  if (appState == STATE_HOME && (millis() - lastLcdRefresh >= 500)) {
-    lastLcdRefresh = millis();
-    drawHome();
-  }
+  // Rotacja zawartości HOME (co 3s) — non-blocking.
+  serviceHomeOverlayRotation();
+
+  // HOME LCD refresh (1Hz max, LCD + UART mirror)
+  // tickClock() / callbacks mark HOME dirty; this performs the actual draw.
+  serviceHomeRedraw();
 
   // --- System resources update ---
   updateSystemResources();
@@ -794,6 +953,15 @@ void loop() {
       millis() - lastStatsRedraw >= 1000) {
     lastStatsRedraw = millis();
     drawStats();
+  }
+
+  // --- Timer screen refresh (1s) ---
+  static unsigned long lastTimerRedraw = 0;
+  if (appState == STATE_TIMER && millis() - lastTimerRedraw >= 1000) {
+    lastTimerRedraw = millis();
+    if (timerRunning || editState == EDIT_DONE) {
+      drawTimer();
+    }
   }
 
   // --- Status diagnostics every 2s (disabled in BT mode to not affect audio) ---
@@ -826,10 +994,18 @@ void loop() {
   // --- RadioModeSwitch update (delayed WiFi/BT init after startup) ---
   RadioModeSwitch::update();
 
-  // --- MQTT Control (start/stop based on WiFi mode) ---
+  // --- MQTT Control (start/stop based on WiFi mode + user setting) ---
   RadioModeSwitchState current_radio_mode = RadioModeSwitch::getCurrentState();
-  
-  if (current_radio_mode == RADIO_STATE_WIFI && !mqtt_initialized) {
+
+  // Hard switch OFF: stop task and never publish.
+  if (!mqttEnabled) {
+    if (mqtt_initialized) {
+      Serial.println("[main] MQTT disabled in settings -> stopping MQTT task");
+      MQTTSync::stopCore1Task();
+      mqtt_initialized = false;
+    }
+  }
+  else if (current_radio_mode == RADIO_STATE_WIFI && !mqtt_initialized) {
     // Start MQTT only when WiFi is ACTUALLY connected (not just in WiFi mode)
     // Use periodic timer (every 2s) to avoid lock contention with WiFi.status() calls
     static unsigned long lastWiFiCheck = 0;
@@ -852,8 +1028,8 @@ void loop() {
     last_radio_mode = RADIO_STATE_BT;
   }
 
-  // --- MQTT Update (publish sensor data only if initialized) ---
-  if (mqtt_initialized) {
+  // --- MQTT Update (publish sensor data only if enabled+initialized) ---
+  if (mqttEnabled && mqtt_initialized) {
     static unsigned long lastMQTTPublish = 0;
     if (millis() - lastMQTTPublish >= 5000) {
       lastMQTTPublish = millis();
@@ -886,7 +1062,7 @@ void loop() {
 
         Serial.printf("[main] Przywrócono czas z RTC: %02d:%02d:%02d\n", hours, minutes, seconds);
         updateSevenSeg();
-        drawHome();
+        drawHomeThrottled();
 
         // Wyczyść RTC czas (one-time restoration)
         RadioModeSwitch::clearRTCTime();

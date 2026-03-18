@@ -108,7 +108,7 @@ static void wifiInitTask(void* param) {
 }
 
 static constexpr unsigned long NTP_TIMEOUT_MS = 10000;
-static constexpr unsigned long PERIODIC_SYNC_INTERVAL_MS = 3600000UL;
+static unsigned long periodicSyncIntervalMs = 3600000UL; // default 60min
 
 static unsigned long lastPeriodicSync = 0;
 
@@ -230,8 +230,8 @@ void update() {
 
   // Periodic sync: if device is in WiFi mode, connected and idle, run sync every interval
   if (ModeManager::isWifiOn() && WiFi.status() == WL_CONNECTED && state == SyncState::Idle) {
-    if (now - lastPeriodicSync >= PERIODIC_SYNC_INTERVAL_MS) {
-      Serial.println("[WiFiSync] Periodic time sync requested (hourly)");
+    if (now - lastPeriodicSync >= periodicSyncIntervalMs) {
+      Serial.printf("[WiFiSync] Periodic time sync requested (interval=%lumin)", periodicSyncIntervalMs/60000UL);
       lastPeriodicSync = now;
       requestTimeSync();
     }
@@ -377,4 +377,18 @@ bool hasNtpSynced() {
   return ntpSynced;
 }
 
+} // namespace WiFiSync
+
+// --- API: configure periodic sync interval (minutes) ---
+namespace WiFiSync {
+void setPeriodicSyncIntervalMinutes(uint16_t minutes) {
+  if (minutes < 10) minutes = 10;
+  if (minutes > 360) minutes = 360;
+  // granularity 1 minute is fine; caller ensures multiple-of-10 if desired
+  periodicSyncIntervalMs = (unsigned long)minutes * 60000UL;
+}
+
+uint16_t getPeriodicSyncIntervalMinutes() {
+  return (uint16_t)(periodicSyncIntervalMs / 60000UL);
+}
 } // namespace WiFiSync

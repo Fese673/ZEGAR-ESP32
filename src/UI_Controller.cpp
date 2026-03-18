@@ -6,6 +6,8 @@
 #include "PMS_Czujnik.h"
 #include "ENS160AHT21Screen.h"
 #include "UI_Draw.h"
+#include <Preferences.h>
+#include "WiFiSync.h"
 
 // ============================================================================
 // ZMIENNE GLOBALNE (extern z main.cpp)
@@ -57,6 +59,13 @@ extern int pms5003ParticlesMenuCount;
 extern int ens160MenuIndex;
 extern int ens160MenuCount;
 
+// --- Minutnik (Timer) externs
+extern int timerSetMinutes;
+extern int timerSetSeconds;
+extern bool timerRunning;
+extern unsigned long timerStartMillis;
+extern unsigned long timerDurationMs;
+
 // --- Dane PMS5003 ---
 extern uint16_t pms5003_PM1_0_CF1;
 extern uint16_t pms5003_PM2_5_CF1;
@@ -106,10 +115,18 @@ extern int settingsMenuIndex;
 extern int settingsMenuCount;
 extern int settingsPmsMenuIndex;
 extern int settingsPmsMenuCount;
+extern int settingsMqttMenuIndex;
+extern int settingsMqttMenuCount;
 extern int settingsBuzzerMenuIndex;
 extern int settingsBuzzerMenuCount;
 extern bool pms5003Enabled;
 extern bool buzzerEnabled;
+extern bool mqttEnabled;
+extern int settingsRotationSec;
+extern int s_prevSettingsRotationSec;
+extern int settingsSyncMinutes;
+extern int s_prevSettingsSyncMin;
+extern Preferences s_prefs;
 
 // ============================================================================
 // FUNKCJE EXTERN (z main.cpp)
@@ -121,6 +138,7 @@ extern void drawHome();
 extern void drawMenu();
 extern void drawSetTime();
 extern void drawAlarm();
+extern void drawTimer();
 extern void drawStoper();
 extern void drawDebugSTM32();
 extern void drawStats();
@@ -226,8 +244,29 @@ void ui_handleEvent(EncoderEvent e) {
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         break;
 
+      case STATE_SETTINGS_ROTATION:
+        // adjust rotation seconds (1..10)
+        settingsRotationSec = constrain(settingsRotationSec + dir, 1, 10);
+        // apply immediately to runtime ms value
+        extern unsigned long s_homeOverlaySwitchMs; // declared in main.cpp
+        s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        break;
+      case STATE_SETTINGS_SYNC:
+        // adjust sync interval in 10-minute steps (10..360)
+        settingsSyncMinutes = constrain(settingsSyncMinutes + dir * 10, 10, 360);
+        // apply immediately to WiFiSync runtime
+        WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        break;
+
       case STATE_SETTINGS_PMS5003:
         settingsPmsMenuIndex = constrain(settingsPmsMenuIndex + dir, 0, settingsPmsMenuCount - 1);
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        break;
+
+      case STATE_SETTINGS_MQTT:
+        settingsMqttMenuIndex = constrain(settingsMqttMenuIndex + dir, 0, settingsMqttMenuCount - 1);
         if (s_callbacks.drawStats) s_callbacks.drawStats();
         break;
 
@@ -247,6 +286,17 @@ void ui_handleEvent(EncoderEvent e) {
           alarmMinute = (alarmMinute + dir + 60) % 60;
         }
         if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
+        break;
+
+      case STATE_TIMER:
+        if (editState == EDIT_HOURS) {
+          timerSetHours = constrain(timerSetHours + dir, 0, 99);
+        } else if (editState == EDIT_MINUTES) {
+          timerSetMinutes = (timerSetMinutes + dir + 60) % 60;
+        } else {
+          timerSetSeconds = (timerSetSeconds + dir + 60) % 60;
+        }
+        if (s_callbacks.drawTimer) s_callbacks.drawTimer();
         break;
 
       default:
@@ -275,23 +325,23 @@ void ui_handleEvent(EncoderEvent e) {
           if (s_callbacks.drawSetTime) s_callbacks.drawSetTime();
           return;
 
-        case 1:  // Stoper
+        case 1:  // Minutnik
+          appState  = STATE_TIMER;
+          editState = EDIT_HOURS;
+          if (s_callbacks.drawTimer) s_callbacks.drawTimer();
+          return;
+
+        case 2:  // Stoper
           appState      = STATE_STOPER;
           stoperRunning = false;
           stoperElapsed = 0;
           if (s_callbacks.drawStoper) s_callbacks.drawStoper();
           return;
 
-        case 2:  // Budzik
+        case 3:  // Budzik
           appState  = STATE_ALARM;
           editState = EDIT_HOURS;
           if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
-          return;
-
-        case 3:  // Czas z WiFi
-          syncTimeFromWiFi();
-          if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
-          if (s_callbacks.drawMenu) s_callbacks.drawMenu();
           return;
 
         case 4:  // Statystyki
@@ -451,7 +501,7 @@ void ui_handleEvent(EncoderEvent e) {
           pmsScreenDirty = true;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
-        case 4:  // Wyjście
+        case 5:  // Wyjście
           appState = STATE_MENU;
           if (s_callbacks.drawMenu) s_callbacks.drawMenu();
           break;
@@ -600,7 +650,24 @@ void ui_handleEvent(EncoderEvent e) {
           settingsBuzzerMenuIndex = buzzerEnabled ? 0 : 1;
           if (s_callbacks.drawStats) s_callbacks.drawStats();
           break;
-        case 2:  // Wyjście
+        case 2:  // MQTT
+          appState = STATE_SETTINGS_MQTT;
+          settingsMqttMenuIndex = mqttEnabled ? 0 : 1;
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 3:  // Synchronizacja
+          appState = STATE_SETTINGS_SYNC;
+          // store previous value so long-press can cancel
+          s_prevSettingsSyncMin = settingsSyncMinutes;
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 4:  // Rotacja Ekranu
+          appState = STATE_SETTINGS_ROTATION;
+          // store previous value so long-press can cancel
+          s_prevSettingsRotationSec = settingsRotationSec;
+          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          break;
+        case 5:  // Wyjście
           appState = STATE_MENU;
           if (s_callbacks.drawMenu) s_callbacks.drawMenu();
           break;
@@ -621,6 +688,34 @@ void ui_handleEvent(EncoderEvent e) {
     // --- LOGIKA MENU USTAWIEŃ BUZERA (włącz/wyłącz) ---
     if (appState == STATE_SETTINGS_BUZZER) {
       buzzerEnabled = (settingsBuzzerMenuIndex == 0);
+      appState = STATE_SETTINGS;
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
+
+    // --- LOGIKA MENU USTAWIEŃ MQTT (włącz/wyłącz) ---
+    if (appState == STATE_SETTINGS_MQTT) {
+      mqttEnabled = (settingsMqttMenuIndex == 0);
+      s_prefs.putBool("mqttEnabled", mqttEnabled);
+      appState = STATE_SETTINGS;
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
+
+    // --- LOGIKA: Rotacja Ekranu (zapisz na klik) ---
+    if (appState == STATE_SETTINGS_ROTATION) {
+      // persist new value and return to settings menu
+      s_prefs.putUShort("homeOverlaySec", (uint16_t)settingsRotationSec);
+      appState = STATE_SETTINGS;
+      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      return;
+    }
+
+    // --- LOGIKA: Synchronizacja NTP (zapisz na klik) ---
+    if (appState == STATE_SETTINGS_SYNC) {
+      // persist new value and apply
+      s_prefs.putUShort("ntpSyncMin", (uint16_t)settingsSyncMinutes);
+      WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
       appState = STATE_SETTINGS;
       if (s_callbacks.drawStats) s_callbacks.drawStats();
       return;
@@ -669,6 +764,23 @@ void ui_handleEvent(EncoderEvent e) {
         if (s_callbacks.drawHome) s_callbacks.drawHome();
       } else {
         if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
+      }
+      return;
+    }
+
+    if (appState == STATE_TIMER) {
+      editState = static_cast<EditState>(editState + 1);
+      if (editState > EDIT_SECONDS) {
+        // Start timer but remain in TIMER screen; show countdown
+        timerDurationMs = (unsigned long)timerSetHours * 3600000UL + (unsigned long)timerSetMinutes * 60000UL + (unsigned long)timerSetSeconds * 1000UL;
+        if (timerDurationMs > 0) {
+          timerStartMillis = millis();
+          timerRunning = true;
+        }
+        editState = EDIT_DONE; // leave edit mode
+        if (s_callbacks.drawTimer) s_callbacks.drawTimer();
+      } else {
+        if (s_callbacks.drawTimer) s_callbacks.drawTimer();
       }
       return;
     }
@@ -799,8 +911,31 @@ void ui_handleEvent(EncoderEvent e) {
       // --- Ustawienia (Settings) -> powrót do menu głównego ---
       case STATE_SETTINGS_PMS5003:
       case STATE_SETTINGS_BUZZER:
+      case STATE_SETTINGS_MQTT:
         appState = STATE_SETTINGS;
         if (s_callbacks.drawStats) s_callbacks.drawStats();
+        return;
+      case STATE_SETTINGS_ROTATION:
+        // cancel: restore previous value and go back
+        settingsRotationSec = s_prevSettingsRotationSec;
+        extern unsigned long s_homeOverlaySwitchMs;
+        s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
+        appState = STATE_SETTINGS;
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        return;
+      case STATE_SETTINGS_SYNC:
+        // cancel: restore previous value and go back
+        settingsSyncMinutes = s_prevSettingsSyncMin;
+        WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
+        appState = STATE_SETTINGS;
+        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        return;
+
+      case STATE_TIMER:
+        // Long press in TIMER: stop timer (if running) and return to main menu
+        timerRunning = false;
+        appState = STATE_MENU;
+        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
         return;
 
       case STATE_SETTINGS:

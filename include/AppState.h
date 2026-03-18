@@ -4,6 +4,7 @@ enum AppState {
   STATE_HOME,
   STATE_MENU,
   STATE_SET_TIME,
+  STATE_TIMER,
   STATE_ALARM,
   STATE_STOPER,
   STATE_DEBUG_STM32,
@@ -65,6 +66,9 @@ enum AppState {
   STATE_SETTINGS,              // Menu Ustawień (lista z >)
   STATE_SETTINGS_PMS5003,      // Ustawienia PMS5003 (włącz/wyłącz)
   STATE_SETTINGS_BUZZER,       // Ustawienia Buzera (włącz/wyłącz)
+  STATE_SETTINGS_MQTT,         // Ustawienia MQTT (włącz/wyłącz)
+  STATE_SETTINGS_SYNC,        // Ustawienia Synchronizacji NTP (minuty)
+  STATE_SETTINGS_ROTATION,     // Ustawienie: Rotacja ekranu (1..10s)
   STATE_PMS5003_CF1_PM1,   // Szczegóły PM1.0 w CF=1
   STATE_PMS5003_CF1_PM25,  // Szczegóły PM2.5 w CF=1
   STATE_PMS5003_CF1_PM10,  // Szczegóły PM10 w CF=1
@@ -113,7 +117,8 @@ enum AppState {
   // --- Aliasy dla Settings ---
   STATESETTINGS = STATE_SETTINGS,
   STATESETTINGSPMS5003 = STATE_SETTINGS_PMS5003,
-  STATESETTINGSBUZZER = STATE_SETTINGS_BUZZER
+  STATESETTINGSBUZZER = STATE_SETTINGS_BUZZER,
+  STATESETTINGSMQTT = STATE_SETTINGS_MQTT
 };
 
 enum EditState {

@@ -63,11 +63,29 @@ extern int settingsMenuCount;
 extern int settingsPmsMenuIndex;
 extern const char* settingsPmsMenuItems[];
 extern int settingsPmsMenuCount;
+extern int settingsMqttMenuIndex;
+extern const char* settingsMqttMenuItems[];
+extern int settingsMqttMenuCount;
 extern int settingsBuzzerMenuIndex;
 extern const char* settingsBuzzerMenuItems[];
 extern int settingsBuzzerMenuCount;
 extern bool pms5003Enabled;
 extern bool buzzerEnabled;
+extern bool mqttEnabled;
+extern int settingsRotationSec;
+extern int s_prevSettingsRotationSec;
+extern int settingsSyncMinutes;
+extern int s_prevSettingsSyncMin;
+
+// Minutnik (Timer) - ustawienia i status
+extern int timerSetMinutes;
+extern int timerSetSeconds;
+extern bool timerRunning;
+
+extern int timerSetHours;
+extern unsigned long timerStartMillis;
+extern unsigned long timerDurationMs;
+
 
 // Zmienne do triku z zamrażaniem czasu na 7-seg
 extern int savedHours, savedMinutes, savedSeconds;
@@ -83,9 +101,11 @@ extern LiquidCrystal_I2C lcd;
 
 // UI / LCD
 void drawHome();
+void drawAirScreen();
 void drawMenu();
 void drawSetTime();
 void drawAlarm();
+void drawTimer();
 void drawStoper();
 void drawDebugSTM32();
 void printTime(bool edit);

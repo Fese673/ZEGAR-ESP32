@@ -126,6 +126,16 @@ extern uint8_t cpuCore1Percent;
 extern uint32_t ramFreeBytes;
 extern uint32_t flashFreeBytes;
 
+// --- DHT / Climate (z main.cpp) ---
+extern float dhtTemperature;
+extern float dhtHumidity;
+extern bool  dhtReady;
+
+// --- Settings (z main.cpp / UI_Controller.cpp) ---
+extern bool pms5003Enabled;
+extern int settingsMqttMenuIndex;
+extern bool mqttEnabled;
+
 // ============================================================================
 // IMPLEMENTACJA FUNKCJI - 7-SEGMENT (74HC595)
 // ============================================================================
@@ -168,9 +178,24 @@ void initSevenSeg() {
 }
 
 void updateSevenSeg() {
-  const uint8_t HH = ((hours / 10) << 4) | (hours % 10);
-  const uint8_t MM = ((minutes / 10) << 4) | (minutes % 10);
-  const uint8_t SS = ((seconds / 10) << 4) | (seconds % 10);
+  uint8_t HH, MM, SS;
+
+  if (timerRunning) {
+    unsigned long nowMs = millis();
+    unsigned long elapsed = (nowMs >= timerStartMillis) ? (nowMs - timerStartMillis) : 0;
+    long remainingMs = (long)timerDurationMs - (long)elapsed;
+    if (remainingMs < 0) remainingMs = 0;
+    int rh = (int)(remainingMs / 3600000L);
+    int rm = (int)((remainingMs % 3600000L) / 60000L);
+    int rs = (int)((remainingMs % 60000L) / 1000L);
+    HH = ((rh / 10) << 4) | (rh % 10);
+    MM = ((rm / 10) << 4) | (rm % 10);
+    SS = ((rs / 10) << 4) | (rs % 10);
+  } else {
+    HH = ((hours / 10) << 4) | (hours % 10);
+    MM = ((minutes / 10) << 4) | (minutes % 10);
+    SS = ((seconds / 10) << 4) | (seconds % 10);
+  }
 
   digitalWrite(LATCH_PIN, LOW);
   slowShiftOut(swapNibbles(SS));
@@ -259,6 +284,160 @@ void drawHome() {
   LCD_DUMP();
 }
 
+// ============================================================================
+// AIR QUALITY SCREEN (20x4)
+// ============================================================================
+
+static void lcdPrintCenteredRow(uint8_t row, const char* text) {
+  const int maxCols = 20;
+  int len = (int)strlen(text);
+  if (len > maxCols) len = maxCols;
+  int pad = (maxCols - len) / 2;
+  if (pad < 0) pad = 0;
+
+  LCD_SET(0, row);
+  for (int i = 0; i < maxCols; ++i) {
+    LCD_PRINT(" ");
+  }
+
+  LCD_SET((uint8_t)pad, row);
+  for (int i = 0; i < len; ++i) {
+    LCD_WRITE((uint8_t)text[i]);
+  }
+}
+
+static const char* airHeaderFor(uint16_t pm25, uint16_t eco2, uint8_t aqi) {
+  // Priorytety:
+  // - Najpierw stany alarmowe (Poziom 5, potem 4)
+  // - Potem najlepsze poziomy (1 -> 2 -> 3)
+  //   bo kryteria są zagnieżdżone (IDEALNE ⊂ DOBRE ⊂ SREDNIE).
+
+  // Poziom 5: SMOG / ZLE
+  if (pm25 >= 50 || eco2 >= 2000 || aqi == 5) {
+    if (pm25 >= 50) return "! UWAGA: SMOG !";
+    return "! ZLE POWIETRZE !";
+  }
+
+  // Poziom 4: PRZEWIETRZ!
+  if ((eco2 >= 1500 || aqi >= 4) && pm25 < 50) {
+    return "! PRZEWIETRZ !";
+  }
+
+  // Poziom 1: IDEALNE
+  if (pm25 < 15 && eco2 < 800 && aqi == 1) {
+    return "POWIETRZE: IDEALNE";
+  }
+
+  // Poziom 2: DOBRE
+  if (pm25 < 25 && eco2 < 1000 && aqi <= 2) {
+    return "POWIETRZE: DOBRE";
+  }
+
+  // Poziom 3: SREDNIE
+  if (pm25 < 50 && eco2 < 1500 && aqi <= 3) {
+    return "POWIETRZE: SREDNIE";
+  }
+
+  // Jeśli nie wpasowuje się idealnie w powyższe progi (np. brak danych / nietypowa kombinacja)
+  // wybierz bezpieczny komunikat.
+  return "POWIETRZE: ---";
+}
+
+static void padRightTo20(char* line) {
+  const int maxCols = 20;
+  const int len = (int)strlen(line);
+  if (len >= maxCols) {
+    line[maxCols] = '\0';
+    return;
+  }
+  for (int i = len; i < maxCols; ++i) line[i] = ' ';
+  line[maxCols] = '\0';
+}
+
+void drawAirScreen() {
+  LCD_CLEAR();
+
+  // Collect values.
+  const bool ensGasValid = ENS160AHT21Screen::runtimeData.hasGasSample;
+  const bool ensClimateValid = ENS160AHT21Screen::runtimeData.hasClimateSample;
+  const uint8_t aqi = ensGasValid ? ENS160AHT21Screen::runtimeData.aqi : 0;
+  const uint16_t eco2 = ensGasValid ? ENS160AHT21Screen::runtimeData.eco2 : 0;
+
+  // PM2.5: bierzemy ATM (bardziej „ambient”), a gdy PMS wyłączony, pokażemy kreski.
+  const bool pmValid = pms5003Enabled && pms5003_PM2_5_ATM > 0;
+  const uint16_t pm25 = pmValid ? pms5003_PM2_5_ATM : 0;
+
+  // Decide header: if we have at least one of PM or ENS gas/climate, attempt header.
+  const bool haveAny = pmValid || ensGasValid || ensClimateValid;
+  const char* header = "POWIETRZE: BRAK DANYCH";
+  if (haveAny) {
+    header = airHeaderFor(pm25, eco2, aqi);
+  }
+  lcdPrintCenteredRow(0, header);
+
+  // Row 1: temperature + humidity.
+  {
+    char line[21];
+    // Prefer ENS/AHT21 climate data if available, otherwise fallback to DHT sensor.
+    if (ensClimateValid) {
+      const float t = ENS160AHT21Screen::runtimeData.temperatureC;
+      const int hum = (int)(ENS160AHT21Screen::runtimeData.humidityPct + 0.5f);
+      snprintf(line, sizeof(line), " %5.1f\xDF" "C |  %3d%%    ", t, hum);
+    } else if (dhtReady) {
+      const int hum = (int)(dhtHumidity + 0.5f);
+      snprintf(line, sizeof(line), " %5.1f\xDF" "C |  %3d%%    ", dhtTemperature, hum);
+    } else {
+      snprintf(line, sizeof(line), "  --.-\xDF" "C |   --%%    ");
+    }
+    padRightTo20(line);
+    LCD_SET(0, 1);
+    LCD_PRINT(line);
+  }
+
+  // Row 2: PM2.5
+  {
+    char line[21];
+    if (pmValid) {
+      snprintf(line, sizeof(line), "  PM2.5: %3u ug/m3  ", (unsigned)pm25);
+    } else {
+      snprintf(line, sizeof(line), "  PM2.5:  -- ug/m3  ");
+    }
+    padRightTo20(line);
+    LCD_SET(0, 2);
+    LCD_PRINT(line);
+  }
+
+  // Row 3: AQI + CO2
+  {
+    char line[21];
+    if (ensGasValid) {
+      char right[21];
+      snprintf(right, sizeof(right), "eCO2:%4u", (unsigned)eco2);
+      // Build left part (AQI) then right-justify the right part into remaining space so total is 20 cols.
+      int left = snprintf(line, sizeof(line), " AQI:%-2u  |", (unsigned)aqi);
+      int rem = 20 - left;
+      int rlen = (int)strlen(right);
+      int pad = rem - rlen;
+      if (pad < 0) pad = 0;
+      // append pad spaces then right text
+      int pos = left;
+      for (int i = 0; i < pad && pos < 20; ++i) line[pos++] = ' ';
+      for (int i = 0; i < rlen && pos < 20; ++i) line[pos++] = right[i];
+      // fill remaining with spaces (shouldn't be necessary)
+      for (; pos < 20; ++pos) line[pos] = ' ';
+      line[20] = '\0';
+    } else {
+      // No gas data — show placeholder but keep alignment
+      snprintf(line, sizeof(line), " AQI:--  | eCO2:----");
+      padRightTo20(line);
+    }
+    LCD_SET(0, 3);
+    LCD_PRINT(line);
+  }
+
+  LCD_DUMP();
+}
+
 // --- Ekran menu ---
 void drawMenu() {
   LCD_CLEAR();
@@ -269,7 +448,7 @@ void drawMenu() {
     if (item >= menuCount) break;
 
     LCD_SET(0, i);
-    LCD_PRINT(item == menuIndex ? ">" : " ");
+    LCD_PRINT(item == menuIndex ? "> " : "  ");
 
     if (item == 12) {
       if (radioMode == WIFI_ONLY) {
@@ -287,28 +466,119 @@ void drawMenu() {
 // --- Ekran ustawiania czasu ---
 void drawSetTime() {
   LCD_CLEAR();
-  LCD_SET(2, 1);
-  printTime(true);
-  LCD_SET(2, 3);
-  LCD_PRINT("Klik -> dalej");
+
+  // Centered header
+  lcdPrintCenteredRow(0, "USTAW CZAS");
+
+  // Separator
+  LCD_SET(0, 1);
+  LCD_PRINT(" ------------------ ");
+
+  // Centered time line: "< [HH]:MM:SS >" with brackets around active field
+  char tbuf[21];
+  char hh[3]; char mm[3]; char ss[3];
+  snprintf(hh, sizeof(hh), "%02d", hours);
+  snprintf(mm, sizeof(mm), "%02d", minutes);
+  snprintf(ss, sizeof(ss), "%02d", seconds);
+
+  if (editState == EDIT_HOURS) {
+    snprintf(tbuf, sizeof(tbuf), "< [%s]:%s:%s >", hh, mm, ss);
+  } else if (editState == EDIT_MINUTES) {
+    snprintf(tbuf, sizeof(tbuf), "< %s:[%s]:%s >", hh, mm, ss);
+  } else if (editState == EDIT_SECONDS) {
+    snprintf(tbuf, sizeof(tbuf), "< %s:%s:[%s] >", hh, mm, ss);
+  } else {
+    snprintf(tbuf, sizeof(tbuf), "< %s:%s:%s >", hh, mm, ss);
+  }
+
+  lcdPrintCenteredRow(2, tbuf);
+
+  // Bottom row: leave empty
+  LCD_SET(0, 3);
+  for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
   LCD_DUMP();
 }
 
 // --- Ekran budzika ---
 void drawAlarm() {
   LCD_CLEAR();
-  LCD_SET(3, 0);
-  LCD_PRINT("USTAW BUDZIK");
-  LCD_SET(4, 2);
-  if (editState == EDIT_HOURS) LCD_PRINT("[");
-  if (alarmHour < 10) LCD_PRINT("0");
-  LCD_PRINT(alarmHour);
-  if (editState == EDIT_HOURS) LCD_PRINT("]");
-  LCD_PRINT(":");
-  if (editState == EDIT_MINUTES) LCD_PRINT("[");
-  if (alarmMinute < 10) LCD_PRINT("0");
-  LCD_PRINT(alarmMinute);
-  if (editState == EDIT_MINUTES) LCD_PRINT("]");
+
+  // Centered header
+  lcdPrintCenteredRow(0, "USTAW BUDZIK");
+
+  // Separator
+  LCD_SET(0, 1);
+  LCD_PRINT(" ------------------ ");
+
+  // Centered time line: "< [HH]:MM >" with brackets around active field
+  char abuf[21];
+  char hh[3]; char mm[3];
+  snprintf(hh, sizeof(hh), "%02d", alarmHour);
+  snprintf(mm, sizeof(mm), "%02d", alarmMinute);
+
+  if (editState == EDIT_HOURS) {
+    snprintf(abuf, sizeof(abuf), "< [%s]:%s >", hh, mm);
+  } else if (editState == EDIT_MINUTES) {
+    snprintf(abuf, sizeof(abuf), "< %s:[%s] >", hh, mm);
+  } else {
+    snprintf(abuf, sizeof(abuf), "< %s:%s >", hh, mm);
+  }
+
+  lcdPrintCenteredRow(2, abuf);
+
+  // Bottom row empty for aesthetics
+  LCD_SET(0, 3);
+  for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+
+  LCD_DUMP();
+}
+
+// --- Ekran Minutnika (Timer) ---
+void drawTimer() {
+  LCD_CLEAR();
+
+  // Centered header
+  lcdPrintCenteredRow(0, "MINUTNIK");
+
+  // Separator line
+  LCD_SET(0, 1);
+  LCD_PRINT(" ------------------ ");
+
+  // Build centered time line: when editing show brackets around active field,
+  // when running show remaining time counting down (HH:MM:SS).
+  char tbuf[21];
+  if (timerRunning) {
+    unsigned long nowMs = millis();
+    unsigned long elapsed = (nowMs >= timerStartMillis) ? (nowMs - timerStartMillis) : 0;
+    long remainingMs = (long)timerDurationMs - (long)elapsed;
+    if (remainingMs < 0) remainingMs = 0;
+    int rh = (int)(remainingMs / 3600000L);
+    int rm = (int)((remainingMs % 3600000L) / 60000L);
+    int rs = (int)((remainingMs % 60000L) / 1000L);
+    // Show countdown with arrows as requested: "> HH:MM:SS <"
+    snprintf(tbuf, sizeof(tbuf), "> %02d:%02d:%02d <", rh, rm, rs);
+  } else {
+    char hh[3]; char mm[3]; char ss[3];
+    snprintf(hh, sizeof(hh), "%02d", timerSetHours);
+    snprintf(mm, sizeof(mm), "%02d", timerSetMinutes);
+    snprintf(ss, sizeof(ss), "%02d", timerSetSeconds);
+
+    if (editState == EDIT_HOURS) {
+      snprintf(tbuf, sizeof(tbuf), "< [%s]:%s:%s >", hh, mm, ss);
+    } else if (editState == EDIT_MINUTES) {
+      snprintf(tbuf, sizeof(tbuf), "< %s:[%s]:%s >", hh, mm, ss);
+    } else if (editState == EDIT_SECONDS) {
+      snprintf(tbuf, sizeof(tbuf), "< %s:%s:[%s] >", hh, mm, ss);
+    } else {
+      snprintf(tbuf, sizeof(tbuf), "< %s:%s:%s >", hh, mm, ss);
+    }
+  }
+
+  lcdPrintCenteredRow(2, tbuf);
+
+  // Bottom row empty for aesthetics
+  LCD_SET(0, 3);
+  for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
   LCD_DUMP();
 }
 
@@ -325,15 +595,49 @@ void drawStoper() {
   const int s  = (t / 1000) % 60;
   const int m  = (t / 60000) % 100;
 
-  LCD_SET(4, 2);
-  if (m < 10) LCD_PRINT("0");
-  LCD_PRINT(m);
-  LCD_PRINT(":");
-  if (s < 10) LCD_PRINT("0");
-  LCD_PRINT(s);
-  LCD_PRINT(".");
-  if (cs < 10) LCD_PRINT("0");
-  LCD_PRINT(cs);
+  // Centered header
+  lcdPrintCenteredRow(0, "STOPER");
+
+  // Separator
+  LCD_SET(0, 1);
+  LCD_PRINT(" ------------------ ");
+
+  // Centered stopwatch time: "> MM:SS.CS <"
+  char buf[21];
+  // If elapsed >= 1 hour, show hours zone: "> HH:MM:SS.CS <" and update 7-seg to HH:MM:SS
+  unsigned long totalMs = t;
+  int hh = (int)(totalMs / 3600000UL);
+  if (hh > 0) {
+    int rm = (int)((totalMs % 3600000UL) / 60000UL);
+    int rs = (int)((totalMs % 60000UL) / 1000UL);
+    int rcs = (int)((totalMs / 10) % 100);
+    snprintf(buf, sizeof(buf), "> %02d:%02d:%02d.%02d <", hh, rm, rs, rcs);
+    lcdPrintCenteredRow(2, buf);
+
+    // Bottom empty
+    LCD_SET(0, 3);
+    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+
+    // Update 7-seg to HH:MM:SS (drop centisec on 7-seg)
+    uint8_t HHb = ((hh / 10) << 4) | (hh % 10);
+    uint8_t MMb = ((rm / 10) << 4) | (rm % 10);
+    uint8_t SSb = ((rs / 10) << 4) | (rs % 10);
+    digitalWrite(LATCH_PIN, LOW);
+    slowShiftOut(swapNibbles(SSb));
+    slowShiftOut(swapNibbles(MMb));
+    slowShiftOut(swapNibbles(HHb));
+    digitalWrite(LATCH_PIN, HIGH);
+    LCD_DUMP();
+    return;
+  }
+
+  // Default (no hours): "> MM:SS.CS <"
+  snprintf(buf, sizeof(buf), "> %02d:%02d.%02d <", m, s, cs);
+  lcdPrintCenteredRow(2, buf);
+
+  // Bottom empty
+  LCD_SET(0, 3);
+  for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
 
   updateSevenSegStoper(m, s, cs);
   LCD_DUMP();
@@ -796,31 +1100,96 @@ void drawStats() {
   }
   // === 1d. USTAWIENIA PMS5003 (włącz/wyłącz) ===
   else if (appState == STATE_SETTINGS_PMS5003) {
-    LCD_SET(0, 0);
-    LCD_PRINT("PMS5003");
+    // Centered header
+    lcdPrintCenteredRow(0, "PMS5003");
 
+    // Separator
     LCD_SET(0, 1);
-    LCD_PRINT("Stan: ");
+    LCD_PRINT(" ------------------ ");
 
-    LCD_SET(0, 2);
-    LCD_PRINT(settingsPmsMenuIndex == 0 ? "> Wlaczony " : "  Wylaczony");
+    // Centered state line
+    char pbuf[21];
+    const char* pstate = settingsPmsMenuIndex == 0 ? "ON" : "OFF";
+    snprintf(pbuf, sizeof(pbuf), "SENSOR: <  %s  >", pstate);
+    lcdPrintCenteredRow(2, pbuf);
 
+    // Bottom empty
     LCD_SET(0, 3);
-    LCD_PRINT("Klik -> zapisz");
+    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
   }
   // === 1e. USTAWIENIA BUZERA (włącz/wyłącz) ===
   else if (appState == STATE_SETTINGS_BUZZER) {
-    LCD_SET(0, 0);
-    LCD_PRINT("BUZZER");
+    // Centered header
+    lcdPrintCenteredRow(0, "BUZZER");
 
+    // Separator
     LCD_SET(0, 1);
-    LCD_PRINT("Stan: ");
+    LCD_PRINT(" ------------------ ");
 
-    LCD_SET(0, 2);
-    LCD_PRINT(settingsBuzzerMenuIndex == 0 ? "> Wlaczony " : "  Wylaczony");
+    // Centered state line
+    char bbuf[21];
+    const char* bstate = settingsBuzzerMenuIndex == 0 ? "ON" : "OFF";
+    snprintf(bbuf, sizeof(bbuf), "STAN:   <  %s  >", bstate);
+    lcdPrintCenteredRow(2, bbuf);
 
+    // Bottom empty
     LCD_SET(0, 3);
-    LCD_PRINT("Klik -> zapisz");
+    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+  }
+  // === 1f. USTAWIENIA MQTT (włącz/wyłącz) ===
+  else if (appState == STATE_SETTINGS_MQTT) {
+    // Centered header
+    lcdPrintCenteredRow(0, "MQTT");
+
+    // Separator
+    LCD_SET(0, 1);
+    LCD_PRINT(" ------------------ ");
+
+    // Centered broker on/off line
+    char buf[21];
+    const char* state = settingsMqttMenuIndex == 0 ? "ON" : "OFF";
+    snprintf(buf, sizeof(buf), "BROKER: <  %s  >", state);
+    lcdPrintCenteredRow(2, buf);
+
+    // Bottom row empty (instructions on selection screen)
+    LCD_SET(0, 3);
+    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+  }
+  // === 1g. USTAWIENIE: ROTACJA EKRANU (1..10s, enkoder) ===
+  else if (appState == STATE_SETTINGS_ROTATION) {
+    // Header (centered)
+    lcdPrintCenteredRow(0, "ROTACJA EKRANU");
+
+    // Separator: centered dashes
+    LCD_SET(0, 1);
+    LCD_PRINT(" ------------------ ");
+
+    // Row 2: CZAS with left/right markers, centered
+    char valueBuf[32];
+    snprintf(valueBuf, sizeof(valueBuf), "CZAS: < %2ds >", settingsRotationSec);
+    lcdPrintCenteredRow(2, valueBuf);
+
+    // Row 3: empty (instructions are on the second line already)
+    LCD_SET(0, 3);
+    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+  }
+  // === 1h. USTAWIENIE: SYNCHRONIZACJA NTP (10..360 min, enkoder) ===
+  else if (appState == STATE_SETTINGS_SYNC) {
+    // Header
+    lcdPrintCenteredRow(0, "SYNCHRONIZACJA");
+
+    // Separator
+    LCD_SET(0, 1);
+    LCD_PRINT(" ------------------ ");
+
+    // Row 2: minutes value
+    char valueBuf[32];
+    snprintf(valueBuf, sizeof(valueBuf), "CZAS: < %3dmin >", settingsSyncMinutes);
+    lcdPrintCenteredRow(2, valueBuf);
+
+    // Row 3: empty
+    LCD_SET(0, 3);
+    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
   }
   // === 2. WIDOK KLIKNIĘĆ ===
   else if (appState == STATE_STATS_CLICKS) {

@@ -41,6 +41,10 @@ SyncError getLastError();
 void setOnStart(void (*cb)());
 void setOnDone(void (*cb)());
 
+// Configure periodic sync interval (minutes). Valid range: 10..360.
+void setPeriodicSyncIntervalMinutes(uint16_t minutes);
+uint16_t getPeriodicSyncIntervalMinutes();
+
 // przekazanie referencji do globalnych zmiennych czasu (opcjonalne, dla kompatybilności)
 void setTimeRefs(int &hoursRef, int &minutesRef, int &secondsRef, unsigned long &lastTickRef);
 

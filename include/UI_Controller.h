@@ -13,6 +13,7 @@ typedef struct {
   DrawFn drawMenu;                         // Menu z opcjami
   DrawFn drawSetTime;                      // Ekran edycji czasu
   DrawFn drawAlarm;                        // Ekran edycji alarmu
+  DrawFn drawTimer;                        // Ekran minutnika
   DrawFn drawStoper;                       // Ekran stopera
   DrawFn drawDebugSTM32;                   // Debug panel
   Update7SegFn updateSevenSeg;             // Odśwież wyświetlacz 7-seg

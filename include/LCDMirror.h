@@ -39,7 +39,17 @@ public:
     Serial.println("+--------------------+");
     for (int r = 0; r < 4; r++) {
       Serial.print("|");
-      Serial.write((const uint8_t*)buf[r], 20);
+      for (int c = 0; c < 20; ++c) {
+        uint8_t ch = (uint8_t)buf[r][c];
+        if (ch == 0xDF) {
+          const uint8_t deg[] = {0xC2, 0xB0}; // UTF-8 degree sign
+          Serial.write(deg, sizeof(deg));
+        } else if (ch >= 32 && ch < 127) {
+          Serial.write(ch);
+        } else {
+          Serial.write('?');
+        }
+      }
       Serial.println("|");
     }
     Serial.println("+--------------------+");

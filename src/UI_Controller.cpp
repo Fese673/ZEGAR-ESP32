@@ -27,6 +27,7 @@ extern bool alarmRinging;
 extern unsigned long alarmStartTime;
 extern unsigned long lastMelodyStep;
 extern int  melodyStep;
+extern int alarmEditCursor;
 
 // --- Stoper ---
 extern bool stoperRunning;
@@ -157,11 +158,65 @@ extern bool timeSaved;
 
 static UI_Callbacks s_callbacks;
 
+static inline void callDraw(DrawFn fn) {
+  if (fn) {
+    fn();
+  }
+}
+
+static inline void drawHomeSafe() { callDraw(s_callbacks.drawHome); }
+static inline void drawMenuSafe() { callDraw(s_callbacks.drawMenu); }
+static inline void drawSetTimeSafe() { callDraw(s_callbacks.drawSetTime); }
+static inline void drawAlarmSafe() { callDraw(s_callbacks.drawAlarm); }
+static inline void drawTimerSafe() { callDraw(s_callbacks.drawTimer); }
+static inline void drawStoperSafe() { callDraw(s_callbacks.drawStoper); }
+static inline void drawDebugSTM32Safe() { callDraw(s_callbacks.drawDebugSTM32); }
+static inline void drawStatsSafe() { callDraw(s_callbacks.drawStats); }
+static inline void updateSevenSegSafe() { callDraw(s_callbacks.updateSevenSeg); }
+
+static inline void markPmsDirtyAndDrawStats() {
+  pmsScreenDirty = true;
+  drawStatsSafe();
+}
+
+static void persistAlarmAt(int idx) {
+  char keyH[12];
+  char keyM[12];
+  char keyE[12];
+  snprintf(keyH, sizeof(keyH), "a%dh", idx);
+  snprintf(keyM, sizeof(keyM), "a%dm", idx);
+  snprintf(keyE, sizeof(keyE), "a%de", idx);
+  s_prefs.putUShort(keyH, (uint16_t)alarms[idx].hour);
+  s_prefs.putUShort(keyM, (uint16_t)alarms[idx].minute);
+  s_prefs.putBool(keyE, alarms[idx].enabled);
+}
+
+static void persistAllAlarms() {
+  s_prefs.putUShort("alarmCount", (uint16_t)alarmsCount);
+  for (int k = 0; k < alarmsCount; ++k) {
+    persistAlarmAt(k);
+  }
+}
+
+static void removeAlarmAt(int index) {
+  if (alarmsCount <= 0) {
+    return;
+  }
+  if (index < 0 || index >= alarmsCount) {
+    return;
+  }
+  for (int j = index; j < alarmsCount - 1; ++j) {
+    alarms[j] = alarms[j + 1];
+  }
+  if (alarmsCount > 0) {
+    alarmsCount--;
+  }
+  persistAllAlarms();
+}
+
 void ui_begin(const UI_Callbacks& callbacks) {
   s_callbacks = callbacks;
-  if (s_callbacks.drawHome) {
-    s_callbacks.drawHome();
-  }
+  drawHomeSafe();
 }
 
 // Pomocnicza: zmiana czasu w trybie edycji
@@ -180,8 +235,8 @@ static void adjustTime_internal(int dir) {
       break;
   }
 
-  if (s_callbacks.drawSetTime) s_callbacks.drawSetTime();
-  if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
+  drawSetTimeSafe();
+  updateSevenSegSafe();
 }
 
 void ui_handleEvent(EncoderEvent e) {
@@ -196,52 +251,48 @@ void ui_handleEvent(EncoderEvent e) {
     switch (appState) {
       case STATE_MENU:
         menuIndex = constrain(menuIndex + dir, 0, menuCount - 1);
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        drawMenuSafe();
         break;
 
       case STATE_STATS:
         statsMenuIndex = constrain(statsMenuIndex + dir, 0, statsMenuCount - 1);
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         break;
 
       case STATE_STATS_RESOURCES_MENU:
         resourcesMenuIndex = constrain(resourcesMenuIndex + dir, 0, resourcesMenuCount - 1);
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         break;
 
       case STATE_PMS5003:
         pms5003MenuIndex = constrain(pms5003MenuIndex + dir, 0, pms5003MenuCount - 1);
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         break;
 
       case STATE_PMS5003_CF1:
         pms5003CF1MenuIndex = constrain(pms5003CF1MenuIndex + dir, 0, pms5003CF1MenuCount - 1);
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         break;
 
       case STATE_PMS5003_ATM:
         pms5003ATMMenuIndex = constrain(pms5003ATMMenuIndex + dir, 0, pms5003ATMMenuCount - 1);
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         break;
 
       case STATE_PMS5003_PARTICLES:
         pms5003ParticlesMenuIndex = constrain(pms5003ParticlesMenuIndex + dir, 0, pms5003ParticlesMenuCount - 1);
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         break;
 
       case STATE_ENS160_AHT21:
         ens160MenuIndex = constrain(ens160MenuIndex + dir, 0, ens160MenuCount - 1);
         ENS160AHT21Screen::markScreenDirty();
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         break;
 
       case STATE_SETTINGS:
         settingsMenuIndex = constrain(settingsMenuIndex + dir, 0, settingsMenuCount - 1);
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         break;
 
       case STATE_SETTINGS_ROTATION:
@@ -250,29 +301,29 @@ void ui_handleEvent(EncoderEvent e) {
         // apply immediately to runtime ms value
         extern unsigned long s_homeOverlaySwitchMs; // declared in main.cpp
         s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         break;
       case STATE_SETTINGS_SYNC:
         // adjust sync interval in 10-minute steps (10..360)
         settingsSyncMinutes = constrain(settingsSyncMinutes + dir * 10, 10, 360);
         // apply immediately to WiFiSync runtime
         WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         break;
 
       case STATE_SETTINGS_PMS5003:
         settingsPmsMenuIndex = constrain(settingsPmsMenuIndex + dir, 0, settingsPmsMenuCount - 1);
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         break;
 
       case STATE_SETTINGS_MQTT:
         settingsMqttMenuIndex = constrain(settingsMqttMenuIndex + dir, 0, settingsMqttMenuCount - 1);
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         break;
 
       case STATE_SETTINGS_BUZZER:
         settingsBuzzerMenuIndex = constrain(settingsBuzzerMenuIndex + dir, 0, settingsBuzzerMenuCount - 1);
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         break;
 
       case STATE_SET_TIME:
@@ -285,18 +336,58 @@ void ui_handleEvent(EncoderEvent e) {
         } else {
           alarmMinute = (alarmMinute + dir + 60) % 60;
         }
-        if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
+        drawAlarmSafe();
+        break;
+
+      case STATE_ALARMS_LIST:
+        // Move selection up/down; last entry is [+] add new
+        alarmsMenuIndex = constrain(alarmsMenuIndex + dir, 0, (alarmsCount > 0 ? alarmsCount : 0));
+        drawStatsSafe();
+        break;
+
+      case STATE_ALARM_EDIT:
+        // If actively editing time fields, apply changes; otherwise move the cursor
+        if (editState == EDIT_HOURS) {
+          alarms[selectedAlarmIndex].hour = (alarms[selectedAlarmIndex].hour + dir + 24) % 24;
+        } else if (editState == EDIT_MINUTES) {
+          alarms[selectedAlarmIndex].minute = (alarms[selectedAlarmIndex].minute + dir + 60) % 60;
+        } else {
+          // move cursor between CZAS(0), STATUS(1), USUN(2)
+          alarmEditCursor = constrain(alarmEditCursor + dir, 0, 2);
+        }
+        drawStatsSafe();
+        break;
+
+      case STATE_ALARM_DELETE:
+        // Reuse alarmsMenuIndex: 0 -> NO, 1 -> YES
+        alarmsMenuIndex = constrain(alarmsMenuIndex + dir, 0, 1);
+        drawStatsSafe();
         break;
 
       case STATE_TIMER:
-        if (editState == EDIT_HOURS) {
+        if (timerRunning) {
+          // While running, wheel does not alter set values.
+        } else if (editState == EDIT_HOURS) {
           timerSetHours = constrain(timerSetHours + dir, 0, 99);
         } else if (editState == EDIT_MINUTES) {
           timerSetMinutes = (timerSetMinutes + dir + 60) % 60;
-        } else {
+        } else if (editState == EDIT_SECONDS) {
           timerSetSeconds = (timerSetSeconds + dir + 60) % 60;
+        } else {
+          // Navigation mode: move between rows and choose preset.
+          if (timerUiCursor == 0) {
+            if (dir > 0) {
+              timerUiCursor = 1;
+            }
+          } else {
+            if (dir < 0 && timerPresetIndex == 0) {
+              timerUiCursor = 0;
+            } else {
+              timerPresetIndex = constrain(timerPresetIndex + dir, 0, 2);
+            }
+          }
         }
-        if (s_callbacks.drawTimer) s_callbacks.drawTimer();
+        drawTimerSafe();
         break;
 
       default:
@@ -312,7 +403,7 @@ void ui_handleEvent(EncoderEvent e) {
     // --- HOME -> MENU ---
     if (appState == STATE_HOME) {
       appState = STATE_MENU;
-      if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+      drawMenuSafe();
       return;
     }
 
@@ -322,38 +413,42 @@ void ui_handleEvent(EncoderEvent e) {
         case 0:  // Ustaw czas
           appState  = STATE_SET_TIME;
           editState = EDIT_HOURS;
-          if (s_callbacks.drawSetTime) s_callbacks.drawSetTime();
+          drawSetTimeSafe();
           return;
 
         case 1:  // Minutnik
           appState  = STATE_TIMER;
-          editState = EDIT_HOURS;
-          if (s_callbacks.drawTimer) s_callbacks.drawTimer();
+          editState = EDIT_DONE;
+          timerUiCursor = 0;
+          timerPresetIndex = 1;
+          drawTimerSafe();
           return;
 
         case 2:  // Stoper
           appState      = STATE_STOPER;
           stoperRunning = false;
           stoperElapsed = 0;
-          if (s_callbacks.drawStoper) s_callbacks.drawStoper();
+          drawStoperSafe();
           return;
 
-        case 3:  // Budzik
-          appState  = STATE_ALARM;
-          editState = EDIT_HOURS;
-          if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
+        case 3:  // Budzik (lista budzików)
+          appState = STATE_ALARMS_LIST;
+          // ensure selection in range
+          if (alarmsMenuIndex < 0) alarmsMenuIndex = 0;
+          if (alarmsMenuIndex > alarmsCount) alarmsMenuIndex = alarmsCount;
+          drawStatsSafe();
           return;
 
         case 4:  // Statystyki
           appState       = STATE_STATS;
           statsMenuIndex = 0;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           return;
 
         case 5:  // Debug STM32
           appState = STATE_DEBUG_STM32;
-          if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
-          if (s_callbacks.drawDebugSTM32) s_callbacks.drawDebugSTM32();
+          updateSevenSegSafe();
+          drawDebugSTM32Safe();
           return;
 
         case 6:  // PMS5003
@@ -361,15 +456,14 @@ void ui_handleEvent(EncoderEvent e) {
           pms5003MenuIndex = 0;
           // Przy wejściu do menu PMS – wymuś odczyt i pozwól na natychmiastowe rysowanie
           PMS5003Sensor::requestImmediateRead();
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           return;
 
         case 7:  // AHT21 + ENS160
           appState = STATE_ENS160_AHT21;
           ens160MenuIndex = 0;
           ENS160AHT21Screen::markScreenDirty();
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           return;
 
         case 8:  // Temperatura
@@ -387,13 +481,13 @@ void ui_handleEvent(EncoderEvent e) {
         case 10:  // Ustawienia
           appState        = STATE_SETTINGS;
           settingsMenuIndex = 0;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           return;
 
         case 11:  // Wyjście
           appState = STATE_HOME;
-          if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
-          if (s_callbacks.drawHome) s_callbacks.drawHome();
+          updateSevenSegSafe();
+          drawHomeSafe();
           return;
 
         case 12:  // Radio Toggle (WiFi ↔ Bluetooth)
@@ -421,28 +515,28 @@ void ui_handleEvent(EncoderEvent e) {
       switch (statsMenuIndex) {
         case 0:
           appState = STATE_STATS_CLICKS;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 1:
           appState = STATE_STATS_STEPS;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 2:
           appState = STATE_STATS_TEMP;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 3:
           appState = STATE_STATS_HUM;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 4:  // Zasoby
           appState = STATE_STATS_RESOURCES_MENU;
           resourcesMenuIndex = 0;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 5:  // Wyjście
           appState = STATE_MENU;
-          if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+          drawMenuSafe();
           break;
         default:
           break;
@@ -455,15 +549,15 @@ void ui_handleEvent(EncoderEvent e) {
       switch (resourcesMenuIndex) {
         case 0:  // RAM Free
           appState = STATE_STATS_RESOURCES_RAM;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 1:  // CPU
           appState = STATE_STATS_RESOURCES_CPU;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 2:  // Flash Free
           appState = STATE_STATS_RESOURCES_FLASH;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         default:
           break;
@@ -478,32 +572,28 @@ void ui_handleEvent(EncoderEvent e) {
           appState = STATE_PMS5003_CF1;
           pms5003CF1MenuIndex = 0;
           PMS5003Sensor::requestImmediateRead();
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 1:
           appState = STATE_PMS5003_ATM;
           pms5003ATMMenuIndex = 0;
           PMS5003Sensor::requestImmediateRead();
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 2:  // L.Czastek
           appState = STATE_PMS5003_PARTICLES;
           pms5003ParticlesMenuIndex = 0;
           PMS5003Sensor::requestImmediateRead();
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 3:  // Telemetria
           appState = STATE_PMS5003_TELEMETRY;
           PMS5003Sensor::requestImmediateRead();
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 5:  // Wyjście
           appState = STATE_MENU;
-          if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+          drawMenuSafe();
           break;
         default:
           break;
@@ -516,18 +606,15 @@ void ui_handleEvent(EncoderEvent e) {
       switch (pms5003CF1MenuIndex) {
         case 0:  // PM1.0 - wejdź w szczegóły
           appState = STATE_PMS5003_CF1_PM1;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 1:  // PM2.5 - wejdź w szczegóły
           appState = STATE_PMS5003_CF1_PM25;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 2:  // PM10 - wejdź w szczegóły
           appState = STATE_PMS5003_CF1_PM10;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         default:
           break;
@@ -540,18 +627,15 @@ void ui_handleEvent(EncoderEvent e) {
       switch (pms5003ATMMenuIndex) {
         case 0:  // PM1.0 - wejdź w szczegóły
           appState = STATE_PMS5003_ATM_PM1;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 1:  // PM2.5 - wejdź w szczegóły
           appState = STATE_PMS5003_ATM_PM25;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 2:  // PM10 - wejdź w szczegóły
           appState = STATE_PMS5003_ATM_PM10;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         default:
           break;
@@ -564,33 +648,27 @@ void ui_handleEvent(EncoderEvent e) {
       switch (pms5003ParticlesMenuIndex) {
         case 0:  // 0.3um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_0_3;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 1:  // 0.5um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_0_5;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 2:  // 1.0um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_1_0;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 3:  // 2.5um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_2_5;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 4:  // 5.0um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_5_0;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         case 5:  // 10um - wejdź w szczegóły
           appState = STATE_PMS5003_PARTICLES_10_0;
-          pmsScreenDirty = true;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          markPmsDirtyAndDrawStats();
           break;
         default:
           break;
@@ -604,32 +682,32 @@ void ui_handleEvent(EncoderEvent e) {
         case 0:
           appState = STATE_ENS160_AHT21_GAS_AQI;
           ENS160AHT21Screen::markScreenDirty();
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 1:
           appState = STATE_ENS160_AHT21_GAS_TVOC;
           ENS160AHT21Screen::markScreenDirty();
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 2:
           appState = STATE_ENS160_AHT21_GAS_ECO2;
           ENS160AHT21Screen::markScreenDirty();
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 3:
           appState = STATE_ENS160_AHT21_CLIMATE_TEMP;
           ENS160AHT21Screen::markScreenDirty();
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 4:
           appState = STATE_ENS160_AHT21_CLIMATE_HUM;
           ENS160AHT21Screen::markScreenDirty();
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 5:
           appState = STATE_ENS160_AHT21_STATUS;
           ENS160AHT21Screen::markScreenDirty();
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         default:
           break;
@@ -643,33 +721,33 @@ void ui_handleEvent(EncoderEvent e) {
         case 0:  // PMS5003
           appState = STATE_SETTINGS_PMS5003;
           settingsPmsMenuIndex = pms5003Enabled ? 0 : 1;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 1:  // Buzzer
           appState = STATE_SETTINGS_BUZZER;
           settingsBuzzerMenuIndex = buzzerEnabled ? 0 : 1;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 2:  // MQTT
           appState = STATE_SETTINGS_MQTT;
           settingsMqttMenuIndex = mqttEnabled ? 0 : 1;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 3:  // Synchronizacja
           appState = STATE_SETTINGS_SYNC;
           // store previous value so long-press can cancel
           s_prevSettingsSyncMin = settingsSyncMinutes;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 4:  // Rotacja Ekranu
           appState = STATE_SETTINGS_ROTATION;
           // store previous value so long-press can cancel
           s_prevSettingsRotationSec = settingsRotationSec;
-          if (s_callbacks.drawStats) s_callbacks.drawStats();
+          drawStatsSafe();
           break;
         case 5:  // Wyjście
           appState = STATE_MENU;
-          if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+          drawMenuSafe();
           break;
         default:
           break;
@@ -681,7 +759,7 @@ void ui_handleEvent(EncoderEvent e) {
     if (appState == STATE_SETTINGS_PMS5003) {
       pms5003Enabled = (settingsPmsMenuIndex == 0);
       appState = STATE_SETTINGS;
-      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      drawStatsSafe();
       return;
     }
 
@@ -689,7 +767,7 @@ void ui_handleEvent(EncoderEvent e) {
     if (appState == STATE_SETTINGS_BUZZER) {
       buzzerEnabled = (settingsBuzzerMenuIndex == 0);
       appState = STATE_SETTINGS;
-      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      drawStatsSafe();
       return;
     }
 
@@ -698,7 +776,7 @@ void ui_handleEvent(EncoderEvent e) {
       mqttEnabled = (settingsMqttMenuIndex == 0);
       s_prefs.putBool("mqttEnabled", mqttEnabled);
       appState = STATE_SETTINGS;
-      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      drawStatsSafe();
       return;
     }
 
@@ -707,7 +785,7 @@ void ui_handleEvent(EncoderEvent e) {
       // persist new value and return to settings menu
       s_prefs.putUShort("homeOverlaySec", (uint16_t)settingsRotationSec);
       appState = STATE_SETTINGS;
-      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      drawStatsSafe();
       return;
     }
 
@@ -717,7 +795,7 @@ void ui_handleEvent(EncoderEvent e) {
       s_prefs.putUShort("ntpSyncMin", (uint16_t)settingsSyncMinutes);
       WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
       appState = STATE_SETTINGS;
-      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      drawStatsSafe();
       return;
     }
 
@@ -731,14 +809,14 @@ void ui_handleEvent(EncoderEvent e) {
         stoperRunning  = false;
         stoperElapsed += millis() - stoperStart;
       }
-      if (s_callbacks.drawStoper) s_callbacks.drawStoper();
+      drawStoperSafe();
       return;
     }
 
     if (appState == STATE_DEBUG_STM32) {
       appState = STATE_HOME;
-      if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
-      if (s_callbacks.drawHome) s_callbacks.drawHome();
+      updateSevenSegSafe();
+      drawHomeSafe();
       return;
     }
 
@@ -747,10 +825,10 @@ void ui_handleEvent(EncoderEvent e) {
       if (editState == EDIT_DONE) {
         lastTick = millis();
         appState = STATE_HOME;
-        if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
-        if (s_callbacks.drawHome) s_callbacks.drawHome();
+        updateSevenSegSafe();
+        drawHomeSafe();
       } else {
-        if (s_callbacks.drawSetTime) s_callbacks.drawSetTime();
+        drawSetTimeSafe();
       }
       return;
     }
@@ -760,28 +838,125 @@ void ui_handleEvent(EncoderEvent e) {
       if (editState > EDIT_MINUTES) {
         alarmEnabled = true;
         appState     = STATE_HOME;
-        if (s_callbacks.updateSevenSeg) s_callbacks.updateSevenSeg();
-        if (s_callbacks.drawHome) s_callbacks.drawHome();
+        updateSevenSegSafe();
+        drawHomeSafe();
       } else {
-        if (s_callbacks.drawAlarm) s_callbacks.drawAlarm();
+        drawAlarmSafe();
       }
       return;
     }
 
     if (appState == STATE_TIMER) {
+      if (timerRunning) {
+        // Click while running: stop countdown.
+        timerRunning = false;
+        editState = EDIT_DONE;
+        drawTimerSafe();
+        return;
+      }
+
+      if (editState == EDIT_DONE) {
+        if (timerUiCursor == 0) {
+          // Enter manual HH:MM:SS edit.
+          editState = EDIT_HOURS;
+        } else {
+          // Apply selected quick preset.
+          static const int kPresetMinutes[3] = {2, 15, 45};
+          timerSetHours = 0;
+          timerSetMinutes = kPresetMinutes[timerPresetIndex];
+          timerSetSeconds = 0;
+          editState = EDIT_DONE;
+        }
+        drawTimerSafe();
+        return;
+      }
+
+      // Manual edit progression: HOURS -> MINUTES -> SECONDS -> START
       editState = static_cast<EditState>(editState + 1);
       if (editState > EDIT_SECONDS) {
-        // Start timer but remain in TIMER screen; show countdown
         timerDurationMs = (unsigned long)timerSetHours * 3600000UL + (unsigned long)timerSetMinutes * 60000UL + (unsigned long)timerSetSeconds * 1000UL;
         if (timerDurationMs > 0) {
           timerStartMillis = millis();
           timerRunning = true;
         }
-        editState = EDIT_DONE; // leave edit mode
-        if (s_callbacks.drawTimer) s_callbacks.drawTimer();
-      } else {
-        if (s_callbacks.drawTimer) s_callbacks.drawTimer();
+        editState = EDIT_DONE;
       }
+      drawTimerSafe();
+      return;
+    }
+
+    // --- ALARM LIST / EDIT / DELETE click handling ---
+    if (appState == STATE_ALARMS_LIST) {
+      // If selected is existing alarm -> open edit; if it's the add slot -> add new alarm
+      if (alarmsMenuIndex < alarmsCount) {
+        selectedAlarmIndex = alarmsMenuIndex;
+        appState = STATE_ALARM_EDIT;
+        editState = EDIT_DONE; // not actively editing time yet
+        alarmEditCursor = 0; // start with CZAS selected
+        drawStatsSafe();
+      } else {
+        // add new alarm (if room)
+        if (alarmsCount < MAX_ALARMS) {
+          alarms[alarmsCount].hour = 7;
+          alarms[alarmsCount].minute = 0;
+          alarms[alarmsCount].enabled = true;
+          alarms[alarmsCount].lastTriggerDay = 0;
+          alarmsCount++;
+          // persist
+          int i = alarmsCount - 1;
+          persistAllAlarms();
+          // edit newly added (start in cursor mode)
+          selectedAlarmIndex = i;
+          appState = STATE_ALARM_EDIT;
+          editState = EDIT_DONE;
+          alarmEditCursor = 0;
+          drawStatsSafe();
+        }
+      }
+      return;
+    }
+
+    if (appState == STATE_ALARM_EDIT) {
+      if (editState == EDIT_DONE) {
+        // interpret click based on cursor selection
+        if (alarmEditCursor == 0) {
+          // enter time edit (hours)
+          editState = EDIT_HOURS;
+          drawStatsSafe();
+        } else if (alarmEditCursor == 1) {
+          // toggle enabled and persist
+          alarms[selectedAlarmIndex].enabled = !alarms[selectedAlarmIndex].enabled;
+          persistAlarmAt(selectedAlarmIndex);
+          drawStatsSafe();
+        } else {
+          // delete selected alarm immediately (no confirmation)
+          removeAlarmAt(selectedAlarmIndex);
+          appState = STATE_ALARMS_LIST;
+          drawStatsSafe();
+        }
+      } else if (editState == EDIT_HOURS) {
+        // advance to minutes
+        editState = EDIT_MINUTES;
+        drawStatsSafe();
+      } else if (editState == EDIT_MINUTES) {
+        // finish edit: persist alarm and return to list
+        persistAlarmAt(selectedAlarmIndex);
+        editState = EDIT_DONE;
+        appState = STATE_ALARMS_LIST;
+        drawStatsSafe();
+      }
+      return;
+    }
+
+    if (appState == STATE_ALARM_DELETE) {
+      // click confirms deletion if selection is 'TAK' (we encoded selection in alarmsMenuIndex)
+      // Reuse alarmsMenuIndex: 0 -> NO, 1 -> YES
+      if (alarmsMenuIndex == 1) {
+        // delete selectedAlarmIndex
+        removeAlarmAt(selectedAlarmIndex);
+      }
+      appState = STATE_ALARMS_LIST;
+      drawStatsSafe();
       return;
     }
 
@@ -796,7 +971,7 @@ void ui_handleEvent(EncoderEvent e) {
     auto returnToStatsMenu = [](int menuIdx) {
       appState       = STATE_STATS;
       statsMenuIndex = menuIdx;
-      if (s_callbacks.drawStats) s_callbacks.drawStats();
+      drawStatsSafe();
     };
 
     // Statystyki: ekrany szczegółowe -> powrót do menu statystyk
@@ -822,7 +997,7 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_STATS_RESOURCES_CPU:
       case STATE_STATS_RESOURCES_FLASH:
         appState = STATE_STATS_RESOURCES_MENU;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         return;
 
       // --- PMS5003: ekrany szczegółowe -> powrót do menu PMS5003 ---
@@ -830,15 +1005,13 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_PMS5003_CF1_PM25:
       case STATE_PMS5003_CF1_PM10:
         appState = STATE_PMS5003_CF1;
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         return;
 
       case STATE_PMS5003_CF1:
         // Menu CF1 -> powrót do menu PMS5003
         appState = STATE_PMS5003;
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         return;
 
       // --- PMS5003 ATM: ekrany szczegółowe -> powrót do menu ATM ---
@@ -846,15 +1019,13 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_PMS5003_ATM_PM25:
       case STATE_PMS5003_ATM_PM10:
         appState = STATE_PMS5003_ATM;
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         return;
 
       case STATE_PMS5003_ATM:
         // Menu ATM -> powrót do menu PMS5003
         appState = STATE_PMS5003;
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         return;
 
       // --- PMS5003 PARTICLES: ekrany szczegółowe -> powrót do menu PARTICLES ---
@@ -865,28 +1036,25 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_PMS5003_PARTICLES_5_0:
       case STATE_PMS5003_PARTICLES_10_0:
         appState = STATE_PMS5003_PARTICLES;
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         return;
 
       case STATE_PMS5003_PARTICLES:
         // Menu PARTICLES -> powrót do menu PMS5003
         appState = STATE_PMS5003;
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         return;
 
       case STATE_PMS5003_TELEMETRY:
         // Telemetria -> powrót do menu PMS5003
         appState = STATE_PMS5003;
-        pmsScreenDirty = true;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        markPmsDirtyAndDrawStats();
         return;
 
       case STATE_PMS5003:
         // Menu PMS5003 -> menu główne
         appState = STATE_MENU;
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        drawMenuSafe();
         return;
 
       case STATE_ENS160_AHT21_SUMMARY:
@@ -900,12 +1068,12 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_ENS160_AHT21_CLIMATE_HUM:
         appState = STATE_ENS160_AHT21;
         ENS160AHT21Screen::markScreenDirty();
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         return;
 
       case STATE_ENS160_AHT21:
         appState = STATE_MENU;
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        drawMenuSafe();
         return;
 
       // --- Ustawienia (Settings) -> powrót do menu głównego ---
@@ -913,7 +1081,7 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_SETTINGS_BUZZER:
       case STATE_SETTINGS_MQTT:
         appState = STATE_SETTINGS;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         return;
       case STATE_SETTINGS_ROTATION:
         // cancel: restore previous value and go back
@@ -921,33 +1089,51 @@ void ui_handleEvent(EncoderEvent e) {
         extern unsigned long s_homeOverlaySwitchMs;
         s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
         appState = STATE_SETTINGS;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         return;
       case STATE_SETTINGS_SYNC:
         // cancel: restore previous value and go back
         settingsSyncMinutes = s_prevSettingsSyncMin;
         WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
         appState = STATE_SETTINGS;
-        if (s_callbacks.drawStats) s_callbacks.drawStats();
+        drawStatsSafe();
         return;
 
       case STATE_TIMER:
         // Long press in TIMER: stop timer (if running) and return to main menu
         timerRunning = false;
         appState = STATE_MENU;
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        drawMenuSafe();
+        return;
+
+      case STATE_ALARMS_LIST:
+        // Lista budzików -> menu główne
+        appState = STATE_MENU;
+        drawMenuSafe();
+        return;
+
+      case STATE_ALARM_EDIT:
+        // Edycja budzika -> powrót do listy (bez dodatkowego zapisu)
+        appState = STATE_ALARMS_LIST;
+        drawStatsSafe();
+        return;
+
+      case STATE_ALARM_DELETE:
+        // Potwierdzenie usunięcia -> powrót do edycji
+        appState = STATE_ALARM_EDIT;
+        drawStatsSafe();
         return;
 
       case STATE_SETTINGS:
         // Menu Ustawień -> menu główne
         appState = STATE_MENU;
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        drawMenuSafe();
         return;
 
       case STATE_STATS:
         // Menu statystyk -> menu główne
         appState = STATE_MENU;
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        drawMenuSafe();
         return;
 
       case STATE_TEMPERATURE:
@@ -960,20 +1146,20 @@ void ui_handleEvent(EncoderEvent e) {
           timeSaved = false;
         }
         appState = STATE_MENU;
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        drawMenuSafe();
         return;
 
       case STATE_STOPER:
       case STATE_DEBUG_STM32:
         // Inne wyjścia -> MENU
         appState = STATE_MENU;
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        drawMenuSafe();
         return;
 
       default:
         // Fallback (cokolwiek innego) -> MENU
         appState = STATE_MENU;
-        if (s_callbacks.drawMenu) s_callbacks.drawMenu();
+        drawMenuSafe();
         return;
     }
   }

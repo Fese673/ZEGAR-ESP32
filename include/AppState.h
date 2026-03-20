@@ -69,6 +69,10 @@ enum AppState {
   STATE_SETTINGS_MQTT,         // Ustawienia MQTT (włącz/wyłącz)
   STATE_SETTINGS_SYNC,        // Ustawienia Synchronizacji NTP (minuty)
   STATE_SETTINGS_ROTATION,     // Ustawienie: Rotacja ekranu (1..10s)
+  // --- Budziki (multi) ---
+  STATE_ALARMS_LIST,          // Lista budzików
+  STATE_ALARM_EDIT,           // Edycja pojedynczego budzika
+  STATE_ALARM_DELETE,         // Potwierdzenie usunięcia budzika
   STATE_PMS5003_CF1_PM1,   // Szczegóły PM1.0 w CF=1
   STATE_PMS5003_CF1_PM25,  // Szczegóły PM2.5 w CF=1
   STATE_PMS5003_CF1_PM10,  // Szczegóły PM10 w CF=1

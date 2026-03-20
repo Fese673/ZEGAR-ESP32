@@ -217,11 +217,41 @@ void updateSevenSegStoper(int mins, int secs, int centisec) {
 }
 
 // ============================================================================
-// IMPLEMENTACJA FUNKCJI - UI / LCD
+// STAŁE I FUNKCJE POMOCNICZE
 // ============================================================================
 
+constexpr uint8_t SCREEN_WIDTH = 20;
+constexpr uint8_t SCREEN_HEIGHT = 4;
+constexpr const char* ALIGN_CENTER = " ------------------ ";
+
+static void clearRow(uint8_t row) {
+  LCD_CLEAR_ROW(row);
+}
+
+static void lcdPrintCentered(uint8_t row, const char* text) {
+  int len = (int)strlen(text);
+  if (len > SCREEN_WIDTH) len = SCREEN_WIDTH;
+  int pad = (SCREEN_WIDTH - len) / 2;
+
+  clearRow(row);
+  LCD_SET((uint8_t)pad, row);
+  for (int i = 0; i < len; ++i) {
+    LCD_WRITE((uint8_t)text[i]);
+  }
+}
+
+static void lcdPrintCentered(uint8_t row, const __FlashStringHelper* text) {
+  int len = (int)strlen_P((const char*)text);
+  if (len > SCREEN_WIDTH) len = SCREEN_WIDTH;
+  int pad = (SCREEN_WIDTH - len) / 2;
+
+  clearRow(row);
+  LCD_SET((uint8_t)pad, row);
+  LCD_PRINT(text);
+}
+
 // --- Ekran główny ---
-static const char* polishMonths[] = {
+static const char* const polishMonths[] PROGMEM = {
     "sty", "lut", "mar", "kwi", "maj", "cze",
   "lip", "sie", "wrz", "paz", "lis", "gru"
 };
@@ -229,57 +259,33 @@ static const char* polishMonths[] = {
 void drawHome() {
   LCD_CLEAR();
 
-  // Wiersz 0: Nagłówek wyśrodkowany
-  LCD_SET(3, 0); 
-  LCD_PRINT("~ Wejherowo ~");
+  // Header
+  LCD_SET(3, 0);
+  LCD_PRINT(F("~ Wejherowo ~"));
 
   if (alarmEnabled) {
-    LCD_SET(19, 0); // Prawy górny róg dla aktywnego budzika
-    LCD_WRITE(byte(0));  
+    LCD_SET(19, 0);
+    LCD_WRITE(byte(0));
   }
 
-  // Wiersz 1: Znacznik synchronizacji NTP widoczny przez 1 godzinę (3600000 ms) po synchronizacji
+  // NTP marker
   if (WiFiSync::hasNtpSynced() && (millis() - WiFiSync::getLastNtpSyncTime() <= 3600000UL)) {
     LCD_SET(17, 1);
-    LCD_PRINT("(N)");
+    LCD_PRINT(F("(N)"));
   }
 
-  // System time fetch dla daty
+  // Date (centered)
   time_t now = time(nullptr);
   struct tm timeinfo;
   localtime_r(&now, &timeinfo);
+  char dateBuf[21];
+  snprintf(dateBuf, sizeof(dateBuf), "%02d %s %04d", timeinfo.tm_mday, polishMonths[timeinfo.tm_mon], 1900 + timeinfo.tm_year);
+  lcdPrintCentered(2, dateBuf);
 
-  // Wiersz 2: Data, np. "17 marca 2026"
-  // tm_year == lata od 1900, więc tm_year > 120 to rok po 2020 (NTP ok)
-  if (timeinfo.tm_year > 120) {
-    char dateBuf[25];
-    int day = timeinfo.tm_mday;
-    int monIndex = timeinfo.tm_mon; // 0-11
-    int year = timeinfo.tm_year + 1900;
-    
-    snprintf(dateBuf, sizeof(dateBuf), "%d %s %d", day, polishMonths[monIndex], year);
-    
-    int len = strlen(dateBuf);
-    int pad = (20 - len) / 2;
-    if (pad < 0) pad = 0;
-    
-    LCD_SET(pad, 2);
-    LCD_PRINT(dateBuf);
-  } else {
-    // Brak lub słaba synchronizacja NTP
-    LCD_SET(1, 2);
-    LCD_PRINT("-- brak daty NTP --");
-  }
-
-  // Wiersz 3: Aktywny zsynchronizowany, globalny czas z obramowaniem
+  // Time (centered on row 3)
   char timeBuf[25];
   snprintf(timeBuf, sizeof(timeBuf), ">> %02d:%02d:%02d <<", hours, minutes, seconds);
-  
-  int tLen = strlen(timeBuf);
-  int tPad = (20 - tLen) / 2;
-  
-  LCD_SET(tPad, 3);
-  LCD_PRINT(timeBuf);
+  lcdPrintCentered(3, timeBuf);
 
   LCD_DUMP();
 }
@@ -288,25 +294,7 @@ void drawHome() {
 // AIR QUALITY SCREEN (20x4)
 // ============================================================================
 
-static void lcdPrintCenteredRow(uint8_t row, const char* text) {
-  const int maxCols = 20;
-  int len = (int)strlen(text);
-  if (len > maxCols) len = maxCols;
-  int pad = (maxCols - len) / 2;
-  if (pad < 0) pad = 0;
-
-  LCD_SET(0, row);
-  for (int i = 0; i < maxCols; ++i) {
-    LCD_PRINT(" ");
-  }
-
-  LCD_SET((uint8_t)pad, row);
-  for (int i = 0; i < len; ++i) {
-    LCD_WRITE((uint8_t)text[i]);
-  }
-}
-
-static const char* airHeaderFor(uint16_t pm25, uint16_t eco2, uint8_t aqi) {
+static const __FlashStringHelper* airHeaderFor(uint16_t pm25, uint16_t eco2, uint8_t aqi) {
   // Priorytety:
   // - Najpierw stany alarmowe (Poziom 5, potem 4)
   // - Potem najlepsze poziomy (1 -> 2 -> 3)
@@ -314,44 +302,42 @@ static const char* airHeaderFor(uint16_t pm25, uint16_t eco2, uint8_t aqi) {
 
   // Poziom 5: SMOG / ZLE
   if (pm25 >= 50 || eco2 >= 2000 || aqi == 5) {
-    if (pm25 >= 50) return "! UWAGA: SMOG !";
-    return "! ZLE POWIETRZE !";
+    if (pm25 >= 50) return F("! UWAGA: SMOG !");
+    return F("! ZLE POWIETRZE !");
   }
 
   // Poziom 4: PRZEWIETRZ!
   if ((eco2 >= 1500 || aqi >= 4) && pm25 < 50) {
-    return "! PRZEWIETRZ !";
+    return F("! PRZEWIETRZ !");
   }
 
   // Poziom 1: IDEALNE
   if (pm25 < 15 && eco2 < 800 && aqi == 1) {
-    return "POWIETRZE: IDEALNE";
+    return F("POWIETRZE: IDEALNE");
   }
 
   // Poziom 2: DOBRE
   if (pm25 < 25 && eco2 < 1000 && aqi <= 2) {
-    return "POWIETRZE: DOBRE";
+    return F("POWIETRZE: DOBRE");
   }
 
   // Poziom 3: SREDNIE
   if (pm25 < 50 && eco2 < 1500 && aqi <= 3) {
-    return "POWIETRZE: SREDNIE";
+    return F("POWIETRZE: SREDNIE");
   }
 
-  // Jeśli nie wpasowuje się idealnie w powyższe progi (np. brak danych / nietypowa kombinacja)
-  // wybierz bezpieczny komunikat.
-  return "POWIETRZE: ---";
+  // Jeśli nie wpasowuje się idealnie w powyższe progi
+  return F("POWIETRZE: ---");
 }
 
 static void padRightTo20(char* line) {
-  const int maxCols = 20;
   const int len = (int)strlen(line);
-  if (len >= maxCols) {
-    line[maxCols] = '\0';
+  if (len >= SCREEN_WIDTH) {
+    line[SCREEN_WIDTH] = '\0';
     return;
   }
-  for (int i = len; i < maxCols; ++i) line[i] = ' ';
-  line[maxCols] = '\0';
+  for (int i = len; i < SCREEN_WIDTH; ++i) line[i] = ' ';
+  line[SCREEN_WIDTH] = '\0';
 }
 
 void drawAirScreen() {
@@ -369,11 +355,11 @@ void drawAirScreen() {
 
   // Decide header: if we have at least one of PM or ENS gas/climate, attempt header.
   const bool haveAny = pmValid || ensGasValid || ensClimateValid;
-  const char* header = "POWIETRZE: BRAK DANYCH";
+  const __FlashStringHelper* header = F("POWIETRZE: BRAK DANYCH");
   if (haveAny) {
     header = airHeaderFor(pm25, eco2, aqi);
   }
-  lcdPrintCenteredRow(0, header);
+  lcdPrintCentered(0, header);
 
   // Row 1: temperature + humidity.
   {
@@ -415,17 +401,16 @@ void drawAirScreen() {
       snprintf(right, sizeof(right), "eCO2:%4u", (unsigned)eco2);
       // Build left part (AQI) then right-justify the right part into remaining space so total is 20 cols.
       int left = snprintf(line, sizeof(line), " AQI:%-2u  |", (unsigned)aqi);
-      int rem = 20 - left;
+      int rem = SCREEN_WIDTH - left;
       int rlen = (int)strlen(right);
       int pad = rem - rlen;
       if (pad < 0) pad = 0;
       // append pad spaces then right text
       int pos = left;
-      for (int i = 0; i < pad && pos < 20; ++i) line[pos++] = ' ';
-      for (int i = 0; i < rlen && pos < 20; ++i) line[pos++] = right[i];
-      // fill remaining with spaces (shouldn't be necessary)
-      for (; pos < 20; ++pos) line[pos] = ' ';
-      line[20] = '\0';
+      for (int i = 0; i < pad && pos < SCREEN_WIDTH; ++i) line[pos++] = ' ';
+      for (int i = 0; i < rlen && pos < SCREEN_WIDTH; ++i) line[pos++] = right[i];
+      for (; pos < SCREEN_WIDTH; ++pos) line[pos] = ' ';
+      line[SCREEN_WIDTH] = '\0';
     } else {
       // No gas data — show placeholder but keep alignment
       snprintf(line, sizeof(line), " AQI:--  | eCO2:----");
@@ -441,20 +426,20 @@ void drawAirScreen() {
 // --- Ekran menu ---
 void drawMenu() {
   LCD_CLEAR();
-  const int first = (menuIndex / 4) * 4;
+  const int first = (menuIndex / SCREEN_HEIGHT) * SCREEN_HEIGHT;
 
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < SCREEN_HEIGHT; i++) {
     const int item = first + i;
     if (item >= menuCount) break;
 
     LCD_SET(0, i);
-    LCD_PRINT(item == menuIndex ? "> " : "  ");
+    LCD_PRINT(item == menuIndex ? F("> ") : F("  "));
 
     if (item == 12) {
       if (radioMode == WIFI_ONLY) {
-        LCD_PRINT("BLUETOOTH MODE");  // Teraz w WiFi, przełącz na BT
+        LCD_PRINT(F("BLUETOOTH MODE"));
       } else {
-        LCD_PRINT("WIFI MODE     ");  // Teraz w BT, przełącz na WiFi
+        LCD_PRINT(F("WIFI MODE     "));
       }
     } else {
       LCD_PRINT(menuItems[item]);
@@ -467,14 +452,9 @@ void drawMenu() {
 void drawSetTime() {
   LCD_CLEAR();
 
-  // Centered header
-  lcdPrintCenteredRow(0, "USTAW CZAS");
+  lcdPrintCentered(0, F("USTAW CZAS"));
+  lcdPrintCentered(1, F(ALIGN_CENTER));
 
-  // Separator
-  LCD_SET(0, 1);
-  LCD_PRINT(" ------------------ ");
-
-  // Centered time line: "< [HH]:MM:SS >" with brackets around active field
   char tbuf[21];
   char hh[3]; char mm[3]; char ss[3];
   snprintf(hh, sizeof(hh), "%02d", hours);
@@ -491,11 +471,8 @@ void drawSetTime() {
     snprintf(tbuf, sizeof(tbuf), "< %s:%s:%s >", hh, mm, ss);
   }
 
-  lcdPrintCenteredRow(2, tbuf);
-
-  // Bottom row: leave empty
-  LCD_SET(0, 3);
-  for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+  lcdPrintCentered(2, tbuf);
+  clearRow(3);
   LCD_DUMP();
 }
 
@@ -503,12 +480,8 @@ void drawSetTime() {
 void drawAlarm() {
   LCD_CLEAR();
 
-  // Centered header
-  lcdPrintCenteredRow(0, "USTAW BUDZIK");
-
-  // Separator
-  LCD_SET(0, 1);
-  LCD_PRINT(" ------------------ ");
+  lcdPrintCentered(0, F("USTAW BUDZIK"));
+  lcdPrintCentered(1, F(ALIGN_CENTER));
 
   // Centered time line: "< [HH]:MM >" with brackets around active field
   char abuf[21];
@@ -524,11 +497,8 @@ void drawAlarm() {
     snprintf(abuf, sizeof(abuf), "< %s:%s >", hh, mm);
   }
 
-  lcdPrintCenteredRow(2, abuf);
-
-  // Bottom row empty for aesthetics
-  LCD_SET(0, 3);
-  for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+  lcdPrintCentered(2, abuf);
+  clearRow(3);
 
   LCD_DUMP();
 }
@@ -537,15 +507,10 @@ void drawAlarm() {
 void drawTimer() {
   LCD_CLEAR();
 
-  // Centered header
-  lcdPrintCenteredRow(0, "MINUTNIK");
+  lcdPrintCentered(0, F("MINUTNIK"));
+  lcdPrintCentered(1, F(ALIGN_CENTER));
 
-  // Separator line
-  LCD_SET(0, 1);
-  LCD_PRINT(" ------------------ ");
-
-  // Build centered time line: when editing show brackets around active field,
-  // when running show remaining time counting down (HH:MM:SS).
+  // Row 2: editable/set time line with left marker.
   char tbuf[21];
   if (timerRunning) {
     unsigned long nowMs = millis();
@@ -555,8 +520,7 @@ void drawTimer() {
     int rh = (int)(remainingMs / 3600000L);
     int rm = (int)((remainingMs % 3600000L) / 60000L);
     int rs = (int)((remainingMs % 60000L) / 1000L);
-    // Show countdown with arrows as requested: "> HH:MM:SS <"
-    snprintf(tbuf, sizeof(tbuf), "> %02d:%02d:%02d <", rh, rm, rs);
+    snprintf(tbuf, sizeof(tbuf), "CZAS: %02d:%02d:%02d", rh, rm, rs);
   } else {
     char hh[3]; char mm[3]; char ss[3];
     snprintf(hh, sizeof(hh), "%02d", timerSetHours);
@@ -570,15 +534,36 @@ void drawTimer() {
     } else if (editState == EDIT_SECONDS) {
       snprintf(tbuf, sizeof(tbuf), "< %s:%s:[%s] >", hh, mm, ss);
     } else {
-      snprintf(tbuf, sizeof(tbuf), "< %s:%s:%s >", hh, mm, ss);
+      snprintf(tbuf, sizeof(tbuf), "CZAS: %s:%s:%s", hh, mm, ss);
     }
   }
 
-  lcdPrintCenteredRow(2, tbuf);
+  LCD_SET(0, 2);
+  if (!timerRunning && editState == EDIT_DONE && timerUiCursor == 0) {
+    LCD_PRINT(F("> "));
+  } else {
+    LCD_PRINT(F("  "));
+  }
+  LCD_PRINT(tbuf);
+  int used = 2 + (int)strlen(tbuf);
+  for (int i = used; i < SCREEN_WIDTH; ++i) LCD_PRINT(F(" "));
 
-  // Bottom row empty for aesthetics
+  // Row 3: quick presets.
   LCD_SET(0, 3);
-  for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+  if (!timerRunning && editState == EDIT_DONE && timerUiCursor == 1) {
+    LCD_PRINT(F("> "));
+  } else {
+    LCD_PRINT(F("  "));
+  }
+
+  const char* p0 = (timerPresetIndex == 0) ? ">[2m]<"  : "[2m]";
+  const char* p1 = (timerPresetIndex == 1) ? ">[15m]<" : "[15m]";
+  const char* p2 = (timerPresetIndex == 2) ? ">[45m]<" : "[45m]";
+  char pbuf[32];
+  snprintf(pbuf, sizeof(pbuf), "%s %s %s", p0, p1, p2);
+  LCD_PRINT(pbuf);
+  int pUsed = 2 + (int)strlen(pbuf);
+  for (int i = pUsed; i < SCREEN_WIDTH; ++i) LCD_PRINT(F(" "));
   LCD_DUMP();
 }
 
@@ -595,12 +580,8 @@ void drawStoper() {
   const int s  = (t / 1000) % 60;
   const int m  = (t / 60000) % 100;
 
-  // Centered header
-  lcdPrintCenteredRow(0, "STOPER");
-
-  // Separator
-  LCD_SET(0, 1);
-  LCD_PRINT(" ------------------ ");
+  lcdPrintCentered(0, F("STOPER"));
+  lcdPrintCentered(1, F(ALIGN_CENTER));
 
   // Centered stopwatch time: "> MM:SS.CS <"
   char buf[21];
@@ -612,11 +593,8 @@ void drawStoper() {
     int rs = (int)((totalMs % 60000UL) / 1000UL);
     int rcs = (int)((totalMs / 10) % 100);
     snprintf(buf, sizeof(buf), "> %02d:%02d:%02d.%02d <", hh, rm, rs, rcs);
-    lcdPrintCenteredRow(2, buf);
-
-    // Bottom empty
-    LCD_SET(0, 3);
-    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+    lcdPrintCentered(2, buf);
+    clearRow(3);
 
     // Update 7-seg to HH:MM:SS (drop centisec on 7-seg)
     uint8_t HHb = ((hh / 10) << 4) | (hh % 10);
@@ -633,11 +611,8 @@ void drawStoper() {
 
   // Default (no hours): "> MM:SS.CS <"
   snprintf(buf, sizeof(buf), "> %02d:%02d.%02d <", m, s, cs);
-  lcdPrintCenteredRow(2, buf);
-
-  // Bottom empty
-  LCD_SET(0, 3);
-  for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+  lcdPrintCentered(2, buf);
+  clearRow(3);
 
   updateSevenSegStoper(m, s, cs);
   LCD_DUMP();
@@ -647,19 +622,19 @@ void drawStoper() {
 void drawDebugSTM32() {
   LCD_CLEAR();
   LCD_SET(2, 0);
-  LCD_PRINT("DEBUG STM32");
+  LCD_PRINT(F("DEBUG STM32"));
   LCD_SET(0, 1);
-  LCD_PRINT("BPM: ");
+  LCD_PRINT(F("BPM: "));
   LCD_PRINT(displayedBPM);
   LCD_SET(0, 2);
-  LCD_PRINT("SPO2: ");
+  LCD_PRINT(F("SPO2: "));
   LCD_PRINT(displayedSPO2);
-  LCD_PRINT("%");
+  LCD_PRINT(F("%"));
   LCD_SET(0, 3);
   if (stm32Connected) {
-    LCD_PRINT("Status: OK");
+    LCD_PRINT(F("Status: OK"));
   } else {
-    LCD_PRINT("Status: OFFLINE");
+    LCD_PRINT(F("Status: OFFLINE"));
   }
   LCD_DUMP();
 }
@@ -667,18 +642,18 @@ void drawDebugSTM32() {
 // --- Pomocnicza do rysowania czasu ---
 void printTime(bool edit) {
   printVal(hours, edit && editState == EDIT_HOURS);
-  LCD_PRINT(":");
+  LCD_PRINT(F(":"));
   printVal(minutes, edit && editState == EDIT_MINUTES);
-  LCD_PRINT(":");
+  LCD_PRINT(F(":"));
   printVal(seconds, edit && editState == EDIT_SECONDS);
 }
 
 // --- Pomocnicza do printTime ---
 void printVal(int v, bool sel) {
-  if (sel) LCD_PRINT("[");
-  if (v < 10) LCD_PRINT("0");
+  if (sel) LCD_PRINT(F("["));
+  if (v < 10) LCD_PRINT(F("0"));
   LCD_PRINT(v);
-  if (sel) LCD_PRINT("]");
+  if (sel) LCD_PRINT(F("]"));
 }
 
 // ============================================================================
@@ -702,7 +677,7 @@ static bool isEns160State(AppState state) {
 
 static void printEnsFloatOrDash(bool available, float value, uint8_t width = 4, uint8_t precision = 1) {
   if (!available) {
-    LCD_PRINT("--");
+    LCD_PRINT(F("--"));
     return;
   }
 
@@ -713,12 +688,12 @@ static void printEnsFloatOrDash(bool available, float value, uint8_t width = 4, 
 
 static void printEnsAgeSeconds(uint32_t lastUpdateMs) {
   if (lastUpdateMs == 0) {
-    LCD_PRINT("--s");
+    LCD_PRINT(F("--s"));
     return;
   }
 
   LCD_PRINT((millis() - lastUpdateMs) / 1000UL);
-  LCD_PRINT("s");
+  LCD_PRINT(F("s"));
 }
 
 struct Ens160UiHistory {
@@ -802,45 +777,45 @@ static void updateEns160UiHistory(const ENS160AHT21Screen::RuntimeData& data) {
 static void printEnsMenuValue(int itemIndex, const ENS160AHT21Screen::RuntimeData& data) {
   switch (itemIndex) {
     case 0:
-      LCD_PRINT("AQI: ");
+      LCD_PRINT(F("AQI: "));
       if (data.hasGasSample) {
         LCD_PRINT(data.aqi);
       } else {
-        LCD_PRINT("--");
+        LCD_PRINT(F("--"));
       }
       break;
     case 1:
-      LCD_PRINT("TVOC: ");
+      LCD_PRINT(F("TVOC: "));
       if (data.hasGasSample) {
         LCD_PRINT(data.tvoc);
       } else {
-        LCD_PRINT("--");
+        LCD_PRINT(F("--"));
       }
       break;
     case 2:
-      LCD_PRINT("eCO2: ");
+      LCD_PRINT(F("eCO2: "));
       if (data.hasGasSample) {
         LCD_PRINT(data.eco2);
       } else {
-        LCD_PRINT("--");
+        LCD_PRINT(F("--"));
       }
       break;
     case 3:
-      LCD_PRINT("Temp: ");
+      LCD_PRINT(F("Temp: "));
       printEnsFloatOrDash(data.hasClimateSample, data.temperatureC, 4, 1);
       if (data.hasClimateSample) {
-        LCD_PRINT(" C");
+        LCD_PRINT(F(" C"));
       }
       break;
     case 4:
-      LCD_PRINT("Hum: ");
+      LCD_PRINT(F("Hum: "));
       printEnsFloatOrDash(data.hasClimateSample, data.humidityPct, 3, 0);
       if (data.hasClimateSample) {
-        LCD_PRINT(" %");
+        LCD_PRINT(F(" %"));
       }
       break;
     case 5:
-      LCD_PRINT("Status: ");
+      LCD_PRINT(F("Status: "));
       for (uint8_t idx = 0; idx < 10 && data.statusText[idx] != '\0'; ++idx) {
         LCD_PRINT(data.statusText[idx]);
       }
@@ -877,10 +852,11 @@ void drawStats() {
   const AppStats stats = statsManager.getStats();
   updateEns160UiHistory(ENS160AHT21Screen::runtimeData);
 
+  switch (appState) {
   // === 1. MENU STATYSTYK (LISTA Z LICZBAMI) ===
-  if (appState == STATE_STATS) {
+  case STATE_STATS: {
     LCD_SET(2, 0);
-    LCD_PRINT("MENU STATYSTYK");
+    LCD_PRINT(F("MENU STATYSTYK"));
 
     const int first = (statsMenuIndex / STATS_ITEMS_PER_PAGE) * STATS_ITEMS_PER_PAGE;
 
@@ -889,36 +865,37 @@ void drawStats() {
       if (i >= statsMenuCount) break;
 
       LCD_SET(0, row + 1);
-      LCD_PRINT(i == statsMenuIndex ? "> " : "  ");
+      LCD_PRINT(i == statsMenuIndex ? F("> ") : F("  "));
 
       switch (i) {
         case 0:
-          LCD_PRINT("Kliki ");
+          LCD_PRINT(F("Kliki "));
           LCD_PRINT(stats.totalClicks);
           break;
         case 1:
-          LCD_PRINT("Kroki ");
+          LCD_PRINT(F("Kroki "));
           LCD_PRINT(statsManager.getTotalSteps());
           break;
         case 2:
-          LCD_PRINT("Temp min/max");
+          LCD_PRINT(F("Temp min/max"));
           break;
         case 3:
-          LCD_PRINT("Wilg min/max");
+          LCD_PRINT(F("Wilg min/max"));
           break;
         case 4:
-          LCD_PRINT("Zasoby");
+          LCD_PRINT(F("Zasoby"));
           break;
         case 5:
-          LCD_PRINT("Wyjscie");
+          LCD_PRINT(F("Wyjscie"));
           break;
       }
     }
+    break;
   }
   // === 1b. MENU PMS5003 (LISTA Z WYBOREM) ===
-  else if (appState == STATE_PMS5003) {
+  case STATE_PMS5003: {
     LCD_SET(2, 0);
-    LCD_PRINT("MENU PMS5003");
+    LCD_PRINT(F("MENU PMS5003"));
 
     const int first = (pms5003MenuIndex / 3) * 3;
 
@@ -927,13 +904,14 @@ void drawStats() {
       if (i >= pms5003MenuCount) break;
 
       LCD_SET(0, row + 1);
-      LCD_PRINT(i == pms5003MenuIndex ? "> " : "  ");
+      LCD_PRINT(i == pms5003MenuIndex ? F("> ") : F("  "));
       LCD_PRINT(pms5003MenuItems[i]);
     }
+    break;
   }
-  else if (appState == STATE_ENS160_AHT21) {
+  case STATE_ENS160_AHT21: {
     LCD_SET(1, 0);
-    LCD_PRINT("AHT21 + ENS160");
+    LCD_PRINT(F("AHT21 + ENS160"));
 
     const int first = (ens160MenuIndex / 3) * 3;
     for (int row = 0; row < 3; row++) {
@@ -941,151 +919,158 @@ void drawStats() {
       if (i >= ens160MenuCount) break;
 
       LCD_SET(0, row + 1);
-      LCD_PRINT(i == ens160MenuIndex ? "> " : "  ");
+      LCD_PRINT(i == ens160MenuIndex ? F("> ") : F("  "));
       printEnsMenuValue(i, ENS160AHT21Screen::runtimeData);
     }
+    break;
   }
-  else if (appState == STATE_ENS160_AHT21_GAS_AQI) {
+  case STATE_ENS160_AHT21_GAS_AQI: {
     const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
 
     LCD_SET(0, 0);
-    LCD_PRINT("AQI");
+    LCD_PRINT(F("AQI"));
     LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(F("Biezaca: "));
     if (data.hasGasSample) {
       LCD_PRINT(data.aqi);
     } else {
-      LCD_PRINT("--");
+      LCD_PRINT(F("--"));
     }
     LCD_SET(0, 2);
     if (s_ens160UiHistory.hasAqi) {
-      LCD_PRINT("Min:");
+      LCD_PRINT(F("Min:"));
       LCD_PRINT(s_ens160UiHistory.minAqi);
-      LCD_PRINT(" Max:");
+      LCD_PRINT(F(" Max:"));
       LCD_PRINT(s_ens160UiHistory.maxAqi);
     } else {
-      LCD_PRINT("Min:-- Max:--");
+      LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
-  else if (appState == STATE_ENS160_AHT21_GAS_TVOC) {
+  case STATE_ENS160_AHT21_GAS_TVOC: {
     const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
 
     LCD_SET(0, 0);
-    LCD_PRINT("TVOC");
+    LCD_PRINT(F("TVOC"));
     LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(F("Biezaca: "));
     if (data.hasGasSample) {
       LCD_PRINT(data.tvoc);
-      LCD_PRINT(" ppb");
+      LCD_PRINT(F(" ppb"));
     } else {
-      LCD_PRINT("--");
+      LCD_PRINT(F("--"));
     }
     LCD_SET(0, 2);
     if (s_ens160UiHistory.hasTvoc) {
-      LCD_PRINT("Min:");
+      LCD_PRINT(F("Min:"));
       LCD_PRINT(s_ens160UiHistory.minTvoc);
-      LCD_PRINT(" Max:");
+      LCD_PRINT(F(" Max:"));
       LCD_PRINT(s_ens160UiHistory.maxTvoc);
     } else {
-      LCD_PRINT("Min:-- Max:--");
+      LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
-  else if (appState == STATE_ENS160_AHT21_GAS_ECO2) {
+  case STATE_ENS160_AHT21_GAS_ECO2: {
     const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
 
     LCD_SET(0, 0);
-    LCD_PRINT("eCO2");
+    LCD_PRINT(F("eCO2"));
     LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(F("Biezaca: "));
     if (data.hasGasSample) {
       LCD_PRINT(data.eco2);
-      LCD_PRINT(" ppm");
+      LCD_PRINT(F(" ppm"));
     } else {
-      LCD_PRINT("--");
+      LCD_PRINT(F("--"));
     }
     LCD_SET(0, 2);
     if (s_ens160UiHistory.hasEco2) {
-      LCD_PRINT("Min:");
+      LCD_PRINT(F("Min:"));
       LCD_PRINT(s_ens160UiHistory.minEco2);
-      LCD_PRINT(" Max:");
+      LCD_PRINT(F(" Max:"));
       LCD_PRINT(s_ens160UiHistory.maxEco2);
     } else {
-      LCD_PRINT("Min:-- Max:--");
+      LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
-  else if (appState == STATE_ENS160_AHT21_CLIMATE_TEMP) {
+  case STATE_ENS160_AHT21_CLIMATE_TEMP: {
     const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
 
     LCD_SET(0, 0);
-    LCD_PRINT("Temperatura");
+    LCD_PRINT(F("Temperatura"));
     LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(F("Biezaca: "));
     printEnsFloatOrDash(data.hasClimateSample, data.temperatureC);
     if (data.hasClimateSample) {
-      LCD_PRINT(" C");
+      LCD_PRINT(F(" C"));
     }
     LCD_SET(0, 2);
     if (s_ens160UiHistory.hasTemp) {
-      LCD_PRINT("Min:");
+      LCD_PRINT(F("Min:"));
       printEnsFloatOrDash(true, s_ens160UiHistory.minTemp, 4, 1);
-      LCD_PRINT(" Max:");
+      LCD_PRINT(F(" Max:"));
       printEnsFloatOrDash(true, s_ens160UiHistory.maxTemp, 4, 1);
     } else {
-      LCD_PRINT("Min:-- Max:--");
+      LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
-  else if (appState == STATE_ENS160_AHT21_CLIMATE_HUM) {
+  case STATE_ENS160_AHT21_CLIMATE_HUM: {
     const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
 
     LCD_SET(0, 0);
-    LCD_PRINT("Wilgotnosc");
+    LCD_PRINT(F("Wilgotnosc"));
     LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
+    LCD_PRINT(F("Biezaca: "));
     printEnsFloatOrDash(data.hasClimateSample, data.humidityPct);
     if (data.hasClimateSample) {
-      LCD_PRINT(" %");
+      LCD_PRINT(F(" %"));
     }
     LCD_SET(0, 2);
     if (s_ens160UiHistory.hasHum) {
-      LCD_PRINT("Min:");
+      LCD_PRINT(F("Min:"));
       printEnsFloatOrDash(true, s_ens160UiHistory.minHum, 3, 0);
-      LCD_PRINT(" Max:");
+      LCD_PRINT(F(" Max:"));
       printEnsFloatOrDash(true, s_ens160UiHistory.maxHum, 3, 0);
     } else {
-      LCD_PRINT("Min:-- Max:--");
+      LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
-  else if (appState == STATE_ENS160_AHT21_STATUS) {
+  case STATE_ENS160_AHT21_STATUS: {
     const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
 
     LCD_SET(0, 0);
-    LCD_PRINT("Status");
+    LCD_PRINT(F("Status"));
     LCD_SET(0, 1);
-    LCD_PRINT("Status: ");
+    LCD_PRINT(F("Status: "));
     LCD_PRINT(data.statusText);
     LCD_SET(0, 2);
-    LCD_PRINT("Gaz:");
-    LCD_PRINT(data.hasGasSample ? "OK" : "--");
-    LCD_PRINT(" Klim:");
-    LCD_PRINT(data.hasClimateSample ? "OK" : "--");
+    LCD_PRINT(F("Gaz:"));
+    LCD_PRINT(data.hasGasSample ? F("OK") : F("--"));
+    LCD_PRINT(F(" Klim:"));
+    LCD_PRINT(data.hasClimateSample ? F("OK") : F("--"));
     LCD_SET(0, 3);
-    LCD_PRINT("Ostatnia: ");
+    LCD_PRINT(F("Ostatnia: "));
     printEnsAgeSeconds(data.lastUpdateMs);
+    break;
   }
   // === 1c. MENU USTAWIEŃ (Settings) ===
-  else if (appState == STATE_SETTINGS) {
+  case STATE_SETTINGS: {
     LCD_SET(2, 0);
-    LCD_PRINT("USTAWIENIA");
+    LCD_PRINT(F("USTAWIENIA"));
 
     const int first = (settingsMenuIndex / 3) * 3;
 
@@ -1094,175 +1079,203 @@ void drawStats() {
       if (i >= settingsMenuCount) break;
 
       LCD_SET(0, row + 1);
-      LCD_PRINT(i == settingsMenuIndex ? "> " : "  ");
+      LCD_PRINT(i == settingsMenuIndex ? F("> ") : F("  "));
       LCD_PRINT(settingsMenuItems[i]);
     }
+    break;
   }
   // === 1d. USTAWIENIA PMS5003 (włącz/wyłącz) ===
-  else if (appState == STATE_SETTINGS_PMS5003) {
-    // Centered header
-    lcdPrintCenteredRow(0, "PMS5003");
+  case STATE_SETTINGS_PMS5003: {
+    lcdPrintCentered(0, F("PMS5003"));
+    lcdPrintCentered(1, F(ALIGN_CENTER));
 
-    // Separator
-    LCD_SET(0, 1);
-    LCD_PRINT(" ------------------ ");
-
-    // Centered state line
     char pbuf[21];
     const char* pstate = settingsPmsMenuIndex == 0 ? "ON" : "OFF";
     snprintf(pbuf, sizeof(pbuf), "SENSOR: <  %s  >", pstate);
-    lcdPrintCenteredRow(2, pbuf);
-
-    // Bottom empty
-    LCD_SET(0, 3);
-    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+    lcdPrintCentered(2, pbuf);
+    clearRow(3);
+    break;
   }
   // === 1e. USTAWIENIA BUZERA (włącz/wyłącz) ===
-  else if (appState == STATE_SETTINGS_BUZZER) {
-    // Centered header
-    lcdPrintCenteredRow(0, "BUZZER");
+  case STATE_SETTINGS_BUZZER: {
+    lcdPrintCentered(0, F("BUZZER"));
+    lcdPrintCentered(1, F(ALIGN_CENTER));
 
-    // Separator
-    LCD_SET(0, 1);
-    LCD_PRINT(" ------------------ ");
-
-    // Centered state line
     char bbuf[21];
     const char* bstate = settingsBuzzerMenuIndex == 0 ? "ON" : "OFF";
     snprintf(bbuf, sizeof(bbuf), "STAN:   <  %s  >", bstate);
-    lcdPrintCenteredRow(2, bbuf);
-
-    // Bottom empty
-    LCD_SET(0, 3);
-    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+    lcdPrintCentered(2, bbuf);
+    clearRow(3);
+    break;
   }
   // === 1f. USTAWIENIA MQTT (włącz/wyłącz) ===
-  else if (appState == STATE_SETTINGS_MQTT) {
-    // Centered header
-    lcdPrintCenteredRow(0, "MQTT");
+  case STATE_SETTINGS_MQTT: {
+    lcdPrintCentered(0, F("MQTT"));
+    lcdPrintCentered(1, F(ALIGN_CENTER));
 
-    // Separator
-    LCD_SET(0, 1);
-    LCD_PRINT(" ------------------ ");
-
-    // Centered broker on/off line
     char buf[21];
     const char* state = settingsMqttMenuIndex == 0 ? "ON" : "OFF";
     snprintf(buf, sizeof(buf), "BROKER: <  %s  >", state);
-    lcdPrintCenteredRow(2, buf);
-
-    // Bottom row empty (instructions on selection screen)
-    LCD_SET(0, 3);
-    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+    lcdPrintCentered(2, buf);
+    clearRow(3);
+    break;
   }
   // === 1g. USTAWIENIE: ROTACJA EKRANU (1..10s, enkoder) ===
-  else if (appState == STATE_SETTINGS_ROTATION) {
-    // Header (centered)
-    lcdPrintCenteredRow(0, "ROTACJA EKRANU");
+  case STATE_SETTINGS_ROTATION: {
+    lcdPrintCentered(0, F("ROTACJA EKRANU"));
+    lcdPrintCentered(1, F(ALIGN_CENTER));
 
-    // Separator: centered dashes
-    LCD_SET(0, 1);
-    LCD_PRINT(" ------------------ ");
-
-    // Row 2: CZAS with left/right markers, centered
     char valueBuf[32];
     snprintf(valueBuf, sizeof(valueBuf), "CZAS: < %2ds >", settingsRotationSec);
-    lcdPrintCenteredRow(2, valueBuf);
-
-    // Row 3: empty (instructions are on the second line already)
-    LCD_SET(0, 3);
-    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+    lcdPrintCentered(2, valueBuf);
+    clearRow(3);
+    break;
   }
-  // === 1h. USTAWIENIE: SYNCHRONIZACJA NTP (10..360 min, enkoder) ===
-  else if (appState == STATE_SETTINGS_SYNC) {
-    // Header
-    lcdPrintCenteredRow(0, "SYNCHRONIZACJA");
-
-    // Separator
+  // === 1x. Lista budzików ===
+  case STATE_ALARMS_LIST: {
+    lcdPrintCentered(0, F("BUDZIKI"));
     LCD_SET(0, 1);
-    LCD_PRINT(" ------------------ ");
+    const int first = (alarmsMenuIndex / 3) * 3;
+    for (int row = 0; row < 3; ++row) {
+      int idx = first + row;
+      LCD_SET(0, row + 1);
+      if (idx > alarmsCount) break;
+      if (idx == alarmsMenuIndex) LCD_PRINT(F("> ")); else LCD_PRINT(F("  "));
+      if (idx < alarmsCount) {
+        char buf[21];
+        snprintf(buf, sizeof(buf), "%2d. %02d:%02d [%s]   ", idx+1, alarms[idx].hour, alarms[idx].minute, alarms[idx].enabled ? "ON" : "OFF");
+        LCD_PRINT(buf);
+      } else if (idx == alarmsCount) {
+        LCD_PRINT(F("[+] DODAJ NOWY   "));
+      } else {
+        LCD_PRINT(F("                    "));
+      }
+    }
+    break;
+  }
+  // === 1y. Edycja budzika (ergonomiczna: kursor po lewej, opcja USUN) ===
+  case STATE_ALARM_EDIT: {
+    char header[21];
+    snprintf(header, sizeof(header), "EDYCJA BUDZIKA %d", selectedAlarmIndex + 1);
+    lcdPrintCentered(0, header);
 
-    // Row 2: minutes value
+    lcdPrintCentered(1, F(ALIGN_CENTER));
+
+    LCD_SET(0, 2);
+    char tline[21];
+    const int ah = alarms[selectedAlarmIndex].hour;
+    const int am = alarms[selectedAlarmIndex].minute;
+    if (editState == EDIT_HOURS) {
+      LCD_PRINT(F("> "));
+      snprintf(tline, sizeof(tline), "CZAS:  [%02d]:%02d   ", ah, am);
+    } else if (editState == EDIT_MINUTES) {
+      LCD_PRINT(F("> "));
+      snprintf(tline, sizeof(tline), "CZAS:   %02d:[%02d]  ", ah, am);
+    } else {
+      if (alarmEditCursor == 0) LCD_PRINT(F("> ")); else LCD_PRINT(F("  "));
+      snprintf(tline, sizeof(tline), "CZAS:   %02d:%02d    ", ah, am);
+    }
+    LCD_PRINT(tline);
+
+    LCD_SET(0, 3);
+    if (alarmEditCursor == 2) {
+      LCD_PRINT(F("> USUN BUDZIK   "));
+    } else {
+      if (alarmEditCursor == 1) LCD_PRINT(F("> ")); else LCD_PRINT(F("  "));
+      char sline[21];
+      snprintf(sline, sizeof(sline), "STATUS: [ %s ]    ", alarms[selectedAlarmIndex].enabled ? "ON" : "OFF");
+      LCD_PRINT(sline);
+    }
+    break;
+  }
+  
+  // === 1h. USTAWIENIE: SYNCHRONIZACJA NTP (10..360 min, enkoder) ===
+  case STATE_SETTINGS_SYNC: {
+    lcdPrintCentered(0, F("SYNCHRONIZACJA"));
+    lcdPrintCentered(1, F(ALIGN_CENTER));
+
     char valueBuf[32];
     snprintf(valueBuf, sizeof(valueBuf), "CZAS: < %3dmin >", settingsSyncMinutes);
-    lcdPrintCenteredRow(2, valueBuf);
-
-    // Row 3: empty
-    LCD_SET(0, 3);
-    for (int i = 0; i < 20; ++i) LCD_PRINT(" ");
+    lcdPrintCentered(2, valueBuf);
+    clearRow(3);
+    break;
   }
   // === 2. WIDOK KLIKNIĘĆ ===
-  else if (appState == STATE_STATS_CLICKS) {
+  case STATE_STATS_CLICKS: {
     LCD_SET(0, 0);
-    LCD_PRINT("LICZNIK KLIKNIEC");
+    LCD_PRINT(F("LICZNIK KLIKNIEC"));
     LCD_SET(0, 1);
-    LCD_PRINT("Razem: ");
+    LCD_PRINT(F("Razem: "));
     LCD_PRINT(stats.totalClicks);
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 3. WIDOK KROKÓW ===
-  else if (appState == STATE_STATS_STEPS) {
+  case STATE_STATS_STEPS: {
     LCD_SET(0, 0);
-    LCD_PRINT("LICZNIK KROKOW");
+    LCD_PRINT(F("LICZNIK KROKOW"));
     LCD_SET(0, 1);
-    LCD_PRINT("L: ");
+    LCD_PRINT(F("L: "));
     LCD_PRINT(stats.stepsLeft);
     LCD_SET(10, 1);
-    LCD_PRINT("R: ");
+    LCD_PRINT(F("R: "));
     LCD_PRINT(stats.stepsRight);
     LCD_SET(0, 2);
-    LCD_PRINT("Suma: ");
+    LCD_PRINT(F("Suma: "));
     LCD_PRINT(statsManager.getTotalSteps());
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 4. WIDOK TEMPERATURY MIN/MAX ===
-  else if (appState == STATE_STATS_TEMP) {
+  case STATE_STATS_TEMP: {
     const EnvStats e = statsManager.getEnvStats();
     char buf[10];
 
     LCD_SET(0, 0);
-    LCD_PRINT("TEMPERATURA");
+    LCD_PRINT(F("TEMPERATURA"));
 
     LCD_SET(0, 1);
-    LCD_PRINT("MIN: ");
+    LCD_PRINT(F("MIN: "));
     dtostrf(e.tempMin, 4, 1, buf);
     LCD_PRINT(buf);
 
     LCD_SET(0, 2);
-    LCD_PRINT("MAX: ");
+    LCD_PRINT(F("MAX: "));
     dtostrf(e.tempMax, 4, 1, buf);
     LCD_PRINT(buf);
 
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 5. WIDOK WILGOTNOŚCI MIN/MAX ===
-  else if (appState == STATE_STATS_HUM) {
+  case STATE_STATS_HUM: {
     const EnvStats e = statsManager.getEnvStats();
     char buf[10];
 
     LCD_SET(0, 0);
-    LCD_PRINT("WILGOTNOSC");
+    LCD_PRINT(F("WILGOTNOSC"));
 
     LCD_SET(0, 1);
-    LCD_PRINT("MIN: ");
+    LCD_PRINT(F("MIN: "));
     dtostrf(e.humMin, 4, 1, buf);
     LCD_PRINT(buf);
 
     LCD_SET(0, 2);
-    LCD_PRINT("MAX: ");
+    LCD_PRINT(F("MAX: "));
     dtostrf(e.humMax, 4, 1, buf);
     LCD_PRINT(buf);
 
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 5b. MENU ZASOBÓW SYSTEMU ===
-  else if (appState == STATE_STATS_RESOURCES_MENU) {
+  case STATE_STATS_RESOURCES_MENU: {
     LCD_SET(1, 0);
-    LCD_PRINT("ZASOBY SYSTEMU");
+    LCD_PRINT(F("ZASOBY SYSTEMU"));
 
     const int first = (resourcesMenuIndex / 3) * 3;
 
@@ -1271,253 +1284,197 @@ void drawStats() {
       if (i >= resourcesMenuCount) break;
 
       LCD_SET(0, row + 1);
-      LCD_PRINT(i == resourcesMenuIndex ? "> " : "  ");
+      LCD_PRINT(i == resourcesMenuIndex ? F("> ") : F("  "));
       LCD_PRINT(resourcesMenuItems[i]);
     }
+    break;
   }
   // === 5c. WIDOK PAMIĘCI RAM ===
-  else if (appState == STATE_STATS_RESOURCES_RAM) {
-    char buf[10];
+  case STATE_STATS_RESOURCES_RAM: {
     uint32_t ramMB = ramFreeBytes / (1024 * 1024);
     uint32_t ramKB = (ramFreeBytes % (1024 * 1024)) / 1024;
 
     LCD_SET(0, 0);
-    LCD_PRINT("PAMIEC RAM");
+    LCD_PRINT(F("PAMIEC RAM"));
 
     LCD_SET(0, 1);
-    LCD_PRINT("Free: ");
+    LCD_PRINT(F("Free: "));
     LCD_PRINT(ramMB);
-    LCD_PRINT(".");
+    LCD_PRINT(F("."));
     LCD_PRINT(ramKB);
-    LCD_PRINT(" MB");
+    LCD_PRINT(F(" MB"));
 
     LCD_SET(0, 2);
-    LCD_PRINT("Bytes: ");
+    LCD_PRINT(F("Bytes: "));
     LCD_PRINT(ramFreeBytes);
 
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 5d. WIDOK OBCIĄŻENIA CPU ===
-  else if (appState == STATE_STATS_RESOURCES_CPU) {
+  case STATE_STATS_RESOURCES_CPU: {
     LCD_SET(0, 0);
-    LCD_PRINT("CPU LOAD");
+    LCD_PRINT(F("CPU LOAD"));
 
     LCD_SET(0, 1);
-    LCD_PRINT("Calkowite: ");
+    LCD_PRINT(F("Calkowite: "));
     LCD_PRINT(cpuLoadPercent);
-    LCD_PRINT("%");
+    LCD_PRINT(F("%"));
 
     LCD_SET(0, 2);
-    LCD_PRINT("CORE0: ");
+    LCD_PRINT(F("CORE0: "));
     LCD_PRINT(cpuCore0Percent);
-    LCD_PRINT("%");
+    LCD_PRINT(F("%"));
 
     LCD_SET(0, 3);
-    LCD_PRINT("CORE1: ");
+    LCD_PRINT(F("CORE1: "));
     LCD_PRINT(cpuCore1Percent);
-    LCD_PRINT("%");
+    LCD_PRINT(F("%"));
+    break;
   }
   // === 5e. WIDOK PAMIĘCI FLASH ===
-  else if (appState == STATE_STATS_RESOURCES_FLASH) {
-    char buf[10];
+  case STATE_STATS_RESOURCES_FLASH: {
     uint32_t flashMB = flashFreeBytes / (1024 * 1024);
     uint32_t flashKB = (flashFreeBytes % (1024 * 1024)) / 1024;
 
     LCD_SET(0, 0);
-    LCD_PRINT("PAMIEC FLASH");
+    LCD_PRINT(F("PAMIEC FLASH"));
 
     LCD_SET(0, 1);
-    LCD_PRINT("Free: ");
+    LCD_PRINT(F("Free: "));
     LCD_PRINT(flashMB);
-    LCD_PRINT(".");
+    LCD_PRINT(F("."));
     LCD_PRINT(flashKB);
-    LCD_PRINT(" MB");
+    LCD_PRINT(F(" MB"));
 
     LCD_SET(0, 2);
-    LCD_PRINT("Bytes: ");
+    LCD_PRINT(F("Bytes: "));
     LCD_PRINT(flashFreeBytes);
 
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 6. WIDOK PMS5003 TRYB FABRYCZNY CF=1 (BIEŻĄCE DANE Z WYBOREM) ===
-  else if (appState == STATE_PMS5003_CF1) {
+  case STATE_PMS5003_CF1: {
     LCD_SET(0, 0);
-    LCD_PRINT("PMS5003 CF=1");
+    LCD_PRINT(F("PMS5003 CF=1"));
     
     // Wiersz 1: PM1.0 (z > jeśli wybrany)
     LCD_SET(0, 1);
-    LCD_PRINT(pms5003CF1MenuIndex == 0 ? ">" : " ");
-    LCD_PRINT(" PM1.0: ");
+    LCD_PRINT(pms5003CF1MenuIndex == 0 ? F(">") : F(" "));
+    LCD_PRINT(F(" PM1.0: "));
     LCD_PRINT(pms5003_PM1_0_CF1 > 0 ? pms5003_PM1_0_CF1 : 0);
-    LCD_PRINT(" µg/m3");
+    LCD_PRINT(F(" \xE4g/m3"));
     
-    // Wiersz 2: PM2.5 (z > jeśli wybrany)
+    // Wiersz 2: PM2.5
     LCD_SET(0, 2);
-    LCD_PRINT(pms5003CF1MenuIndex == 1 ? ">" : " ");
-    LCD_PRINT(" PM2.5: ");
+    LCD_PRINT(pms5003CF1MenuIndex == 1 ? F(">") : F(" "));
+    LCD_PRINT(F(" PM2.5: "));
     LCD_PRINT(pms5003_PM2_5_CF1 > 0 ? pms5003_PM2_5_CF1 : 0);
-    LCD_PRINT(" µg/m3");
+    LCD_PRINT(F(" \xE4g/m3"));
     
-    // Wiersz 3: PM10 (z > jeśli wybrany)
+    // Wiersz 3: PM10
     LCD_SET(0, 3);
-    LCD_PRINT(pms5003CF1MenuIndex == 2 ? ">" : " ");
-    LCD_PRINT(" PM10:  ");
+    LCD_PRINT(pms5003CF1MenuIndex == 2 ? F(">") : F(" "));
+    LCD_PRINT(F(" PM10:  "));
     LCD_PRINT(pms5003_PM10_CF1 > 0 ? pms5003_PM10_CF1 : 0);
-    LCD_PRINT(" µg/m3");
+    LCD_PRINT(F(" \xE4g/m3"));
+    break;
   }
   // === 6a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB CF=1 (MIN/MAX) ===
-  else if (appState == STATE_PMS5003_CF1_PM1) {
-    LCD_SET(0, 0);
-    LCD_PRINT("PM1.0 CF=1");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_PM1_0_CF1);
-    LCD_PRINT(" µg/m3");
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_PM1_0_CF1_MIN < 9999 ? pms5003_PM1_0_CF1_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_PM1_0_CF1_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_CF1_PM1: {
+    LCD_SET(0, 0); LCD_PRINT(F("PM1.0 CF=1"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM1_0_CF1); LCD_PRINT(F(" \xE4g/m3"));
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM1_0_CF1_MIN < 9999 ? pms5003_PM1_0_CF1_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM1_0_CF1_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 6b. WIDOK SZCZEGÓŁÓW PM2.5 TRYB CF=1 (MIN/MAX) ===
-  else if (appState == STATE_PMS5003_CF1_PM25) {
-    LCD_SET(0, 0);
-    LCD_PRINT("PM2.5 CF=1");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_PM2_5_CF1);
-    LCD_PRINT(" µg/m3");
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_PM2_5_CF1_MIN < 9999 ? pms5003_PM2_5_CF1_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_PM2_5_CF1_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_CF1_PM25: {
+    LCD_SET(0, 0); LCD_PRINT(F("PM2.5 CF=1"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM2_5_CF1); LCD_PRINT(F(" \xE4g/m3"));
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM2_5_CF1_MIN < 9999 ? pms5003_PM2_5_CF1_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM2_5_CF1_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 6c. WIDOK SZCZEGÓŁÓW PM10 TRYB CF=1 (MIN/MAX) ===
-  else if (appState == STATE_PMS5003_CF1_PM10) {
-    LCD_SET(0, 0);
-    LCD_PRINT("PM10 CF=1");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_PM10_CF1);
-    LCD_PRINT(" µg/m3");
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_PM10_CF1_MIN < 9999 ? pms5003_PM10_CF1_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_PM10_CF1_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_CF1_PM10: {
+    LCD_SET(0, 0); LCD_PRINT(F("PM10 CF=1"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM10_CF1); LCD_PRINT(F(" \xE4g/m3"));
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM10_CF1_MIN < 9999 ? pms5003_PM10_CF1_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM10_CF1_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 7. WIDOK PMS5003 TRYB ATMOSFERYCZNY (BIEŻĄCE DANE Z WYBOREM) ===
-  else if (appState == STATE_PMS5003_ATM) {
+  case STATE_PMS5003_ATM: {
     LCD_SET(0, 0);
-    LCD_PRINT("PMS5003 ATM");
+    LCD_PRINT(F("PMS5003 ATM"));
     
-    // Wiersz 1: PM1.0 (z > jeśli wybrany)
+    // Wiersz 1: PM1.0
     LCD_SET(0, 1);
-    LCD_PRINT(pms5003ATMMenuIndex == 0 ? ">" : " ");
-    LCD_PRINT(" PM1.0: ");
+    LCD_PRINT(pms5003ATMMenuIndex == 0 ? F(">") : F(" "));
+    LCD_PRINT(F(" PM1.0: "));
     LCD_PRINT(pms5003_PM1_0_ATM > 0 ? pms5003_PM1_0_ATM : 0);
-    LCD_PRINT(" µg/m3");
+    LCD_PRINT(F(" \xE4g/m3"));
     
-    // Wiersz 2: PM2.5 (z > jeśli wybrany)
+    // Wiersz 2: PM2.5
     LCD_SET(0, 2);
-    LCD_PRINT(pms5003ATMMenuIndex == 1 ? ">" : " ");
-    LCD_PRINT(" PM2.5: ");
+    LCD_PRINT(pms5003ATMMenuIndex == 1 ? F(">") : F(" "));
+    LCD_PRINT(F(" PM2.5: "));
     LCD_PRINT(pms5003_PM2_5_ATM > 0 ? pms5003_PM2_5_ATM : 0);
-    LCD_PRINT(" µg/m3");
+    LCD_PRINT(F(" \xE4g/m3"));
     
-    // Wiersz 3: PM10 (z > jeśli wybrany)
+    // Wiersz 3: PM10
     LCD_SET(0, 3);
-    LCD_PRINT(pms5003ATMMenuIndex == 2 ? ">" : " ");
-    LCD_PRINT(" PM10:  ");
+    LCD_PRINT(pms5003ATMMenuIndex == 2 ? F(">") : F(" "));
+    LCD_PRINT(F(" PM10:  "));
     LCD_PRINT(pms5003_PM10_ATM > 0 ? pms5003_PM10_ATM : 0);
-    LCD_PRINT(" µg/m3");
+    LCD_PRINT(F(" \xE4g/m3"));
+    break;
   }
   // === 7a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB ATM (MIN/MAX) ===
-  else if (appState == STATE_PMS5003_ATM_PM1) {
-    LCD_SET(0, 0);
-    LCD_PRINT("PM1.0 ATM");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_PM1_0_ATM);
-    LCD_PRINT(" µg/m3");
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_PM1_0_ATM_MIN < 9999 ? pms5003_PM1_0_ATM_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_PM1_0_ATM_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_ATM_PM1: {
+    LCD_SET(0, 0); LCD_PRINT(F("PM1.0 ATM"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM1_0_ATM); LCD_PRINT(F(" \xE4g/m3"));
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM1_0_ATM_MIN < 9999 ? pms5003_PM1_0_ATM_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM1_0_ATM_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 7b. WIDOK SZCZEGÓŁÓW PM2.5 TRYB ATM (MIN/MAX) ===
-  else if (appState == STATE_PMS5003_ATM_PM25) {
-    LCD_SET(0, 0);
-    LCD_PRINT("PM2.5 ATM");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_PM2_5_ATM);
-    LCD_PRINT(" µg/m3");
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_PM2_5_ATM_MIN < 9999 ? pms5003_PM2_5_ATM_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_PM2_5_ATM_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_ATM_PM25: {
+    LCD_SET(0, 0); LCD_PRINT(F("PM2.5 ATM"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM2_5_ATM); LCD_PRINT(F(" \xE4g/m3"));
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM2_5_ATM_MIN < 9999 ? pms5003_PM2_5_ATM_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM2_5_ATM_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
   // === 7c. WIDOK SZCZEGÓŁÓW PM10 TRYB ATM (MIN/MAX) ===
-  else if (appState == STATE_PMS5003_ATM_PM10) {
-    LCD_SET(0, 0);
-    LCD_PRINT("PM10 ATM");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_PM10_ATM);
-    LCD_PRINT(" µg/m3");
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_PM10_ATM_MIN < 9999 ? pms5003_PM10_ATM_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_PM10_ATM_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_ATM_PM10: {
+    LCD_SET(0, 0); LCD_PRINT(F("PM10 ATM"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM10_ATM); LCD_PRINT(F(" \xE4g/m3"));
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM10_ATM_MIN < 9999 ? pms5003_PM10_ATM_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM10_ATM_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
 
   // ========== Particles ==========
-  else if (appState == STATE_PMS5003_PARTICLES) {
+  case STATE_PMS5003_PARTICLES: {
     LCD_SET(0, 0);
-    LCD_PRINT("Liczba Czastek");
+    LCD_PRINT(F("Liczba Czastek"));
     
     // Pagination: show 3 items per page
     const int itemsPerPage = 3;
     const int first = (pms5003ParticlesMenuIndex / itemsPerPage) * itemsPerPage;
     
-    const char* particleLabels[] = {"0.3um", "0.5um", "1.0um", "2.5um", "5.0um", "10um"};
+    const char* const particleLabels[] = {"0.3um", "0.5um", "1.0um", "2.5um", "5.0um", "10um"};
     uint16_t particleValues[] = {
       pms5003_particleCount_0_3,
       pms5003_particleCount_0_5,
@@ -1532,144 +1489,95 @@ void drawStats() {
       if (i >= 6) break;
       
       LCD_SET(0, row + 1);
-      LCD_PRINT(i == pms5003ParticlesMenuIndex ? ">" : " ");
-      LCD_PRINT(" ");
+      LCD_PRINT(i == pms5003ParticlesMenuIndex ? F(">") : F(" "));
+      LCD_PRINT(F(" "));
       LCD_PRINT(particleLabels[i]);
-      LCD_PRINT(": ");
+      LCD_PRINT(F(": "));
       LCD_PRINT(particleValues[i]);
     }
+    break;
   }
 
-  else if (appState == STATE_PMS5003_PARTICLES_0_3) {
-    LCD_SET(0, 0);
-    LCD_PRINT("0.3um");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_particleCount_0_3);
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_particleCount_0_3_MIN < 9999 ? pms5003_particleCount_0_3_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_particleCount_0_3_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_PARTICLES_0_3: {
+    LCD_SET(0, 0); LCD_PRINT(F("0.3um"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_0_3);
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_0_3_MIN < 9999 ? pms5003_particleCount_0_3_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_0_3_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
 
-  else if (appState == STATE_PMS5003_PARTICLES_0_5) {
-    LCD_SET(0, 0);
-    LCD_PRINT("0.5um");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_particleCount_0_5);
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_particleCount_0_5_MIN < 9999 ? pms5003_particleCount_0_5_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_particleCount_0_5_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_PARTICLES_0_5: {
+    LCD_SET(0, 0); LCD_PRINT(F("0.5um"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_0_5);
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_0_5_MIN < 9999 ? pms5003_particleCount_0_5_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_0_5_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
 
-  else if (appState == STATE_PMS5003_PARTICLES_1_0) {
-    LCD_SET(0, 0);
-    LCD_PRINT("1.0um");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_particleCount_1_0);
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_particleCount_1_0_MIN < 9999 ? pms5003_particleCount_1_0_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_particleCount_1_0_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_PARTICLES_1_0: {
+    LCD_SET(0, 0); LCD_PRINT(F("1.0um"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_1_0);
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_1_0_MIN < 9999 ? pms5003_particleCount_1_0_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_1_0_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
 
-  else if (appState == STATE_PMS5003_PARTICLES_2_5) {
-    LCD_SET(0, 0);
-    LCD_PRINT("2.5um");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_particleCount_2_5);
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_particleCount_2_5_MIN < 9999 ? pms5003_particleCount_2_5_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_particleCount_2_5_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_PARTICLES_2_5: {
+    LCD_SET(0, 0); LCD_PRINT(F("2.5um"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_2_5);
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_2_5_MIN < 9999 ? pms5003_particleCount_2_5_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_2_5_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
 
-  else if (appState == STATE_PMS5003_PARTICLES_5_0) {
-    LCD_SET(0, 0);
-    LCD_PRINT("5.0um");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_particleCount_5_0);
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_particleCount_5_0_MIN < 9999 ? pms5003_particleCount_5_0_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_particleCount_5_0_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_PARTICLES_5_0: {
+    LCD_SET(0, 0); LCD_PRINT(F("5.0um"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_5_0);
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_5_0_MIN < 9999 ? pms5003_particleCount_5_0_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_5_0_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
 
-  else if (appState == STATE_PMS5003_PARTICLES_10_0) {
-    LCD_SET(0, 0);
-    LCD_PRINT("10um");
-    
-    LCD_SET(0, 1);
-    LCD_PRINT("Biezaca: ");
-    LCD_PRINT(pms5003_particleCount_10_0);
-    
-    LCD_SET(0, 2);
-    LCD_PRINT("Min:");
-    LCD_PRINT(pms5003_particleCount_10_0_MIN < 9999 ? pms5003_particleCount_10_0_MIN : 0);
-    LCD_PRINT(" Max:");
-    LCD_PRINT(pms5003_particleCount_10_0_MAX);
-    
-    LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Powrot");
+  case STATE_PMS5003_PARTICLES_10_0: {
+    LCD_SET(0, 0); LCD_PRINT(F("10um"));
+    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_10_0);
+    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_10_0_MIN < 9999 ? pms5003_particleCount_10_0_MIN : 0);
+    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_10_0_MAX);
+    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
   }
 
   // ========== Telemetria ==========
-  else if (appState == STATE_PMS5003_TELEMETRY) {
+  case STATE_PMS5003_TELEMETRY: {
     LCD_SET(0, 0);
-    LCD_PRINT("Telemetria");
+    LCD_PRINT(F("Telemetria"));
     
     LCD_SET(0, 1);
-    LCD_PRINT("Bledy: ");
+    LCD_PRINT(F("Bledy: "));
     LCD_PRINT(pms5003_errorCount_current);
-    LCD_PRINT("/");
+    LCD_PRINT(F("/"));
     LCD_PRINT(pms5003_errorCount_total);
     
     LCD_SET(0, 2);
-    LCD_PRINT("Bajty: ");
-    if (pms5003_bytesReceived < 10) LCD_PRINT("0");
+    LCD_PRINT(F("Bajty: "));
+    if (pms5003_bytesReceived < 10) LCD_PRINT(F("0"));
     LCD_PRINT(pms5003_bytesReceived);
     
     LCD_SET(0, 3);
-    LCD_PRINT("Latencja: ");
-    if (pms5003_latency_ms < 10) LCD_PRINT("0");
-    if (pms5003_latency_ms < 100) LCD_PRINT("0");
+    LCD_PRINT(F("Latencja: "));
+    if (pms5003_latency_ms < 10) LCD_PRINT(F("0"));
+    if (pms5003_latency_ms < 100) LCD_PRINT(F("0"));
     LCD_PRINT(pms5003_latency_ms);
-    LCD_PRINT(" ms");
+    LCD_PRINT(F(" ms"));
+    break;
+  }
+  default:
+    break;
   }
 
   LCD_DUMP();
@@ -1687,9 +1595,9 @@ void drawTemperature() {
     if (!dhtReady) {
         LCD_CLEAR();
         LCD_SET(0, 0);
-        LCD_PRINT("Temperatura");
+        LCD_PRINT(F("Temperatura"));
         LCD_SET(0, 1);
-        LCD_PRINT("Odczyt...");
+        LCD_PRINT(F("Odczyt..."));
         LCD_DUMP();
         return;
     }
@@ -1702,20 +1610,15 @@ void drawTemperature() {
 
     LCD_CLEAR();
     LCD_SET(0, 0);
-    LCD_PRINT("Temperatura");
+    LCD_PRINT(F("Temperatura"));
     
     LCD_SET(0, 1);
     LCD_PRINT(dhtTemperature); 
-    // Ręczna obsługa formatowania (float, 1 miejsce po przecinku) nie jest wprost w makrze,
-    // ale LCD_PRINT(float) zazwyczaj drukuje 2 miejsca.
-    // Jeśli potrzebujesz dokładnie 1 miejsca, możesz użyć lcd.print, ale wtedy mirror nie zadziała dla tej liczby.
-    // Najlepiej zostawić domyślne print lub sformatować do String/buffer.
-    
     LCD_WRITE(223); // Znak stopnia
-    LCD_PRINT("C");
+    LCD_PRINT(F("C"));
 
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Wyjscie");
+    LCD_PRINT(F("Dlugi -> Wyjscie"));
     
     LCD_DUMP();
 }
@@ -1726,9 +1629,9 @@ void drawHumidity() {
     if (!dhtReady) {
         LCD_CLEAR();
         LCD_SET(0, 0);
-        LCD_PRINT("Wilgotnosc");
+        LCD_PRINT(F("Wilgotnosc"));
         LCD_SET(0, 1);
-        LCD_PRINT("Odczyt...");
+        LCD_PRINT(F("Odczyt..."));
         LCD_DUMP();
         return;
     }
@@ -1740,14 +1643,14 @@ void drawHumidity() {
 
     LCD_CLEAR();
     LCD_SET(0, 0);
-    LCD_PRINT("Wilgotnosc");
+    LCD_PRINT(F("Wilgotnosc"));
     
     LCD_SET(0, 1);
     LCD_PRINT((int)dhtHumidity); // Rzutowanie na int dla ładniejszego wyglądu
-    LCD_PRINT(" %");
+    LCD_PRINT(F(" %"));
 
     LCD_SET(0, 3);
-    LCD_PRINT("Dlugi -> Wyjscie");
+    LCD_PRINT(F("Dlugi -> Wyjscie"));
 
     LCD_DUMP();
 }
@@ -1808,18 +1711,16 @@ void drawSystemResources() {
 
     // --- RAM INFO ---
     const uint32_t freeRam  = ESP.getFreeHeap();
-    const uint32_t maxBlock = ESP.getMaxAllocHeap();
-    (void)maxBlock;  // Nieużywane, ale dostępne do debugowania
 
     // --- FLASH INFO ---
     const uint32_t usedFlash = ESP.getSketchSize();
     const uint32_t freeFlash = ESP.getFreeSketchSpace();
 
-    char buf[17];
+    char buf[21];
 
     // Wiersz 0: Nagłówek
     LCD_SET(0, 0);
-    LCD_PRINT("ZASOBY SYSTEMU");
+    LCD_PRINT(F("ZASOBY SYSTEMU"));
 
     // Wiersz 1: RAM (Wolny)
     LCD_SET(0, 1);
@@ -1840,23 +1741,16 @@ void drawSystemResources() {
 }
 
 // ============================================================================
-// EKRAN PRZEJŚCIA TRYBU (WiFi ↔ Bluetooth)
+// EKRAN PRZEJŚCIA TRYBU (WiFi <-> Bluetooth)
 // ============================================================================
 
 void drawModeTransition() {
     LCD_CLEAR();
 
-    LCD_SET(0, 0);
-    LCD_PRINT("ZMIANA TRYBU");
-
-    LCD_SET(0, 1);
-    LCD_PRINT("                ");
-
-    LCD_SET(0, 2);
-    LCD_PRINT("     RESET      ");
-
-    LCD_SET(0, 3);
-    LCD_PRINT("                ");
+    lcdPrintCentered(0, F("ZMIANA TRYBU"));
+    clearRow(1);
+    lcdPrintCentered(2, F("RESET"));
+    clearRow(3);
 
     LCD_DUMP();
 }

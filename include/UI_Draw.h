@@ -76,6 +76,14 @@ extern int settingsRotationSec;
 extern int s_prevSettingsRotationSec;
 extern int settingsSyncMinutes;
 extern int s_prevSettingsSyncMin;
+// Alarms
+struct AlarmEntry { uint8_t hour; uint8_t minute; bool enabled; uint16_t lastTriggerDay; };
+extern const int MAX_ALARMS;
+extern AlarmEntry alarms[];
+extern int alarmsCount;
+extern int alarmsMenuIndex; // selection in list
+extern int selectedAlarmIndex; // editing index
+extern int alarmEditCursor; // 0=CZAS,1=STATUS,2=USUN
 
 // Minutnik (Timer) - ustawienia i status
 extern int timerSetMinutes;
@@ -85,6 +93,8 @@ extern bool timerRunning;
 extern int timerSetHours;
 extern unsigned long timerStartMillis;
 extern unsigned long timerDurationMs;
+extern int timerUiCursor;   // 0=CZAS, 1=PRESETY
+extern int timerPresetIndex; // 0=2m, 1=15m, 2=45m
 
 
 // Zmienne do triku z zamrażaniem czasu na 7-seg

@@ -25,6 +25,7 @@
 #include "ENS160AHT21Sensor.h"
 #include <DHT.h>
 #include "TemperatureConfig.h"
+#include "I2C_bus_shared.h"
 
 // ============================================================================
 // STAŁE CZASOWE (zamiast magic numbers)
@@ -417,8 +418,16 @@ int  alarmMinute     = 0;
 bool alarmEnabled    = false;
 bool alarmRinging    = false;
 unsigned long alarmStartTime  = 0;
+
+// --- Multi-alarm storage ---
+const int MAX_ALARMS = 8;
+AlarmEntry alarms[MAX_ALARMS];
+int alarmsCount = 0; // number of configured alarms
+int alarmsMenuIndex = 0; // selection in list view
+int selectedAlarmIndex = 0; // index for editing/deleting
 unsigned long lastMelodyStep  = 0;
 int  melodyStep      = 0;
+int alarmEditCursor = 0; // 0=CZAS,1=STATUS,2=USUN
 
 // --- Minutnik (Timer) ---
 int  timerSetMinutes  = 0;    // ustawiane przez użytkownika
@@ -428,6 +437,8 @@ unsigned long timerStartMillis = 0;
 unsigned long timerDurationMs  = 0;
 
 int  timerSetHours    = 0;
+int  timerUiCursor    = 0; // 0=CZAS, 1=PRESETY
+int  timerPresetIndex = 1; // default highlight: 15m
 
 // --- STM32 DANE (UART) ---
 unsigned long lastSTM32Update       = 0;
@@ -447,6 +458,7 @@ int hours   = 12;
 int minutes = 0;
 int seconds = 0;
 unsigned long lastTick = 0;
+bool bootDiagReprinted = false;
 
 // --- Flaga do przywrócenia czasu z RTC (po soft reset) ---
 static bool timeRestored = false;
@@ -598,99 +610,65 @@ constexpr unsigned long DHT_READ_INTERVAL_MS = 2000;
 void tickClock() {
   if (appState == STATE_SET_TIME) return;
 
-  // Prefer system time when it's valid (keeps HH:MM:SS consistent with date and NTP corrections)
   const unsigned long nowMs = millis();
+
   if (isSystemTimeValid()) {
     if (nowMs - lastTick >= CLOCK_TICK_MS) {
-      // Align to 1s tick cadence
+      // align tick
       lastTick = nowMs - ((nowMs - lastTick) % CLOCK_TICK_MS);
       syncLocalClockFromSystemTime();
-
-      if (appState != STATE_STOPER) {
-        updateSevenSeg();
-      }
-      if (appState == STATE_HOME) {
-        requestHomeRedraw();
-      }
+      if (appState != STATE_STOPER) updateSevenSeg();
+      if (appState == STATE_HOME) requestHomeRedraw();
     }
-
-    // Alarm logic uses hours/minutes/seconds updated above
-    const bool alarmShouldTrigger = alarmEnabled && !alarmRinging &&
-                                     hours == alarmHour &&
-                                     minutes == alarmMinute &&
-                                     seconds == 0;
-    if (alarmShouldTrigger) {
-      alarmRinging   = true;
-      alarmStartTime = millis();
-      lastMelodyStep = 0;
+  } else {
+    // catch up missed ticks
+    if (nowMs - lastTick >= CLOCK_TICK_MS) {
+      int loops = 0;
+      unsigned long now = nowMs;
+      while (now - lastTick >= CLOCK_TICK_MS && loops < 60) {
+        lastTick += CLOCK_TICK_MS;
+        seconds++;
+        if (seconds >= 60) {
+          seconds = 0;
+          minutes++;
+          if (minutes >= 60) {
+            minutes = 0;
+            hours = (hours + 1) % 24;
+          }
+        }
+        loops++;
+      }
+      if (appState != STATE_STOPER) updateSevenSeg();
+      if (appState == STATE_HOME) requestHomeRedraw();
     }
-    // Timer handling (when running) - check expiration
-    if (timerRunning) {
-      unsigned long elapsed = nowMs - timerStartMillis;
-      if (elapsed >= timerDurationMs) {
-        timerRunning = false;
-        // reuse alarm ringing machinery to play melody
+  }
+
+  // Check alarms (multi)
+  if (!alarmRinging && seconds == 0 && alarmsCount > 0) {
+    time_t now_t = time(nullptr);
+    struct tm timeinfo;
+    localtime_r(&now_t, &timeinfo);
+    int today = timeinfo.tm_yday;
+    for (int i = 0; i < alarmsCount; ++i) {
+      if (!alarms[i].enabled) continue;
+      if (alarms[i].hour == hours && alarms[i].minute == minutes && alarms[i].lastTriggerDay != (uint16_t)today) {
         alarmRinging = true;
         alarmStartTime = millis();
+        alarms[i].lastTriggerDay = (uint16_t)today;
         lastMelodyStep = 0;
-        // After finishing, return to editable timer form (hours editing)
-        editState = EDIT_HOURS;
-        timerStartMillis = 0;
-        timerDurationMs = 0;
+        break;
       }
     }
-    return;
   }
 
-  // Catch up missed ticks if loop was blocked for multiple seconds
-  unsigned long now = nowMs;
-  if (nowMs - lastTick >= CLOCK_TICK_MS) {
-    // Limit catch-up iterations to avoid long loops in extreme cases
-    int loops = 0;
-    while (now - lastTick >= CLOCK_TICK_MS && loops < 60) {
-      lastTick += CLOCK_TICK_MS;
-      seconds++;
-
-      if (seconds >= 60) {
-        seconds = 0;
-        minutes++;
-        if (minutes >= 60) {
-          minutes = 0;
-          hours = (hours + 1) % 24;
-        }
-      }
-      loops++;
-    }
-
-    if (appState != STATE_STOPER) {
-      updateSevenSeg();
-    }
-    if (appState == STATE_HOME) {
-      requestHomeRedraw();
-    }
-  }
-
-  // Sprawdź czy należy uruchomić alarm
-  const bool alarmShouldTrigger = alarmEnabled && !alarmRinging &&
-                                   hours == alarmHour &&
-                                   minutes == alarmMinute &&
-                                   seconds == 0;
-  if (alarmShouldTrigger) {
-    alarmRinging   = true;
-    alarmStartTime = millis();
-    lastMelodyStep = 0;
-  }
-
-  // Timer handling (when running) - check expiration
+  // Timer expiry
   if (timerRunning) {
-    unsigned long nowMs2 = millis();
-    unsigned long elapsed = nowMs2 - timerStartMillis;
+    unsigned long elapsed = millis() - timerStartMillis;
     if (elapsed >= timerDurationMs) {
       timerRunning = false;
       alarmRinging = true;
-      alarmStartTime = nowMs2;
+      alarmStartTime = millis();
       lastMelodyStep = 0;
-      // Return to editable timer form
       editState = EDIT_HOURS;
       timerStartMillis = 0;
       timerDurationMs = 0;
@@ -802,18 +780,23 @@ void setup() {
 #if UART_LCD_MIRROR
   lcdMirror.begin();
 #endif
+  lcdFrame.begin();
 
   // I2C initialization with explicit pins: SDA=21, SCL=22 (GPIO22 now free from I2S after fix)
-  Wire.begin(21, 22);
-  // USTAWIENIE I2C: zwiększone do 400 kHz aby przyspieszyć komunikację z LCD/i2c
-  // ZMIANA: domyślnie było 100 kHz; zwiększam do 400 kHz (Fast-mode)
-  Wire.setClock(400000);
+  const bool i2cClockApplied = I2cShared::initMaster(&Wire, 21, 22, 400000);
+  Serial.printf("[main] I2C clock readback: %lu Hz (%s)\n",
+                (unsigned long)Wire.getClock(),
+                i2cClockApplied ? "applied" : "fallback/mismatch");
 
   // ===== DS3231: restore system time early (before heavy UI/I2C traffic) =====
   tryRestoreSystemTimeFromDs3231();
 
+  // Tighten hd44780 timings to near-datasheet values.
+  lcd.setExecTimes(37, 1520);
   lcd.init();
-  lcd.backlight();
+  lcd.noBacklight();
+  lcd.clear();
+  lcdFrame.syncToCurrentFrame();
   lcd.createChar(0, alarmIcon);
 
   // --- Encoder init ---
@@ -851,8 +834,17 @@ void setup() {
   callbacks.drawStats           = drawStats;           // Callbacki do UI statystyk
   callbacks.drawSystemResources = drawSystemResources; // Zasoby systemu (RAM/FLASH)
 
+  // Ensure first screen (boot/home) performs a full redraw once
+  lcdFrame.forceFullRedrawOnce();
   ui_begin(callbacks);
   // ui_begin() calls drawHome callback already; keep HOME refresh centrally throttled.
+
+  // Turn the backlight on only after the first valid frame is staged.
+  lcd.backlight();
+
+#if CORE_DEBUG_LEVEL > 0
+  lcdFrame.reportTiming("startup");
+#endif
 
   // Load persisted rotation interval (seconds) from NVS/Preferences if present
   s_prefs.begin("zegar", false);
@@ -863,6 +855,20 @@ void setup() {
   s_prevSettingsRotationSec = settingsRotationSec;
   mqttEnabled = s_prefs.getBool("mqttEnabled", true);
   settingsMqttMenuIndex = mqttEnabled ? 0 : 1;
+  // Load persisted alarms
+  alarmsCount = s_prefs.getUShort("alarmCount", 0);
+  if (alarmsCount < 0) alarmsCount = 0;
+  if (alarmsCount > MAX_ALARMS) alarmsCount = MAX_ALARMS;
+  for (int i = 0; i < alarmsCount; ++i) {
+    char keyH[12]; char keyM[12]; char keyE[12];
+    snprintf(keyH, sizeof(keyH), "a%dh", i);
+    snprintf(keyM, sizeof(keyM), "a%dm", i);
+    snprintf(keyE, sizeof(keyE), "a%de", i);
+    alarms[i].hour = (uint8_t)s_prefs.getUShort(keyH, 7);
+    alarms[i].minute = (uint8_t)s_prefs.getUShort(keyM, 0);
+    alarms[i].enabled = s_prefs.getBool(keyE, true);
+    alarms[i].lastTriggerDay = 0;
+  }
 
   // ===== WiFi / NTP Sync =====
   WiFiSync::setTimeRefs(hours, minutes, seconds, lastTick);        // referencje do zmiennych czasu
@@ -898,6 +904,13 @@ void setup() {
 // ============================================================================
 
 void loop() {
+  if (!bootDiagReprinted && millis() >= 5000UL) {
+    bootDiagReprinted = true;
+    Serial.printf("[boot] serial alive, i2c=%lu Hz, heap=%u\n",
+                  (unsigned long)Wire.getClock(),
+                  ESP.getFreeHeap());
+  }
+
   handleHomeEntryIfStateChanged();
 
   // --- Encoder handling ---
@@ -981,6 +994,24 @@ void loop() {
       heap_delta,
       (RadioModeSwitch::getCurrentState() == RADIO_STATE_BT) ? "BT" : "WiFi");
   }
+
+#if CORE_DEBUG_LEVEL > 0
+  // Report LCD timing in 30-second windows so each print reflects the last
+  // full measurement interval, not the startup path.
+  static bool lcdTimingPrimed = false;
+  static unsigned long lastLcdTimingReport = 0;
+  constexpr unsigned long LCD_TIMING_WINDOW_MS = 30000UL;
+  if (!lcdTimingPrimed && millis() >= LCD_TIMING_WINDOW_MS) {
+    lcdFrame.resetStats();
+    lcdTimingPrimed = true;
+    lastLcdTimingReport = millis();
+  }
+  if (lcdTimingPrimed && (millis() - lastLcdTimingReport >= LCD_TIMING_WINDOW_MS)) {
+    lastLcdTimingReport = millis();
+    lcdFrame.reportTiming("runtime");
+    lcdFrame.resetStats();
+  }
+#endif
 
   // --- Clock tick ---
   tickClock();

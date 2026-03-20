@@ -49,22 +49,77 @@ bool ensureMutex()
 #endif
 }
 
+bool applyClockAndVerify(TwoWire *wire, uint32_t clockHz, uint32_t *actualClockHz)
+{
+    if (wire == nullptr) {
+        return false;
+    }
+
+    wire->setClock(clockHz);
+
+#ifdef ARDUINO_ARCH_ESP32
+    const uint32_t actualHz = wire->getClock();
+    if (actualClockHz != nullptr) {
+        *actualClockHz = actualHz;
+    }
+
+    if (actualHz == clockHz) {
+        return true;
+    }
+
+    return false;
+#else
+    if (actualClockHz != nullptr) {
+        *actualClockHz = clockHz;
+    }
+    return true;
+#endif
+}
+
 }  // namespace
 
 namespace I2cShared {
 
-void initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
+bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
 {
     if (wire == nullptr) {
-        return;
+        return false;
     }
+
+    bool applied = false;
+    uint32_t actualClockHz = 0;
+
     wire->begin(sdaPin, sclPin);
-    wire->setClock(clockHz);
+    applied = applyClockAndVerify(wire, clockHz, &actualClockHz);
+
+#ifdef ARDUINO_ARCH_ESP32
+    if (!applied) {
+        Serial.printf("[I2C] setClock(%lu) mismatch after begin(sda=%d, scl=%d): actual=%lu. Reinitializing bus and retrying.\n",
+                      (unsigned long)clockHz,
+                      sdaPin,
+                      sclPin,
+                      (unsigned long)actualClockHz);
+
+        wire->end();
+        delay(1);
+        wire->begin(sdaPin, sclPin);
+        applied = applyClockAndVerify(wire, clockHz, &actualClockHz);
+    }
+
+    Serial.printf("[I2C] bus ready: requested=%lu actual=%lu sda=%d scl=%d %s\n",
+                  (unsigned long)clockHz,
+                  (unsigned long)actualClockHz,
+                  sdaPin,
+                  sclPin,
+                  applied ? "OK" : "MISMATCH");
+#endif
+
+    return applied;
 }
 
-void initMaster(int sdaPin, int sclPin, uint32_t clockHz)
+bool initMaster(int sdaPin, int sclPin, uint32_t clockHz)
 {
-    initMaster(&Wire, sdaPin, sclPin, clockHz);
+    return initMaster(&Wire, sdaPin, sclPin, clockHz);
 }
 
 void setDiagnosticsEnabled(bool enabled)

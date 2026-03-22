@@ -5,6 +5,7 @@
 #include "RadioModeSwitch.h"
 #include "PMS_Czujnik.h"
 #include "ENS160AHT21Screen.h"
+#include "BMP280Sensor.h"
 #include "UI_Draw.h"
 #include <Preferences.h>
 #include "WiFiSync.h"
@@ -59,6 +60,8 @@ extern int pms5003ParticlesMenuIndex;
 extern int pms5003ParticlesMenuCount;
 extern int ens160MenuIndex;
 extern int ens160MenuCount;
+extern int bmp280MenuIndex;
+extern int bmp280MenuCount;
 
 // --- Minutnik (Timer) externs
 extern int timerSetMinutes;
@@ -127,6 +130,9 @@ extern int settingsRotationSec;
 extern int s_prevSettingsRotationSec;
 extern int settingsSyncMinutes;
 extern int s_prevSettingsSyncMin;
+extern int settingsUiScreenIndex;
+extern int s_prevSettingsUiScreenIndex;
+extern int settingsUiScreenCount;
 extern Preferences s_prefs;
 
 // ============================================================================
@@ -176,6 +182,11 @@ static inline void updateSevenSegSafe() { callDraw(s_callbacks.updateSevenSeg); 
 
 static inline void markPmsDirtyAndDrawStats() {
   pmsScreenDirty = true;
+  drawStatsSafe();
+}
+
+static inline void markBmp280DirtyAndDrawStats() {
+  BMP280Screen::markScreenDirty();
   drawStatsSafe();
 }
 
@@ -290,6 +301,12 @@ void ui_handleEvent(EncoderEvent e) {
         drawStatsSafe();
         break;
 
+      case STATE_BMP280:
+        bmp280MenuIndex = constrain(bmp280MenuIndex + dir, 0, bmp280MenuCount - 1);
+        BMP280Screen::markScreenDirty();
+        drawStatsSafe();
+        break;
+
       case STATE_SETTINGS:
         settingsMenuIndex = constrain(settingsMenuIndex + dir, 0, settingsMenuCount - 1);
         drawStatsSafe();
@@ -303,6 +320,13 @@ void ui_handleEvent(EncoderEvent e) {
         s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
         drawStatsSafe();
         break;
+
+      case STATE_SETTINGS_UI_SCREEN:
+        settingsUiScreenIndex = constrain(settingsUiScreenIndex + dir, 0, settingsUiScreenCount - 1);
+        setHomeUiProfile((uint8_t)settingsUiScreenIndex);
+        drawStatsSafe();
+        break;
+
       case STATE_SETTINGS_SYNC:
         // adjust sync interval in 10-minute steps (10..360)
         settingsSyncMinutes = constrain(settingsSyncMinutes + dir * 10, 10, 360);
@@ -466,31 +490,38 @@ void ui_handleEvent(EncoderEvent e) {
           drawStatsSafe();
           return;
 
-        case 8:  // Temperatura
+        case 8:  // BMP280
+          appState = STATE_BMP280;
+          bmp280MenuIndex = 0;
+          BMP280Screen::markScreenDirty();
+          drawStatsSafe();
+          return;
+
+        case 9:  // Temperatura
           appState = STATE_TEMPERATURE;
           drawTemperature();
           showTemperature7Seg();
           return;
 
-        case 9:  // Wilgotność
+        case 10:  // Wilgotność
           appState = STATE_HUMIDITY;
           drawHumidity();
           showHumidity7Seg();
           return;
 
-        case 10:  // Ustawienia
+        case 11:  // Ustawienia
           appState        = STATE_SETTINGS;
           settingsMenuIndex = 0;
           drawStatsSafe();
           return;
 
-        case 11:  // Wyjście
+        case 12:  // Wyjście
           appState = STATE_HOME;
           updateSevenSegSafe();
           drawHomeSafe();
           return;
 
-        case 12:  // Radio Toggle (WiFi ↔ Bluetooth)
+        case 13:  // Radio Toggle (WiFi ↔ Bluetooth)
           // Przełącz na inny tryb z resetem - BEZ żadnych operacji LCD!
           if (radioMode == WIFI_ONLY) {
             // Przejdź na Bluetooth
@@ -715,6 +746,31 @@ void ui_handleEvent(EncoderEvent e) {
       return;
     }
 
+    // --- LOGIKA MENU BMP280 ---
+    if (appState == STATE_BMP280) {
+      switch (bmp280MenuIndex) {
+        case 0:
+          appState = STATE_BMP280_TEMP;
+          markBmp280DirtyAndDrawStats();
+          break;
+        case 1:
+          appState = STATE_BMP280_PRESSURE;
+          markBmp280DirtyAndDrawStats();
+          break;
+        case 2:
+          appState = STATE_BMP280_STATUS;
+          markBmp280DirtyAndDrawStats();
+          break;
+        case 3:
+          appState = STATE_BMP280_ALTITUDE;
+          markBmp280DirtyAndDrawStats();
+          break;
+        default:
+          break;
+      }
+      return;
+    }
+
     // --- LOGIKA MENU USTAWIEŃ (Settings) ---
     if (appState == STATE_SETTINGS) {
       switch (settingsMenuIndex) {
@@ -745,7 +801,12 @@ void ui_handleEvent(EncoderEvent e) {
           s_prevSettingsRotationSec = settingsRotationSec;
           drawStatsSafe();
           break;
-        case 5:  // Wyjście
+        case 5:  // UI Ekran
+          appState = STATE_SETTINGS_UI_SCREEN;
+          s_prevSettingsUiScreenIndex = settingsUiScreenIndex;
+          drawStatsSafe();
+          break;
+        case 6:  // Wyjście
           appState = STATE_MENU;
           drawMenuSafe();
           break;
@@ -794,6 +855,14 @@ void ui_handleEvent(EncoderEvent e) {
       // persist new value and apply
       s_prefs.putUShort("ntpSyncMin", (uint16_t)settingsSyncMinutes);
       WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
+      appState = STATE_SETTINGS;
+      drawStatsSafe();
+      return;
+    }
+
+    // --- LOGIKA: UI EKRAN (wizualny wybór profilu, bez zapisu) ---
+    if (appState == STATE_SETTINGS_UI_SCREEN) {
+      s_prefs.putUShort("uiScreenMode", (uint16_t)settingsUiScreenIndex);
       appState = STATE_SETTINGS;
       drawStatsSafe();
       return;
@@ -1076,6 +1145,20 @@ void ui_handleEvent(EncoderEvent e) {
         drawMenuSafe();
         return;
 
+      case STATE_BMP280_TEMP:
+      case STATE_BMP280_PRESSURE:
+      case STATE_BMP280_STATUS:
+      case STATE_BMP280_ALTITUDE:
+        appState = STATE_BMP280;
+        BMP280Screen::markScreenDirty();
+        drawStatsSafe();
+        return;
+
+      case STATE_BMP280:
+        appState = STATE_MENU;
+        drawMenuSafe();
+        return;
+
       // --- Ustawienia (Settings) -> powrót do menu głównego ---
       case STATE_SETTINGS_PMS5003:
       case STATE_SETTINGS_BUZZER:
@@ -1095,6 +1178,13 @@ void ui_handleEvent(EncoderEvent e) {
         // cancel: restore previous value and go back
         settingsSyncMinutes = s_prevSettingsSyncMin;
         WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
+        appState = STATE_SETTINGS;
+        drawStatsSafe();
+        return;
+
+      case STATE_SETTINGS_UI_SCREEN:
+        settingsUiScreenIndex = s_prevSettingsUiScreenIndex;
+        setHomeUiProfile((uint8_t)settingsUiScreenIndex);
         appState = STATE_SETTINGS;
         drawStatsSafe();
         return;
@@ -1134,6 +1224,13 @@ void ui_handleEvent(EncoderEvent e) {
         // Menu statystyk -> menu główne
         appState = STATE_MENU;
         drawMenuSafe();
+        return;
+
+      case STATE_MENU:
+        // Long press in main menu -> go back to home
+        appState = STATE_HOME;
+        updateSevenSegSafe();
+        drawHomeSafe();
         return;
 
       case STATE_TEMPERATURE:

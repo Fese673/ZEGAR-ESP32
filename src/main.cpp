@@ -23,6 +23,8 @@
 #include "PMS_Czujnik.h"
 #include "ENS160AHT21Screen.h"
 #include "ENS160AHT21Sensor.h"
+#include "BMP280Sensor.h"
+#include "LCDIcons.h"
 #include <DHT.h>
 #include "TemperatureConfig.h"
 #include "I2C_bus_shared.h"
@@ -51,23 +53,95 @@ static bool          s_homeRedrawDirty      = true;
 static unsigned long s_lastHomeRedrawMs    = 0;
 static constexpr unsigned long HOME_REDRAW_MIN_INTERVAL_MS = 1000;
 
-// Rotacja zawartości HOME: na zmianę klasyczny HOME i ekran powietrza.
-// Wymóg: nie zwiększać częstotliwości rysowania (nadal max 1Hz).
-enum class HomeOverlay : uint8_t {
-  Time = 0,
-  Air  = 1,
+enum class HomeUiProfile : uint8_t {
+  Minimal  = 0,
+  Balanced = 1,
+  Extreme  = 2,
 };
 
-static HomeOverlay   s_homeOverlay          = HomeOverlay::Time;
-static unsigned long s_homeOverlaySinceMs  = 0;
+enum class HomeOverlayPage : uint8_t {
+  Time     = 0,
+  Indoor   = 1,
+  Outdoor  = 2,
+  Extreme  = 3,
+  Systems  = 4,
+};
+
+static HomeUiProfile   s_homeUiProfile       = HomeUiProfile::Minimal;
+static HomeOverlayPage s_homeOverlay         = HomeOverlayPage::Time;
+static uint8_t         s_homeOverlayIndex    = 0;
+static unsigned long   s_homeOverlaySinceMs  = 0;
+static unsigned long   s_homeIndoorAnimSinceMs = 0;
 // Runtime-configurable overlay switch interval (ms). Persisted via Preferences as seconds.
 unsigned long s_homeOverlaySwitchMs = 7000; // default 7s
 int settingsRotationSec = 7;               // 1..10 seconds (user-facing)
 int s_prevSettingsRotationSec = 7;         // used to restore on cancel
+int s_prevSettingsUiScreenIndex = 0;        // used to restore UI screen selection on cancel
+
+extern int settingsUiScreenIndex;
 
 // Preferences namespace object (for persistent settings)
 #include <Preferences.h>
 Preferences s_prefs;
+
+static void requestHomeRedraw();
+
+static uint8_t homeOverlayCountForProfile(HomeUiProfile profile) {
+  switch (profile) {
+    case HomeUiProfile::Minimal:
+      return 2;
+    case HomeUiProfile::Balanced:
+      return 3;
+    case HomeUiProfile::Extreme:
+      return 5;
+  }
+  return 2;
+}
+
+static HomeOverlayPage homeOverlayPageFor(HomeUiProfile profile, uint8_t index) {
+  switch (profile) {
+    case HomeUiProfile::Minimal:
+      return (index % 2 == 0) ? HomeOverlayPage::Time : HomeOverlayPage::Outdoor;
+    case HomeUiProfile::Balanced:
+      switch (index % 3) {
+        case 0: return HomeOverlayPage::Time;
+        case 1: return HomeOverlayPage::Indoor;
+        default: return HomeOverlayPage::Outdoor;
+      }
+    case HomeUiProfile::Extreme:
+      switch (index % 5) {
+        case 0: return HomeOverlayPage::Time;
+        case 1: return HomeOverlayPage::Indoor;
+        case 2: return HomeOverlayPage::Outdoor;
+        case 3: return HomeOverlayPage::Extreme;
+        default: return HomeOverlayPage::Systems;
+      }
+  }
+  return HomeOverlayPage::Time;
+}
+
+static void syncHomeOverlayToProfile(bool resetTimer) {
+  const uint8_t overlayCount = homeOverlayCountForProfile(s_homeUiProfile);
+  if (overlayCount == 0) {
+    s_homeOverlayIndex = 0;
+    s_homeOverlay = HomeOverlayPage::Time;
+    s_homeOverlaySinceMs = 0;
+    s_homeIndoorAnimSinceMs = 0;
+    requestHomeRedraw();
+    return;
+  }
+
+  if (s_homeOverlayIndex >= overlayCount) {
+    s_homeOverlayIndex = 0;
+  }
+
+  s_homeOverlay = homeOverlayPageFor(s_homeUiProfile, s_homeOverlayIndex);
+  if (resetTimer) {
+    s_homeOverlaySinceMs = millis();
+    s_homeIndoorAnimSinceMs = s_homeOverlay == HomeOverlayPage::Indoor ? s_homeOverlaySinceMs : 0;
+  }
+  requestHomeRedraw();
+}
 
 static void requestHomeRedraw() {
   s_homeRedrawDirty = true;
@@ -86,11 +160,34 @@ static void serviceHomeRedraw() {
   s_homeRedrawDirty  = false;
 
   // Jedyna ścieżka, która fizycznie rysuje na LCD (+ mirror UART).
-  if (s_homeOverlay == HomeOverlay::Air) {
-    drawAirScreen();
-  } else {
-    drawHome();
+  switch (s_homeOverlay) {
+    case HomeOverlayPage::Indoor:
+      drawIndoorWeatherScreen();
+      break;
+    case HomeOverlayPage::Outdoor:
+      drawAirScreen();
+      break;
+    case HomeOverlayPage::Extreme:
+      drawExtremeEnvironmentScreen();
+      break;
+    case HomeOverlayPage::Systems:
+      drawSystemResources();
+      break;
+    case HomeOverlayPage::Time:
+    default:
+      drawHome();
+      break;
   }
+}
+
+void setHomeUiProfile(uint8_t profileIndex) {
+  if (profileIndex > static_cast<uint8_t>(HomeUiProfile::Extreme)) {
+    profileIndex = 0;
+  }
+
+  s_homeUiProfile = static_cast<HomeUiProfile>(profileIndex);
+  settingsUiScreenIndex = (int)profileIndex;
+  syncHomeOverlayToProfile(true);
 }
 
 // Zamiast bezpośredniego drawHome() w kodzie aplikacji wywołuj to.
@@ -103,16 +200,37 @@ static void serviceHomeOverlayRotation() {
   if (appState != STATE_HOME) return;
 
   const unsigned long nowMs = millis();
+  const uint8_t overlayCount = homeOverlayCountForProfile(s_homeUiProfile);
+
+  if (overlayCount == 0) {
+    return;
+  }
+
   if (s_homeOverlaySinceMs == 0) {
+    s_homeOverlayIndex = 0;
+    s_homeOverlay = homeOverlayPageFor(s_homeUiProfile, s_homeOverlayIndex);
     s_homeOverlaySinceMs = nowMs;
-    s_homeOverlay = HomeOverlay::Time;
     requestHomeRedraw();
     return;
   }
+
   if (nowMs - s_homeOverlaySinceMs >= s_homeOverlaySwitchMs) {
     s_homeOverlaySinceMs = nowMs;
-    s_homeOverlay = (s_homeOverlay == HomeOverlay::Time) ? HomeOverlay::Air : HomeOverlay::Time;
+    s_homeOverlayIndex = (uint8_t)((s_homeOverlayIndex + 1) % overlayCount);
+    s_homeOverlay = homeOverlayPageFor(s_homeUiProfile, s_homeOverlayIndex);
+    s_homeIndoorAnimSinceMs = s_homeOverlay == HomeOverlayPage::Indoor ? nowMs : 0;
     requestHomeRedraw();
+    return;
+  }
+
+  if (s_homeOverlay == HomeOverlayPage::Indoor) {
+    constexpr unsigned long HOME_INDOOR_ANIM_MS = 3500UL;
+    if (s_homeIndoorAnimSinceMs == 0) {
+      s_homeIndoorAnimSinceMs = nowMs;
+    } else if ((nowMs - s_homeIndoorAnimSinceMs) >= HOME_INDOOR_ANIM_MS) {
+      s_homeIndoorAnimSinceMs = nowMs;
+      requestHomeRedraw();
+    }
   }
 }
 
@@ -122,9 +240,8 @@ static void handleHomeEntryIfStateChanged() {
 
   // We just entered HOME: start from TIME view for 3 seconds.
   if (appState == STATE_HOME) {
-    s_homeOverlay = HomeOverlay::Time;
-    s_homeOverlaySinceMs = millis();
-    requestHomeRedraw();
+    s_homeOverlayIndex = 0;
+    syncHomeOverlayToProfile(true);
   }
 
   lastState = appState;
@@ -175,18 +292,6 @@ const char* const WIFI_SSID  = "Orange_Swiatlowod_98E2";
 const char* const WIFI_PASS  = "x1Z6P(~8pry<St.";
 const char* const NTP_SERVER = "pool.ntp.org";
 
-// --- LCD Custom Character ---
-byte alarmIcon[8] = {
-  B00100,
-  B01110,
-  B01110,
-  B11111,
-  B11111,
-  B00100,
-  B00000,
-  B00000
-};
-
 // --- DHT Sensor ---
 // --- DHT11 ---
 #define DHT_PIN 4
@@ -219,13 +324,14 @@ const char* menuItems[] = {
   "Debug STM32",
   "PMS5003",
   "AHT21 + ENS160",
+  "BMP280",
   "Temperatura",
   "Wilgotnosc",
   "Ustawienia",
   "Wyjscie",
   "Radio: Toggle"
 };
-constexpr int MENU_COUNT = 13;
+constexpr int MENU_COUNT = 14;
 int menuCount = MENU_COUNT;
 
 // Diagnostyka pamięci
@@ -279,6 +385,17 @@ const char* ens160MenuItems[] = {
 constexpr int ENS160_MENU_COUNT = 6;
 int ens160MenuCount = ENS160_MENU_COUNT;
 
+// --- Menu BMP280 ---
+int bmp280MenuIndex = 0;
+const char* bmp280MenuItems[] = {
+  "Temperature",
+  "Pressure",
+  "Status",
+  "Altitude"
+};
+constexpr int BMP280_MENU_COUNT = 4;
+int bmp280MenuCount = BMP280_MENU_COUNT;
+
 // --- Menu PMS5003 CF=1 (Wybór PM do szczegółów) ---
 int pms5003CF1MenuIndex = 0;
 const char* pms5003CF1MenuItems[] = {
@@ -320,14 +437,25 @@ const char* settingsMenuItems[] = {
   "MQTT",
   "Synchronizacja",
   "Rotacja Ekranu",
+  "UI EKRAN",
   "Wyjscie"
 };
-constexpr int SETTINGS_MENU_COUNT = 6;
+constexpr int SETTINGS_MENU_COUNT = 7;
 int settingsMenuCount = SETTINGS_MENU_COUNT;
 
 // --- Menu: Synchronizacja (NTP) ---
 int settingsSyncMinutes = 60; // default 60 minutes
 int s_prevSettingsSyncMin = 60;
+
+// --- Menu Ustawienia UI EKRAN ---
+int settingsUiScreenIndex = 0;
+const char* settingsUiScreenItems[] = {
+  "Minimal",
+  "Balanced",
+  "Extreme"
+};
+constexpr int SETTINGS_UI_SCREEN_COUNT = 3;
+int settingsUiScreenCount = SETTINGS_UI_SCREEN_COUNT;
 
 // --- Menu Ustawienia PMS5003 (włącz/wyłącz) ---
 int settingsPmsMenuIndex = 0;
@@ -797,7 +925,7 @@ void setup() {
   lcd.noBacklight();
   lcd.clear();
   lcdFrame.syncToCurrentFrame();
-  lcd.createChar(0, alarmIcon);
+  LCDIcons::loadPalette(lcd, LCDIcons::Palette::Home);
 
   // --- Encoder init ---
   encoder_begin(ENC_CLK, ENC_DT, ENC_SW);
@@ -819,6 +947,8 @@ void setup() {
   PMS5003Sensor::begin();
   ENS160AHT21Screen::resetRuntimeData();
   ENS160AHT21Sensor::begin();
+  BMP280Sensor::begin();
+  bmp280MenuCount = BMP280Sensor::menuItemCount();
 
   // ===== UI CONTROLLER =====
   UI_Callbacks callbacks;
@@ -853,6 +983,11 @@ void setup() {
   if (settingsRotationSec > 10) settingsRotationSec = 10;
   s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
   s_prevSettingsRotationSec = settingsRotationSec;
+  settingsUiScreenIndex = (int)s_prefs.getUShort("uiScreenMode", (uint16_t)settingsUiScreenIndex);
+  if (settingsUiScreenIndex < 0) settingsUiScreenIndex = 0;
+  if (settingsUiScreenIndex > 2) settingsUiScreenIndex = 2;
+  setHomeUiProfile((uint8_t)settingsUiScreenIndex);
+  s_prevSettingsUiScreenIndex = settingsUiScreenIndex;
   mqttEnabled = s_prefs.getBool("mqttEnabled", true);
   settingsMqttMenuIndex = mqttEnabled ? 0 : 1;
   // Load persisted alarms
@@ -914,8 +1049,12 @@ void loop() {
   handleHomeEntryIfStateChanged();
 
   // --- Encoder handling ---
-  const EncoderEvent evt = encoder_update();
-  if (evt != ENC_NONE) {
+  while (true) {
+    const EncoderEvent evt = encoder_update();
+    if (evt == ENC_NONE) {
+      break;
+    }
+
     // === REGISTER STATS ===
     if (evt == ENC_CLICK || evt == ENC_LONG) {
       statsManager.registerClick();
@@ -950,6 +1089,9 @@ void loop() {
   // --- ENS160 + AHT21 update ---
   ENS160AHT21Sensor::update();
 
+  // --- BMP280 update ---
+  BMP280Sensor::update();
+
   // --- Stats screen refresh (live data update) ---
   static unsigned long lastStatsRedraw = 0;
   if ((appState == STATE_STATS_RESOURCES_CPU || appState == STATE_STATS_RESOURCES_RAM ||
@@ -962,7 +1104,9 @@ void loop() {
       appState == STATE_ENS160_AHT21 || appState == STATE_ENS160_AHT21_SUMMARY || appState == STATE_ENS160_AHT21_GAS ||
       appState == STATE_ENS160_AHT21_GAS_AQI || appState == STATE_ENS160_AHT21_GAS_TVOC || appState == STATE_ENS160_AHT21_GAS_ECO2 ||
       appState == STATE_ENS160_AHT21_CLIMATE || appState == STATE_ENS160_AHT21_CLIMATE_TEMP || appState == STATE_ENS160_AHT21_CLIMATE_HUM ||
-      appState == STATE_ENS160_AHT21_STATUS) &&
+      appState == STATE_ENS160_AHT21_STATUS ||
+      appState == STATE_BMP280 || appState == STATE_BMP280_TEMP || appState == STATE_BMP280_PRESSURE ||
+      appState == STATE_BMP280_STATUS || appState == STATE_BMP280_ALTITUDE) &&
       millis() - lastStatsRedraw >= 1000) {
     lastStatsRedraw = millis();
     drawStats();

@@ -112,6 +112,9 @@ extern LiquidCrystal_I2C lcd;
 // UI / LCD
 void drawHome();
 void drawAirScreen();
+void drawIndoorWeatherScreen();
+void drawExtremeEnvironmentScreen();
+void setHomeUiProfile(uint8_t profileIndex);
 void drawMenu();
 void drawSetTime();
 void drawAlarm();

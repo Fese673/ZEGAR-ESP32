@@ -1,5 +1,11 @@
 #include "Encoder.h"
 
+#ifdef ARDUINO_ARCH_ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
+#endif
+
 // ============================================================================
 // KONFIGURACJA PINÓW
 // ============================================================================
@@ -36,9 +42,30 @@ static unsigned long s_longPressCooldown = 0; // Ochrona przed powtarzalnością
 static unsigned long s_longPressMs = 1000;
 static unsigned long s_debounceMs  = 200;
 
+#ifdef ARDUINO_ARCH_ESP32
+static QueueHandle_t s_eventQueue = nullptr;
+static TaskHandle_t s_encoderTaskHandle = nullptr;
+static constexpr uint8_t ENCODER_QUEUE_LEN = 64;
+static constexpr uint32_t ENCODER_TASK_DELAY_MS = 1;
+#endif
+
 // Stałe czasowe dla przycisku
 static const unsigned long LONG_PRESS_HOLD_TIME      = 500;  // ms - czas trzymania dla ochrony
 static const unsigned long POST_LONG_PRESS_COOLDOWN  = 1000; // ms - blokada po długim wciśnięciu
+
+static EncoderEvent encoderSampleOnce();
+
+#ifdef ARDUINO_ARCH_ESP32
+static void encoderTask(void* /*param*/) {
+  for (;;) {
+    const EncoderEvent evt = encoderSampleOnce();
+    if (evt != ENC_NONE && s_eventQueue != nullptr) {
+      (void)xQueueSendToBack(s_eventQueue, &evt, 0);
+    }
+    vTaskDelay(pdMS_TO_TICKS(ENCODER_TASK_DELAY_MS));
+  }
+}
+#endif
 
 // ============================================================================
 // INICJALIZACJA ENKODERA
@@ -72,6 +99,23 @@ void encoder_begin(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
   s_buttonWasLongPress = false;
   s_lastButtonAction  = 0;
   s_longPressCooldown = 0;
+
+#ifdef ARDUINO_ARCH_ESP32
+  if (s_eventQueue == nullptr) {
+    s_eventQueue = xQueueCreate(ENCODER_QUEUE_LEN, sizeof(EncoderEvent));
+  }
+
+  if (s_encoderTaskHandle == nullptr && s_eventQueue != nullptr) {
+    xTaskCreatePinnedToCore(
+        encoderTask,
+        "encoderTask",
+        2048,
+        nullptr,
+        2,
+        &s_encoderTaskHandle,
+        1);
+  }
+#endif
 }
 
 // ============================================================================
@@ -263,7 +307,7 @@ static EncoderEvent buttonCheck(const unsigned long now) {
 // ============================================================================
 // GŁÓWNA FUNKCJA UPDATE - WYWOŁYWAĆ W LOOP()
 // ============================================================================
-EncoderEvent encoder_update() {
+static EncoderEvent encoderSampleOnce() {
   const unsigned long now = millis();
 
   // Najpierw sprawdź rotację (Gray-code validacja)
@@ -279,4 +323,18 @@ EncoderEvent encoder_update() {
   }
 
   return ENC_NONE;
+}
+
+EncoderEvent encoder_update() {
+#ifdef ARDUINO_ARCH_ESP32
+  if (s_eventQueue != nullptr) {
+    EncoderEvent evt = ENC_NONE;
+    if (xQueueReceive(s_eventQueue, &evt, 0) == pdTRUE) {
+      return evt;
+    }
+    return ENC_NONE;
+  }
+#endif
+
+  return encoderSampleOnce();
 }

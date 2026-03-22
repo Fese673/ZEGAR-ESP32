@@ -2,10 +2,13 @@
 #include "LCDMirror.h"
 #include "StatsManager.h"
 #include "WiFiSync.h"
+#include "ModeManager.h"
 #include <LiquidCrystal_I2C.h>
 #include <Esp.h>
 #include "PMS_Czujnik.h"
 #include "ENS160AHT21Screen.h"
+#include "BMP280Sensor.h"
+#include "LCDIcons.h"
 
 extern LiquidCrystal_I2C lcd;
 
@@ -48,6 +51,9 @@ extern int pms5003ParticlesMenuCount;
 extern int ens160MenuIndex;
 extern const char* ens160MenuItems[];
 extern int ens160MenuCount;
+extern int bmp280MenuIndex;
+extern const char* bmp280MenuItems[];
+extern int bmp280MenuCount;
 
 // --- Dane PMS5003 ---
 extern uint16_t pms5003_PM1_0_CF1;
@@ -101,6 +107,7 @@ extern RadioMode radioMode;
 extern int  alarmHour;
 extern int  alarmMinute;
 extern bool alarmEnabled;
+extern bool alarmRinging;
 
 // --- Stoper ---
 extern bool stoperRunning;
@@ -135,6 +142,10 @@ extern bool  dhtReady;
 extern bool pms5003Enabled;
 extern int settingsMqttMenuIndex;
 extern bool mqttEnabled;
+extern int settingsRotationSec;
+extern int settingsUiScreenIndex;
+extern int settingsUiScreenCount;
+extern const char* settingsUiScreenItems[];
 
 // ============================================================================
 // IMPLEMENTACJA FUNKCJI - 7-SEGMENT (74HC595)
@@ -250,28 +261,74 @@ static void lcdPrintCentered(uint8_t row, const __FlashStringHelper* text) {
   LCD_PRINT(text);
 }
 
+static void lcdPrintCenteredWithAlarmIcon(uint8_t row, const char* text, bool showIcon) {
+  const int textLen = (int)strlen(text);
+  const int totalLen = textLen + (showIcon ? 1 : 0);
+  const int pad = (SCREEN_WIDTH - min(totalLen, (int)SCREEN_WIDTH)) / 2;
+
+  clearRow(row);
+  LCD_SET((uint8_t)pad, row);
+  if (showIcon) {
+    LCD_WRITE(byte(LCDIcons::AlarmSlot));
+  }
+  LCD_PRINT(text);
+}
+
+static void lcdPrintCenteredWithIcons(uint8_t row, const char* text, const uint8_t* icons, uint8_t iconCount) {
+  const int textLen = (int)strlen(text);
+  const int totalLen = textLen + (int)iconCount;
+  const int pad = (SCREEN_WIDTH - min(totalLen, (int)SCREEN_WIDTH)) / 2;
+
+  clearRow(row);
+  LCD_SET((uint8_t)pad, row);
+  for (uint8_t i = 0; i < iconCount; ++i) {
+    LCD_WRITE((uint8_t)icons[i]);
+  }
+  LCD_PRINT(text);
+}
+
+static bool isAnyAlarmArmed() {
+  if (alarmEnabled || alarmRinging) {
+    return true;
+  }
+
+  for (int i = 0; i < alarmsCount; ++i) {
+    if (alarms[i].enabled) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // --- Ekran główny ---
 static const char* const polishMonths[] PROGMEM = {
-    "sty", "lut", "mar", "kwi", "maj", "cze",
-  "lip", "sie", "wrz", "paz", "lis", "gru"
+    "STY", "LUT", "MAR", "KWI", "MAJ", "CZE",
+  "LIP", "SIE", "WRZ", "PAZ", "LIS", "GRU"
 };
 
 void drawHome() {
   LCD_CLEAR();
+  LCDIcons::loadPalette(lcd, LCDIcons::Palette::Home);
 
   // Header
-  LCD_SET(3, 0);
-  LCD_PRINT(F("~ Wejherowo ~"));
-
-  if (alarmEnabled) {
-    LCD_SET(19, 0);
-    LCD_WRITE(byte(0));
+  char titleBuf[21];
+  snprintf(titleBuf, sizeof(titleBuf), "WEJHEROWO");
+  const bool ntpFresh = WiFiSync::hasNtpSynced() && (millis() - WiFiSync::getLastNtpSyncTime() <= 3600000UL);
+  const bool alarmArmed = isAnyAlarmArmed();
+  uint8_t icons[2];
+  uint8_t iconCount = 0;
+  if (ntpFresh) {
+    icons[iconCount++] = LCDIcons::NtpSlot;
+  }
+  if (alarmArmed) {
+    icons[iconCount++] = LCDIcons::BellSlot;
   }
 
-  // NTP marker
-  if (WiFiSync::hasNtpSynced() && (millis() - WiFiSync::getLastNtpSyncTime() <= 3600000UL)) {
-    LCD_SET(17, 1);
-    LCD_PRINT(F("(N)"));
+  if (iconCount > 0) {
+    lcdPrintCenteredWithIcons(0, titleBuf, icons, iconCount);
+  } else {
+    lcdPrintCentered(0, titleBuf);
   }
 
   // Date (centered)
@@ -280,12 +337,32 @@ void drawHome() {
   localtime_r(&now, &timeinfo);
   char dateBuf[21];
   snprintf(dateBuf, sizeof(dateBuf), "%02d %s %04d", timeinfo.tm_mday, polishMonths[timeinfo.tm_mon], 1900 + timeinfo.tm_year);
-  lcdPrintCentered(2, dateBuf);
+  lcdPrintCentered(1, dateBuf);
 
-  // Time (centered on row 3)
-  char timeBuf[25];
-  snprintf(timeBuf, sizeof(timeBuf), ">> %02d:%02d:%02d <<", hours, minutes, seconds);
-  lcdPrintCentered(3, timeBuf);
+  // Row 2: centered time with symmetric arrows
+  char timeLine[21];
+  snprintf(timeLine, sizeof(timeLine), ">> %02d:%02d:%02d <<", hours, minutes, seconds);
+  lcdPrintCentered(2, timeLine);
+
+  // Row 3: indoor summary from BMP280 temperature/pressure + AHT21 humidity.
+  char lineBuf[21];
+  const bool bmpValid = BMP280Screen::runtimeData.hasSample;
+  const bool ahtValid = ENS160AHT21Screen::runtimeData.hasClimateSample;
+
+  if (bmpValid && ahtValid) {
+    const float tempC = BMP280Screen::runtimeData.temperatureC;
+    const int humidity = (int)(ENS160AHT21Screen::runtimeData.humidityPct + 0.5f);
+    const float pressure = BMP280Screen::runtimeData.pressureHpa;
+    snprintf(lineBuf, sizeof(lineBuf), "IN:%4.1fC %2d%% %4.0fhPa", tempC, humidity, pressure);
+  } else if (bmpValid) {
+    snprintf(lineBuf, sizeof(lineBuf), "IN:%4.1fC --%% %4.0fhPa", BMP280Screen::runtimeData.temperatureC, BMP280Screen::runtimeData.pressureHpa);
+  } else if (ahtValid) {
+    const int humidity = (int)(ENS160AHT21Screen::runtimeData.humidityPct + 0.5f);
+    snprintf(lineBuf, sizeof(lineBuf), "IN: --.-C %2d%% ----hPa", humidity);
+  } else {
+    snprintf(lineBuf, sizeof(lineBuf), "IN: --.-C --%% ----hPa");
+  }
+  lcdPrintCentered(3, lineBuf);
 
   LCD_DUMP();
 }
@@ -364,14 +441,15 @@ void drawAirScreen() {
   // Row 1: temperature + humidity.
   {
     char line[21];
-    // Prefer ENS/AHT21 climate data if available, otherwise fallback to DHT sensor.
-    if (ensClimateValid) {
-      const float t = ENS160AHT21Screen::runtimeData.temperatureC;
+    // Temperature comes from BMP280; humidity stays with AHT21, with DHT as a fallback only if AHT is unavailable.
+    if (BMP280Screen::runtimeData.hasTemperature && ensClimateValid) {
       const int hum = (int)(ENS160AHT21Screen::runtimeData.humidityPct + 0.5f);
-      snprintf(line, sizeof(line), " %5.1f\xDF" "C |  %3d%%    ", t, hum);
-    } else if (dhtReady) {
+      snprintf(line, sizeof(line), " %5.1f\xDF" "C |  %3d%%    ", BMP280Screen::runtimeData.temperatureC, hum);
+    } else if (BMP280Screen::runtimeData.hasTemperature && dhtReady) {
       const int hum = (int)(dhtHumidity + 0.5f);
-      snprintf(line, sizeof(line), " %5.1f\xDF" "C |  %3d%%    ", dhtTemperature, hum);
+      snprintf(line, sizeof(line), " %5.1f\xDF" "C |  %3d%%    ", BMP280Screen::runtimeData.temperatureC, hum);
+    } else if (BMP280Screen::runtimeData.hasTemperature) {
+      snprintf(line, sizeof(line), " %5.1f\xDF" "C |   --%%    ", BMP280Screen::runtimeData.temperatureC);
     } else {
       snprintf(line, sizeof(line), "  --.-\xDF" "C |   --%%    ");
     }
@@ -419,6 +497,104 @@ void drawAirScreen() {
     LCD_SET(0, 3);
     LCD_PRINT(line);
   }
+
+  LCD_DUMP();
+}
+
+void drawIndoorWeatherScreen() {
+  LCD_CLEAR();
+
+  lcdPrintCentered(0, F("WNETRZE"));
+
+  char line[21];
+  const bool ensClimateValid = ENS160AHT21Screen::runtimeData.hasClimateSample;
+  const uint8_t phase = (uint8_t)((millis() / 3500UL) % 4UL);
+
+  if (ensClimateValid) {
+    const float temp = ENS160AHT21Screen::runtimeData.temperatureC;
+    const int hum = (int)(ENS160AHT21Screen::runtimeData.humidityPct + 0.5f);
+    snprintf(line, sizeof(line), " T:%5.1f C H:%3d%% ", temp, hum);
+  } else if (dhtReady) {
+    const int hum = (int)(dhtHumidity + 0.5f);
+    snprintf(line, sizeof(line), " T:%5.1f C H:%3d%% ", dhtTemperature, hum);
+  } else {
+    snprintf(line, sizeof(line), " T:  --.- C H: --%% ");
+  }
+  padRightTo20(line);
+  LCD_SET(0, 1);
+  LCD_PRINT(line);
+
+  if (ensClimateValid) {
+    snprintf(line, sizeof(line), " ENS:%s", ENS160AHT21Screen::runtimeData.statusText);
+  } else if (dhtReady) {
+    snprintf(line, sizeof(line), " DHT:READY");
+  } else {
+    snprintf(line, sizeof(line), " DHT:WAITING");
+  }
+  padRightTo20(line);
+  LCD_SET(0, 2);
+  LCD_PRINT(line);
+
+  switch (phase) {
+    case 0:
+      snprintf(line, sizeof(line), " PULS: < o   >");
+      break;
+    case 1:
+      snprintf(line, sizeof(line), " PULS: <  o  >");
+      break;
+    case 2:
+      snprintf(line, sizeof(line), " PULS: <   o >");
+      break;
+    default:
+      snprintf(line, sizeof(line), " PULS: <    o>");
+      break;
+  }
+  padRightTo20(line);
+  LCD_SET(0, 3);
+  LCD_PRINT(line);
+
+  LCD_DUMP();
+}
+
+void drawExtremeEnvironmentScreen() {
+  LCD_CLEAR();
+
+  lcdPrintCentered(0, F("EXTREME DASH"));
+
+  char line[21];
+  const bool ensGasValid = ENS160AHT21Screen::runtimeData.hasGasSample;
+  const bool ensClimateValid = ENS160AHT21Screen::runtimeData.hasClimateSample;
+  const bool bmpValid = BMP280Screen::runtimeData.hasSample;
+  const bool pmValid = pms5003Enabled && PMS5003Sensor::getLastUpdateTime() != 0;
+
+  if (ensGasValid) {
+    snprintf(line, sizeof(line), "AQI:%u TVOC:%u", (unsigned)ENS160AHT21Screen::runtimeData.aqi, (unsigned)ENS160AHT21Screen::runtimeData.tvoc);
+  } else {
+    snprintf(line, sizeof(line), "AQI:-- TVOC:--");
+  }
+  padRightTo20(line);
+  LCD_SET(0, 1);
+  LCD_PRINT(line);
+
+  if (bmpValid) {
+    snprintf(line, sizeof(line), "CO2:%u PRS:%4.1f", (unsigned)(ensGasValid ? ENS160AHT21Screen::runtimeData.eco2 : 0), BMP280Screen::runtimeData.pressureHpa);
+  } else if (ensGasValid) {
+    snprintf(line, sizeof(line), "CO2:%u PRS:--.-", (unsigned)ENS160AHT21Screen::runtimeData.eco2);
+  } else {
+    snprintf(line, sizeof(line), "CO2:-- PRS:--.-");
+  }
+  padRightTo20(line);
+  LCD_SET(0, 2);
+  LCD_PRINT(line);
+
+  if (pmValid) {
+    snprintf(line, sizeof(line), "PM2.5:%u W:%s B:%s", (unsigned)pms5003_PM2_5_ATM, ModeManager::isWifiOn() ? "ON" : "OFF", ModeManager::isBtOn() ? "ON" : "OFF");
+  } else {
+    snprintf(line, sizeof(line), "PM2.5:-- W:%s B:%s", ModeManager::isWifiOn() ? "ON" : "OFF", ModeManager::isBtOn() ? "ON" : "OFF");
+  }
+  padRightTo20(line);
+  LCD_SET(0, 3);
+  LCD_PRINT(line);
 
   LCD_DUMP();
 }
@@ -675,6 +851,14 @@ static bool isEns160State(AppState state) {
          state == STATE_ENS160_AHT21_STATUS;
 }
 
+static bool isBmp280State(AppState state) {
+  return state == STATE_BMP280 ||
+         state == STATE_BMP280_TEMP ||
+         state == STATE_BMP280_PRESSURE ||
+         state == STATE_BMP280_STATUS ||
+         state == STATE_BMP280_ALTITUDE;
+}
+
 static void printEnsFloatOrDash(bool available, float value, uint8_t width = 4, uint8_t precision = 1) {
   if (!available) {
     LCD_PRINT(F("--"));
@@ -693,6 +877,27 @@ static void printEnsAgeSeconds(uint32_t lastUpdateMs) {
   }
 
   LCD_PRINT((millis() - lastUpdateMs) / 1000UL);
+  LCD_PRINT(F("s"));
+}
+
+static void printBmp280FloatOrDash(bool available, float value, uint8_t width = 5, uint8_t precision = 1) {
+  if (!available) {
+    LCD_PRINT(F("--"));
+    return;
+  }
+
+  char buffer[12];
+  dtostrf(value, width, precision, buffer);
+  LCD_PRINT(buffer);
+}
+
+static void printBmp280AgeSeconds(uint32_t lastSampleMs) {
+  if (lastSampleMs == 0) {
+    LCD_PRINT(F("--s"));
+    return;
+  }
+
+  LCD_PRINT((millis() - lastSampleMs) / 1000UL);
   LCD_PRINT(F("s"));
 }
 
@@ -716,6 +921,24 @@ struct Ens160UiHistory {
 };
 
 static Ens160UiHistory s_ens160UiHistory;
+
+struct Bmp280UiHistory {
+  bool hasTemp = false;
+  bool hasPressure = false;
+  bool hasAltitude = false;
+  float minTemp = 0.0f;
+  float maxTemp = 0.0f;
+  float minPressure = 0.0f;
+  float maxPressure = 0.0f;
+  float minAltitude = 0.0f;
+  float maxAltitude = 0.0f;
+  uint32_t lastProcessedRevision = 0;
+};
+
+static Bmp280UiHistory s_bmp280UiHistory;
+
+static void updateBmp280UiHistory(const BMP280Screen::RuntimeData& data);
+static void printBmp280MenuValue(int itemIndex, const BMP280Screen::RuntimeData& data);
 
 static void updateEns160UiHistory(const ENS160AHT21Screen::RuntimeData& data) {
   if (data.lastUpdateMs == 0 || data.lastUpdateMs == s_ens160UiHistory.lastProcessedUpdateMs) {
@@ -848,9 +1071,18 @@ void drawStats() {
     ENS160AHT21Screen::screenDirty = false;
   }
 
+  if (isBmp280State(appState)) {
+    static uint32_t lastBmp280Seen = 0;
+    const uint32_t revision = BMP280Screen::runtimeData.sampleRevision;
+    if (!BMP280Screen::screenDirty && revision == lastBmp280Seen) return;
+    lastBmp280Seen = revision;
+    BMP280Screen::screenDirty = false;
+  }
+
   LCD_CLEAR();
   const AppStats stats = statsManager.getStats();
   updateEns160UiHistory(ENS160AHT21Screen::runtimeData);
+  updateBmp280UiHistory(BMP280Screen::runtimeData);
 
   switch (appState) {
   // === 1. MENU STATYSTYK (LISTA Z LICZBAMI) ===
@@ -1067,6 +1299,111 @@ void drawStats() {
     printEnsAgeSeconds(data.lastUpdateMs);
     break;
   }
+  case STATE_BMP280: {
+    LCD_SET(2, 0);
+    LCD_PRINT(F("BMP280"));
+
+    const int first = (bmp280MenuIndex / 3) * 3;
+    for (int row = 0; row < 3; row++) {
+      const int i = first + row;
+      if (i >= bmp280MenuCount) break;
+
+      LCD_SET(0, row + 1);
+      LCD_PRINT(i == bmp280MenuIndex ? F("> ") : F("  "));
+      printBmp280MenuValue(i, BMP280Screen::runtimeData);
+    }
+    break;
+  }
+  case STATE_BMP280_TEMP: {
+    const BMP280Screen::RuntimeData& data = BMP280Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT(F("Temperatura"));
+    LCD_SET(0, 1);
+    LCD_PRINT(F("Biezaca: "));
+    printBmp280FloatOrDash(data.hasTemperature, data.temperatureC, 5, 1);
+    if (data.hasTemperature) {
+      LCD_PRINT(F(" C"));
+    }
+    LCD_SET(0, 2);
+    if (s_bmp280UiHistory.hasTemp) {
+      LCD_PRINT(F("Min:"));
+      printBmp280FloatOrDash(true, s_bmp280UiHistory.minTemp, 5, 1);
+      LCD_PRINT(F(" Max:"));
+      printBmp280FloatOrDash(true, s_bmp280UiHistory.maxTemp, 5, 1);
+    } else {
+      LCD_PRINT(F("Min:-- Max:--"));
+    }
+    LCD_SET(0, 3);
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
+  }
+  case STATE_BMP280_PRESSURE: {
+    const BMP280Screen::RuntimeData& data = BMP280Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT(F("Cisnienie"));
+    LCD_SET(0, 1);
+    LCD_PRINT(F("Biezace: "));
+    printBmp280FloatOrDash(data.hasPressure, data.pressureHpa, 5, 1);
+    if (data.hasPressure) {
+      LCD_PRINT(F(" hPa"));
+    }
+    LCD_SET(0, 2);
+    if (s_bmp280UiHistory.hasPressure) {
+      LCD_PRINT(F("Min:"));
+      printBmp280FloatOrDash(true, s_bmp280UiHistory.minPressure, 5, 1);
+      LCD_PRINT(F(" Max:"));
+      printBmp280FloatOrDash(true, s_bmp280UiHistory.maxPressure, 5, 1);
+    } else {
+      LCD_PRINT(F("Min:-- Max:--"));
+    }
+    LCD_SET(0, 3);
+    LCD_PRINT(F("Dlugi -> Powrot"));
+    break;
+  }
+  case STATE_BMP280_STATUS: {
+    const BMP280Screen::RuntimeData& data = BMP280Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT(F("Status BMP280"));
+    LCD_SET(0, 1);
+    LCD_PRINT(F("Stan: "));
+    LCD_PRINT(data.statusText);
+    LCD_SET(0, 2);
+    LCD_PRINT(F("Pomiar: "));
+    LCD_PRINT(data.hasSample ? F("OK") : F("--"));
+    LCD_PRINT(F(" Alt: "));
+    LCD_PRINT(data.altitudeAvailable ? F("ON") : F("OFF"));
+    LCD_SET(0, 3);
+    LCD_PRINT(F("Ostatnia: "));
+    printBmp280AgeSeconds(data.lastSampleMs);
+    break;
+  }
+  case STATE_BMP280_ALTITUDE: {
+    const BMP280Screen::RuntimeData& data = BMP280Screen::runtimeData;
+
+    LCD_SET(0, 0);
+    LCD_PRINT(F("Wysokosc"));
+    LCD_SET(0, 1);
+    LCD_PRINT(F("Biezaca: "));
+    printBmp280FloatOrDash(data.hasAltitude, data.altitudeM, 5, 1);
+    if (data.hasAltitude) {
+      LCD_PRINT(F(" m"));
+    }
+    LCD_SET(0, 2);
+    if (s_bmp280UiHistory.hasAltitude) {
+      LCD_PRINT(F("Min:"));
+      printBmp280FloatOrDash(true, s_bmp280UiHistory.minAltitude, 5, 1);
+      LCD_PRINT(F(" Max:"));
+      printBmp280FloatOrDash(true, s_bmp280UiHistory.maxAltitude, 5, 1);
+    } else {
+      LCD_PRINT(F("Min:-- Max:--"));
+    }
+    LCD_SET(0, 3);
+    LCD_PRINT(F("Dostepne tylko z ref."));
+    break;
+  }
   // === 1c. MENU USTAWIEŃ (Settings) ===
   case STATE_SETTINGS: {
     LCD_SET(2, 0);
@@ -1129,6 +1466,24 @@ void drawStats() {
     snprintf(valueBuf, sizeof(valueBuf), "CZAS: < %2ds >", settingsRotationSec);
     lcdPrintCentered(2, valueBuf);
     clearRow(3);
+    break;
+  }
+  // === 1g1. USTAWIENIA UI EKRAN (wizualny wybór profilu) ===
+  case STATE_SETTINGS_UI_SCREEN: {
+    LCD_SET(2, 0);
+    LCD_PRINT(F("UI EKRAN"));
+
+    for (int row = 0; row < settingsUiScreenCount; ++row) {
+      LCD_SET(0, row + 1);
+      if (row == settingsUiScreenIndex) {
+        LCD_PRINT(F("> ["));
+        LCD_PRINT(settingsUiScreenItems[row]);
+        LCD_PRINT(F("]"));
+      } else {
+        LCD_PRINT(F("  "));
+        LCD_PRINT(settingsUiScreenItems[row]);
+      }
+    }
     break;
   }
   // === 1x. Lista budzików ===
@@ -1753,4 +2108,77 @@ void drawModeTransition() {
     clearRow(3);
 
     LCD_DUMP();
+}
+
+static void updateBmp280UiHistory(const BMP280Screen::RuntimeData& data) {
+  if (data.sampleRevision == 0 || data.sampleRevision == s_bmp280UiHistory.lastProcessedRevision) {
+    return;
+  }
+
+  s_bmp280UiHistory.lastProcessedRevision = data.sampleRevision;
+
+  if (data.hasTemperature) {
+    if (!s_bmp280UiHistory.hasTemp) {
+      s_bmp280UiHistory.minTemp = data.temperatureC;
+      s_bmp280UiHistory.maxTemp = data.temperatureC;
+      s_bmp280UiHistory.hasTemp = true;
+    } else {
+      s_bmp280UiHistory.minTemp = min(s_bmp280UiHistory.minTemp, data.temperatureC);
+      s_bmp280UiHistory.maxTemp = max(s_bmp280UiHistory.maxTemp, data.temperatureC);
+    }
+  }
+
+  if (data.hasPressure) {
+    if (!s_bmp280UiHistory.hasPressure) {
+      s_bmp280UiHistory.minPressure = data.pressureHpa;
+      s_bmp280UiHistory.maxPressure = data.pressureHpa;
+      s_bmp280UiHistory.hasPressure = true;
+    } else {
+      s_bmp280UiHistory.minPressure = min(s_bmp280UiHistory.minPressure, data.pressureHpa);
+      s_bmp280UiHistory.maxPressure = max(s_bmp280UiHistory.maxPressure, data.pressureHpa);
+    }
+  }
+
+  if (data.hasAltitude) {
+    if (!s_bmp280UiHistory.hasAltitude) {
+      s_bmp280UiHistory.minAltitude = data.altitudeM;
+      s_bmp280UiHistory.maxAltitude = data.altitudeM;
+      s_bmp280UiHistory.hasAltitude = true;
+    } else {
+      s_bmp280UiHistory.minAltitude = min(s_bmp280UiHistory.minAltitude, data.altitudeM);
+      s_bmp280UiHistory.maxAltitude = max(s_bmp280UiHistory.maxAltitude, data.altitudeM);
+    }
+  }
+}
+
+static void printBmp280MenuValue(int itemIndex, const BMP280Screen::RuntimeData& data) {
+  switch (itemIndex) {
+    case 0:
+      LCD_PRINT(F("Temp: "));
+      printBmp280FloatOrDash(data.hasTemperature, data.temperatureC, 5, 1);
+      if (data.hasTemperature) {
+        LCD_PRINT(F(" C"));
+      }
+      break;
+    case 1:
+      LCD_PRINT(F("Cisn: "));
+      printBmp280FloatOrDash(data.hasPressure, data.pressureHpa, 5, 1);
+      if (data.hasPressure) {
+        LCD_PRINT(F(" hPa"));
+      }
+      break;
+    case 2:
+      LCD_PRINT(F("Status: "));
+      LCD_PRINT(data.statusText);
+      break;
+    case 3:
+      LCD_PRINT(F("Wys: "));
+      printBmp280FloatOrDash(data.hasAltitude, data.altitudeM, 5, 1);
+      if (data.hasAltitude) {
+        LCD_PRINT(F(" m"));
+      }
+      break;
+    default:
+      break;
+  }
 }

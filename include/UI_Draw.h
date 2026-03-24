@@ -69,6 +69,7 @@ extern int settingsMqttMenuCount;
 extern int settingsBuzzerMenuIndex;
 extern const char* settingsBuzzerMenuItems[];
 extern int settingsBuzzerMenuCount;
+extern int settingsAlarmMelodyIndex;
 extern bool pms5003Enabled;
 extern bool buzzerEnabled;
 extern bool mqttEnabled;

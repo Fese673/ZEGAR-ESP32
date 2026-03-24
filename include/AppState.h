@@ -74,6 +74,8 @@ enum AppState {
   STATE_SETTINGS_PMS5003,      // Ustawienia PMS5003 (włącz/wyłącz)
   STATE_SETTINGS_BUZZER,       // Ustawienia Buzera (włącz/wyłącz)
   STATE_SETTINGS_MQTT,         // Ustawienia MQTT (włącz/wyłącz)
+  STATE_SETTINGS_ALARM_MELODY, // Wybór melodii alarmu
+  STATE_SETTINGS_BOOT_INTRO,   // Ustawienia intro startowego (włącz/wyłącz)
   STATE_SETTINGS_SYNC,        // Ustawienia Synchronizacji NTP (minuty)
   STATE_SETTINGS_ROTATION,     // Ustawienie: Rotacja ekranu (1..10s)
   STATE_SETTINGS_UI_SCREEN,    // Ustawienia UI EKRAN (profil wyświetlania)
@@ -136,6 +138,8 @@ enum AppState {
   STATESETTINGSPMS5003 = STATE_SETTINGS_PMS5003,
   STATESETTINGSBUZZER = STATE_SETTINGS_BUZZER,
   STATESETTINGSMQTT = STATE_SETTINGS_MQTT,
+  STATESETTINGSALARMMELODY = STATE_SETTINGS_ALARM_MELODY,
+  STATESETTINGSBOOTINTRO = STATE_SETTINGS_BOOT_INTRO,
   STATESETTINGSUISCREEN = STATE_SETTINGS_UI_SCREEN
 };
 

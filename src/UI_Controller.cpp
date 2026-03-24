@@ -7,6 +7,7 @@
 #include "ENS160AHT21Screen.h"
 #include "BMP280Sensor.h"
 #include "UI_Draw.h"
+#include "AlarmMelodies.h"
 #include <Preferences.h>
 #include "WiFiSync.h"
 
@@ -123,9 +124,14 @@ extern int settingsMqttMenuIndex;
 extern int settingsMqttMenuCount;
 extern int settingsBuzzerMenuIndex;
 extern int settingsBuzzerMenuCount;
+extern int settingsAlarmMelodyIndex;
+extern int s_prevSettingsAlarmMelodyIndex;
+extern int settingsEpicIntroIndex;
+extern int settingsEpicIntroMenuCount;
 extern bool pms5003Enabled;
 extern bool buzzerEnabled;
 extern bool mqttEnabled;
+extern bool showEpicIntro;
 extern int settingsRotationSec;
 extern int s_prevSettingsRotationSec;
 extern int settingsSyncMinutes;
@@ -153,6 +159,23 @@ extern void drawTemperature();
 extern void drawHumidity();
 extern void showTemperature7Seg();
 extern void showHumidity7Seg();
+extern void startAlarmMelodyDemo(uint8_t melodyIndex);
+extern void stopAlarmMelodyDemo();
+
+static int loadAlarmMelodyIndexFromPrefs() {
+  String savedMelodyId = s_prefs.getString("alarmMelodyId", "");
+  if (savedMelodyId.length() > 0) {
+    int loadedIndex = AlarmMelodies::indexOfId(savedMelodyId.c_str());
+    if (loadedIndex >= 0 && loadedIndex < AlarmMelodies::kCount) {
+      return loadedIndex;
+    }
+  }
+
+  int loadedIndex = (int)s_prefs.getUShort("alarmMelody", 0);
+  if (loadedIndex < 0) loadedIndex = 0;
+  if (loadedIndex >= AlarmMelodies::kCount) loadedIndex = AlarmMelodies::kCount - 1;
+  return loadedIndex;
+}
 
 // --- DHT (potrzebne do przywracania czasu) ---
 extern int  savedHours, savedMinutes, savedSeconds;
@@ -163,6 +186,7 @@ extern bool timeSaved;
 // ============================================================================
 
 static UI_Callbacks s_callbacks;
+static AppState s_alarmReturnState = STATE_MENU;
 
 static inline void callDraw(DrawFn fn) {
   if (fn) {
@@ -327,6 +351,11 @@ void ui_handleEvent(EncoderEvent e) {
         drawStatsSafe();
         break;
 
+      case STATE_SETTINGS_BOOT_INTRO:
+        settingsEpicIntroIndex = constrain(settingsEpicIntroIndex + dir, 0, settingsEpicIntroMenuCount - 1);
+        drawStatsSafe();
+        break;
+
       case STATE_SETTINGS_SYNC:
         // adjust sync interval in 10-minute steps (10..360)
         settingsSyncMinutes = constrain(settingsSyncMinutes + dir * 10, 10, 360);
@@ -347,6 +376,11 @@ void ui_handleEvent(EncoderEvent e) {
 
       case STATE_SETTINGS_BUZZER:
         settingsBuzzerMenuIndex = constrain(settingsBuzzerMenuIndex + dir, 0, settingsBuzzerMenuCount - 1);
+        drawStatsSafe();
+        break;
+
+      case STATE_SETTINGS_ALARM_MELODY:
+        settingsAlarmMelodyIndex = constrain(settingsAlarmMelodyIndex + dir, 0, AlarmMelodies::kCount - 1);
         drawStatsSafe();
         break;
 
@@ -456,6 +490,7 @@ void ui_handleEvent(EncoderEvent e) {
           return;
 
         case 3:  // Budzik (lista budzików)
+          s_alarmReturnState = STATE_MENU;
           appState = STATE_ALARMS_LIST;
           // ensure selection in range
           if (alarmsMenuIndex < 0) alarmsMenuIndex = 0;
@@ -789,24 +824,35 @@ void ui_handleEvent(EncoderEvent e) {
           settingsMqttMenuIndex = mqttEnabled ? 0 : 1;
           drawStatsSafe();
           break;
-        case 3:  // Synchronizacja
+        case 3:  // ALARMY
+          settingsAlarmMelodyIndex = loadAlarmMelodyIndexFromPrefs();
+          s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
+          appState = STATE_SETTINGS_ALARM_MELODY;
+          drawStatsSafe();
+          break;
+        case 4:  // Synchronizacja
           appState = STATE_SETTINGS_SYNC;
           // store previous value so long-press can cancel
           s_prevSettingsSyncMin = settingsSyncMinutes;
           drawStatsSafe();
           break;
-        case 4:  // Rotacja Ekranu
+        case 5:  // Rotacja Ekranu
           appState = STATE_SETTINGS_ROTATION;
           // store previous value so long-press can cancel
           s_prevSettingsRotationSec = settingsRotationSec;
           drawStatsSafe();
           break;
-        case 5:  // UI Ekran
+        case 6:  // UI Ekran
           appState = STATE_SETTINGS_UI_SCREEN;
           s_prevSettingsUiScreenIndex = settingsUiScreenIndex;
           drawStatsSafe();
           break;
-        case 6:  // Wyjście
+        case 7:  // Boot Intro
+          settingsEpicIntroIndex = showEpicIntro ? 0 : 1;
+          appState = STATE_SETTINGS_BOOT_INTRO;
+          drawStatsSafe();
+          break;
+        case 8:  // Wyjście
           appState = STATE_MENU;
           drawMenuSafe();
           break;
@@ -829,6 +875,15 @@ void ui_handleEvent(EncoderEvent e) {
       buzzerEnabled = (settingsBuzzerMenuIndex == 0);
       appState = STATE_SETTINGS;
       drawStatsSafe();
+      return;
+    }
+
+    // --- LOGIKA MENU USTAWIEŃ MELODII ALARMU ---
+    if (appState == STATE_SETTINGS_ALARM_MELODY) {
+      s_prefs.putString("alarmMelodyId", AlarmMelodies::id((uint8_t)settingsAlarmMelodyIndex));
+      s_prefs.putUShort("alarmMelody", (uint16_t)settingsAlarmMelodyIndex);
+      drawStatsSafe();
+      startAlarmMelodyDemo((uint8_t)settingsAlarmMelodyIndex);
       return;
     }
 
@@ -863,6 +918,15 @@ void ui_handleEvent(EncoderEvent e) {
     // --- LOGIKA: UI EKRAN (wizualny wybór profilu, bez zapisu) ---
     if (appState == STATE_SETTINGS_UI_SCREEN) {
       s_prefs.putUShort("uiScreenMode", (uint16_t)settingsUiScreenIndex);
+      appState = STATE_SETTINGS;
+      drawStatsSafe();
+      return;
+    }
+
+    // --- LOGIKA MENU USTAWIEŃ BOOT INTRO (włącz/wyłącz) ---
+    if (appState == STATE_SETTINGS_BOOT_INTRO) {
+      showEpicIntro = (settingsEpicIntroIndex == 0);
+      s_prefs.putBool("epicIntro", showEpicIntro);
       appState = STATE_SETTINGS;
       drawStatsSafe();
       return;
@@ -1163,6 +1227,7 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_SETTINGS_PMS5003:
       case STATE_SETTINGS_BUZZER:
       case STATE_SETTINGS_MQTT:
+      case STATE_SETTINGS_BOOT_INTRO:
         appState = STATE_SETTINGS;
         drawStatsSafe();
         return;
@@ -1189,6 +1254,13 @@ void ui_handleEvent(EncoderEvent e) {
         drawStatsSafe();
         return;
 
+      case STATE_SETTINGS_ALARM_MELODY:
+        settingsAlarmMelodyIndex = s_prevSettingsAlarmMelodyIndex;
+        stopAlarmMelodyDemo();
+        appState = STATE_SETTINGS;
+        drawStatsSafe();
+        return;
+
       case STATE_TIMER:
         // Long press in TIMER: stop timer (if running) and return to main menu
         timerRunning = false;
@@ -1197,9 +1269,13 @@ void ui_handleEvent(EncoderEvent e) {
         return;
 
       case STATE_ALARMS_LIST:
-        // Lista budzików -> menu główne
-        appState = STATE_MENU;
-        drawMenuSafe();
+        // Lista budzików -> powrót do miejsca wejścia (menu główne lub ustawienia)
+        appState = s_alarmReturnState;
+        if (s_alarmReturnState == STATE_SETTINGS) {
+          drawStatsSafe();
+        } else {
+          drawMenuSafe();
+        }
         return;
 
       case STATE_ALARM_EDIT:

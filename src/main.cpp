@@ -25,16 +25,18 @@
 #include "ENS160AHT21Sensor.h"
 #include "BMP280Sensor.h"
 #include "LCDIcons.h"
+#include "AlarmMelodies.h"
+#include <cstring>
 #include <DHT.h>
 #include "TemperatureConfig.h"
 #include "I2C_bus_shared.h"
+#include <Preferences.h>
 
 // ============================================================================
 // STAŁE CZASOWE (zamiast magic numbers)
 // ============================================================================
 constexpr unsigned long CLOCK_TICK_MS       = 1000; // tykanie zegara co 1s
-constexpr unsigned long MELODY_STEP_MS      = 300;  // krok melodii alarmu
-constexpr unsigned long ALARM_DURATION_MS   = 5000; // jak długo gra alarm
+constexpr unsigned long ALARM_DURATION_MS   = 60000; // jak długo gra alarm
 constexpr unsigned long STM32_UPDATE_MS     = 500;  // odświeżanie danych STM32
 constexpr unsigned long STM32_TIMEOUT_MS    = 3000; // timeout połączenia STM32
 constexpr unsigned long STOPER_DRAW_MS      = 100;  // odświeżanie stopera
@@ -80,11 +82,494 @@ int s_prevSettingsUiScreenIndex = 0;        // used to restore UI screen selecti
 
 extern int settingsUiScreenIndex;
 
-// Preferences namespace object (for persistent settings)
-#include <Preferences.h>
+constexpr uint8_t BUZZER_PIN = 19;
+
+enum class IntroPhase : uint8_t {
+  Idle,
+  Noise,
+  AuthHold,
+  FrameBuild,
+  Reveal,
+  FlashOn,
+  FlashOff,
+  SuccessReady,
+  SuccessRiff,
+  Done,
+};
+
+static void introPrintPaddedLine(uint8_t row, const char* text);
+static void introPrintCentered(uint8_t row, const char* text);
+static void introPrintBorderLine(uint8_t row, char leftCorner, char rightCorner);
+static void introRenderNoiseFrame();
+static void renderAuthIntroFrame();
+static void renderTickingFrameBase();
+static void renderTickingFrameText(uint8_t revealCount);
+
+struct BootIntroState {
+  IntroPhase phase = IntroPhase::Idle;
+  unsigned long phaseStartedMs = 0;
+  unsigned long lastNoiseMs = 0;
+  unsigned long lastRevealMs = 0;
+  unsigned long flashStartedMs = 0;
+  unsigned long riffStartedMs = 0;
+  uint8_t revealIndex = 0;
+  uint8_t flashCount = 0;
+  uint8_t riffIndex = 0;
+  bool backlightOn = true;
+};
+
+static BootIntroState s_intro;
+
+static void introPrintPaddedLine(uint8_t row, const char* text) {
+  char line[21];
+  const size_t length = strnlen(text, 20);
+  memset(line, ' ', 20);
+  memcpy(line, text, length);
+  line[20] = '\0';
+  LCD_SET(0, row);
+  LCD_PRINT(line);
+}
+
+static void introPrintCentered(uint8_t row, const char* text) {
+  constexpr size_t width = 20;
+  const size_t length = strnlen(text, width);
+  char line[21];
+  memset(line, ' ', width);
+  const size_t start = (width - length) / 2;
+  memcpy(line + start, text, length);
+  line[width] = '\0';
+  LCD_SET(0, row);
+  LCD_PRINT(line);
+}
+
+static void introPrintBorderLine(uint8_t row, char leftCorner, char rightCorner) {
+  LCD_SET(0, row);
+  LCD_PRINT(leftCorner);
+  LCD_PRINT(F("=================="));
+  LCD_PRINT(rightCorner);
+}
+
+static void introRenderNoiseFrame() {
+  LCD_CLEAR();
+  for (uint8_t row = 0; row < 4; ++row) {
+    char line[21];
+    for (uint8_t col = 0; col < 20; ++col) {
+      static const char noiseChars[] = {'.', ':', '*', '#', '@', ' ', '/'};
+      line[col] = noiseChars[random(0, (int)(sizeof(noiseChars) / sizeof(noiseChars[0])))];
+    }
+    line[20] = '\0';
+    LCD_SET(0, row);
+    LCD_PRINT(line);
+  }
+  LCD_DUMP();
+}
+
+static void renderAuthIntroFrame() {
+  LCD_CLEAR();
+  introPrintPaddedLine(0, "[ QUANTUM CORE OS ]");
+  introPrintPaddedLine(1, "  AUTH: D.  MELCER  ");
+  introPrintPaddedLine(2, "  AUTH: R. WOZNIAK  ");
+  introPrintPaddedLine(3, "VERIFYING CREDENTIAL");
+  LCD_DUMP();
+}
+
+static void renderTickingFrameBase() {
+  LCD_CLEAR();
+  introPrintBorderLine(0, '.', '.');
+  LCD_SET(0, 1);
+  LCD_PRINT(F("|                  |"));
+  LCD_SET(0, 2);
+  LCD_PRINT(F("|                  |"));
+  introPrintBorderLine(3, '\'', '\'');
+  LCD_DUMP();
+}
+
+static void renderTickingFrameText(uint8_t revealCount) {
+  static const char kTicking[] = "TICKING";
+  static const char kBomb[] = "BOMB";
+  char row1[19];
+  char row2[19];
+  memset(row1, ' ', 18);
+  memset(row2, ' ', 18);
+  row1[18] = '\0';
+  row2[18] = '\0';
+
+  const uint8_t tickingVisible = revealCount < 7 ? revealCount : 7;
+  const uint8_t bombVisible = revealCount > 7 ? (uint8_t)((revealCount - 7) < 4 ? (revealCount - 7) : 4) : 0;
+  const uint8_t tickingStart = (18 - 7) / 2;
+  const uint8_t bombStart = (18 - 4) / 2;
+
+  memcpy(row1 + tickingStart, kTicking, tickingVisible);
+  memcpy(row2 + bombStart, kBomb, bombVisible);
+
+  introPrintBorderLine(0, '.', '.');
+  LCD_SET(0, 1);
+  LCD_PRINT(F("|"));
+  LCD_PRINT(row1);
+  LCD_PRINT(F("|"));
+  LCD_SET(0, 2);
+  LCD_PRINT(F("|"));
+  LCD_PRINT(row2);
+  LCD_PRINT(F("|"));
+  introPrintBorderLine(3, '\'', '\'');
+  LCD_DUMP();
+}
+
+static void introBegin() {
+  randomSeed((uint32_t)micros());
+  s_intro = BootIntroState{};
+  s_intro.phase = IntroPhase::Noise;
+  s_intro.phaseStartedMs = millis();
+  s_intro.backlightOn = true;
+}
+
+static bool serviceEpicBootSequence() {
+  if (s_intro.phase == IntroPhase::Idle || s_intro.phase == IntroPhase::Done) {
+    return false;
+  }
+
+  const unsigned long nowMs = millis();
+  switch (s_intro.phase) {
+    case IntroPhase::Noise:
+      if (s_intro.lastNoiseMs == 0 || (nowMs - s_intro.lastNoiseMs) >= 90UL) {
+        introRenderNoiseFrame();
+        s_intro.lastNoiseMs = nowMs;
+      }
+      if ((nowMs - s_intro.phaseStartedMs) >= 1800UL) {
+        renderAuthIntroFrame();
+        tone(BUZZER_PIN, 1760, 70);
+        s_intro.phase = IntroPhase::AuthHold;
+        s_intro.phaseStartedMs = nowMs;
+      }
+      break;
+
+    case IntroPhase::AuthHold:
+      if ((nowMs - s_intro.phaseStartedMs) >= 3000UL) {
+        s_intro.phase = IntroPhase::FrameBuild;
+        s_intro.phaseStartedMs = nowMs;
+      }
+      break;
+
+    case IntroPhase::FrameBuild:
+      renderTickingFrameBase();
+      tone(BUZZER_PIN, 140, 120);
+      s_intro.revealIndex = 0;
+      s_intro.phase = IntroPhase::Reveal;
+      s_intro.phaseStartedMs = nowMs;
+      s_intro.lastRevealMs = nowMs;
+      break;
+
+    case IntroPhase::Reveal:
+      if ((nowMs - s_intro.lastRevealMs) >= 200UL) {
+        ++s_intro.revealIndex;
+        renderTickingFrameText(s_intro.revealIndex);
+        tone(BUZZER_PIN, (uint16_t)(145 + (s_intro.revealIndex * 14U)), 160);
+        s_intro.lastRevealMs = nowMs;
+      }
+      if (s_intro.revealIndex >= 11) {
+        s_intro.phase = IntroPhase::FlashOn;
+        s_intro.flashStartedMs = nowMs;
+        s_intro.flashCount = 0;
+        s_intro.backlightOn = true;
+        renderTickingFrameText(11);
+        lcd.backlight();
+      }
+      break;
+
+    case IntroPhase::FlashOn:
+      if (!s_intro.backlightOn) {
+        lcd.backlight();
+        s_intro.backlightOn = true;
+      }
+      if ((nowMs - s_intro.flashStartedMs) >= 110UL) {
+        s_intro.phase = IntroPhase::FlashOff;
+        s_intro.flashStartedMs = nowMs;
+      }
+      break;
+
+    case IntroPhase::FlashOff:
+      if (s_intro.backlightOn) {
+        lcd.noBacklight();
+        s_intro.backlightOn = false;
+      }
+      if ((nowMs - s_intro.flashStartedMs) >= 90UL) {
+        ++s_intro.flashCount;
+        if (s_intro.flashCount >= 3) {
+          lcd.backlight();
+          s_intro.backlightOn = true;
+          introPrintBorderLine(0, '.', '.');
+          introPrintCentered(1, "SYSTEM READY");
+          introPrintPaddedLine(2, "                  ");
+          introPrintBorderLine(3, '\'', '\'');
+          LCD_DUMP();
+          tone(BUZZER_PIN, 523, 90);
+          s_intro.phase = IntroPhase::SuccessReady;
+          s_intro.phaseStartedMs = nowMs;
+        } else {
+          s_intro.phase = IntroPhase::FlashOn;
+          s_intro.flashStartedMs = nowMs;
+        }
+      }
+      break;
+
+    case IntroPhase::SuccessReady:
+      if ((nowMs - s_intro.phaseStartedMs) >= 300UL) {
+        s_intro.phase = IntroPhase::SuccessRiff;
+        s_intro.riffStartedMs = nowMs;
+        s_intro.riffIndex = 0;
+      }
+      break;
+
+    case IntroPhase::SuccessRiff: {
+      static const uint16_t kNotes[] = {523, 659, 784, 1047, 1319};
+      static const uint16_t kDurationsMs[] = {120, 100, 95, 85, 180};
+
+      if (s_intro.riffIndex == 0) {
+        tone(BUZZER_PIN, kNotes[0], kDurationsMs[0]);
+        s_intro.riffStartedMs = nowMs;
+        ++s_intro.riffIndex;
+      } else if (s_intro.riffIndex < 5 && (nowMs - s_intro.riffStartedMs) >= kDurationsMs[s_intro.riffIndex - 1]) {
+        tone(BUZZER_PIN, kNotes[s_intro.riffIndex], kDurationsMs[s_intro.riffIndex]);
+        s_intro.riffStartedMs = nowMs;
+        ++s_intro.riffIndex;
+      } else if (s_intro.riffIndex >= 5 && (nowMs - s_intro.riffStartedMs) >= 220UL) {
+        noTone(BUZZER_PIN);
+        s_intro.phase = IntroPhase::Done;
+      }
+      break;
+    }
+
+    case IntroPhase::Done:
+    case IntroPhase::Idle:
+    default:
+      return false;
+  }
+
+  return s_intro.phase != IntroPhase::Done;
+}
+
 Preferences s_prefs;
+bool showEpicIntro = true;
+int settingsEpicIntroIndex = 0;
+int settingsEpicIntroMenuCount = 2;
+const char* settingsEpicIntroItems[] = {"ON", "OFF"};
+
+constexpr unsigned long SETUP_DELAY_MS      = 100;  // min delay for serial init
+constexpr long UART_BAUD = 115200;
+HardwareSerial& uart = Serial2;
+#define DHT_PIN 4
+#define DHT_TYPE DHT11
+static uint32_t heapBaseline = 0;
+static bool s_alarmMelodyDemoActive = false;
+static unsigned long s_alarmMelodyDemoEndMs = 0;
+int settingsUiScreenIndex = 0;
+int settingsAlarmMelodyIndex = 0;
+int s_prevSettingsAlarmMelodyIndex = 0;
+constexpr uint8_t ENC_CLK = 25;
+constexpr uint8_t ENC_DT  = 26;
+constexpr uint8_t ENC_SW  = 27;
+const char* const WIFI_SSID  = "Orange_Swiatlowod_98E2";
+const char* const WIFI_PASS   = "x1Z6P(~8pry<St.";
+const char* const NTP_SERVER  = "pool.ntp.org";
+constexpr int BMP280_MENU_COUNT = 4;
+int bmp280MenuCount = BMP280_MENU_COUNT;
+
+void updateDHT();
+
+// --- Menu Główne ---
+int menuIndex = 0;
+const char* menuItems[] = {
+  "Ustaw czas",
+  "Minutnik",
+  "Stoper",
+  "Budzik",
+  "Statystyki",
+  "Debug STM32",
+  "PMS5003",
+  "AHT21 + ENS160",
+  "BMP280",
+  "Temperatura",
+  "Wilgotnosc",
+  "Ustawienia",
+  "Wyjscie",
+  "Radio: Toggle"
+};
+constexpr int MENU_COUNT = 14;
+int menuCount = MENU_COUNT;
+
+// --- Menu Statystyk ---
+int statsMenuIndex = 0;
+const char* statsMenuItems[] = {
+  "Kliki",
+  "Kroki",
+  "Temp min/max",
+  "Wilg min/max",
+  "Ram Free",
+  "CPU",
+  "Flash Free"
+};
+constexpr int STATS_MENU_COUNT = 7;
+int statsMenuCount = STATS_MENU_COUNT;
+
+// --- Menu Zasobów Systemu ---
+int resourcesMenuIndex = 0;
+const char* resourcesMenuItems[] = {
+  "RAM Free",
+  "CPU",
+  "Flash Free"
+};
+constexpr int RESOURCES_MENU_COUNT = 3;
+int resourcesMenuCount = RESOURCES_MENU_COUNT;
+
+// --- Menu PMS5003 ---
+int pms5003MenuIndex = 0;
+const char* pms5003MenuItems[] = {
+  "Tryb Fabryczny",
+  "Tryb Atmosferyczny",
+  "L.Czastek #/100cm3",
+  "Telemetria",
+};
+constexpr int PMS5003_MENU_COUNT = 4;
+int pms5003MenuCount = PMS5003_MENU_COUNT;
+
+// --- Menu ENS160 + AHT21 ---
+int ens160MenuIndex = 0;
+const char* ens160MenuItems[] = {
+  "AQI",
+  "TVOC",
+  "eCO2",
+};
+constexpr int ENS160_MENU_COUNT = 3;
+int ens160MenuCount = ENS160_MENU_COUNT;
+
+// --- Menu BMP280 ---
+int bmp280MenuIndex = 0;
+const char* bmp280MenuItems[] = {
+  "Temperature",
+  "Pressure",
+  "Status",
+  "Altitude"
+};
+
+// --- Menu PMS5003 CF=1 ---
+int pms5003CF1MenuIndex = 0;
+const char* pms5003CF1MenuItems[] = {
+  "PM1.0",
+  "PM2.5",
+  "PM10"
+};
+constexpr int PMS5003_CF1_MENU_COUNT = 3;
+int pms5003CF1MenuCount = PMS5003_CF1_MENU_COUNT;
+
+// --- Menu PMS5003 ATM ---
+int pms5003ATMMenuIndex = 0;
+const char* pms5003ATMMenuItems[] = {
+  "PM1.0",
+  "PM2.5",
+  "PM10"
+};
+constexpr int PMS5003_ATM_MENU_COUNT = 3;
+int pms5003ATMMenuCount = PMS5003_ATM_MENU_COUNT;
+
+// --- Menu PMS5003 PARTICLE COUNT ---
+int pms5003ParticlesMenuIndex = 0;
+const char* pms5003ParticlesMenuItems[] = {
+  "0.3um",
+  "0.5um",
+  "1.0um",
+  "2.5um",
+  "5.0um",
+  "10.0um"
+};
+constexpr int PMS5003_PARTICLES_MENU_COUNT = 6;
+int pms5003ParticlesMenuCount = PMS5003_PARTICLES_MENU_COUNT;
+
+// --- Menu Ustawień ---
+int settingsMenuIndex = 0;
+const char* settingsMenuItems[] = {
+  "PMS5003",
+  "Buzzer",
+  "MQTT",
+  "Alarmy",
+  "Synchronizacja",
+  "Rotacja Ekranu",
+  "UI ekran",
+  "Boot Intro",
+  "Wyjscie"
+};
+constexpr int SETTINGS_MENU_COUNT = 9;
+int settingsMenuCount = SETTINGS_MENU_COUNT;
+
+// --- Menu: Synchronizacja ---
+int settingsSyncMinutes = 60;
+int s_prevSettingsSyncMin = 60;
+
+// --- Menu Ustawienia UI EKRAN ---
+const char* settingsUiScreenItems[] = {
+  "Minimal",
+  "Balanced",
+  "Extreme"
+};
+constexpr int SETTINGS_UI_SCREEN_COUNT = 3;
+int settingsUiScreenCount = SETTINGS_UI_SCREEN_COUNT;
+
+// --- Menu Ustawienia PMS5003 ---
+int settingsPmsMenuIndex = 0;
+const char* settingsPmsMenuItems[] = {
+  "Wlaczony",
+  "Wylaczony"
+};
+constexpr int SETTINGS_PMS_MENU_COUNT = 2;
+int settingsPmsMenuCount = SETTINGS_PMS_MENU_COUNT;
+
+// --- Menu Ustawienia Buzera ---
+int settingsBuzzerMenuIndex = 0;
+const char* settingsBuzzerMenuItems[] = {
+  "Wlaczony",
+  "Wylaczony"
+};
+constexpr int SETTINGS_BUZZER_MENU_COUNT = 2;
+int settingsBuzzerMenuCount = SETTINGS_BUZZER_MENU_COUNT;
+
+// --- Menu Ustawienia MQTT ---
+int settingsMqttMenuIndex = 0;
+const char* settingsMqttMenuItems[] = {
+  "Wlaczony",
+  "Wylaczony"
+};
+constexpr int SETTINGS_MQTT_MENU_COUNT = 2;
+int settingsMqttMenuCount = SETTINGS_MQTT_MENU_COUNT;
+
+// --- PMS5003 Telemetry ---
+uint16_t pms5003_errorCount_current = 0;
+uint16_t pms5003_errorCount_total = 0;
+uint16_t pms5003_bytesReceived = 0;
+uint32_t pms5003_lastFrameTime = 0;
+uint32_t pms5003_latency_ms = 0;
+
+// --- PMS5003 Current Values ---
+uint16_t pms5003_PM1_0_CF1 = 0;
+uint16_t pms5003_PM2_5_CF1 = 0;
+uint16_t pms5003_PM10_CF1 = 0;
+
+uint16_t pms5003_PM1_0_ATM = 0;
 
 static void requestHomeRedraw();
+
+static int loadAlarmMelodyIndexFromPrefs() {
+  String savedMelodyId = s_prefs.getString("alarmMelodyId", "");
+  if (savedMelodyId.length() > 0) {
+    int loadedIndex = AlarmMelodies::indexOfId(savedMelodyId.c_str());
+    if (loadedIndex >= 0 && loadedIndex < AlarmMelodies::kCount) {
+      return loadedIndex;
+    }
+  }
+
+  int loadedIndex = (int)s_prefs.getUShort("alarmMelody", 0);
+  if (loadedIndex < 0) loadedIndex = 0;
+  if (loadedIndex >= AlarmMelodies::kCount) loadedIndex = AlarmMelodies::kCount - 1;
+  return loadedIndex;
+}
 
 static uint8_t homeOverlayCountForProfile(HomeUiProfile profile) {
   switch (profile) {
@@ -159,7 +644,6 @@ static void serviceHomeRedraw() {
   s_lastHomeRedrawMs = nowMs;
   s_homeRedrawDirty  = false;
 
-  // Jedyna ścieżka, która fizycznie rysuje na LCD (+ mirror UART).
   switch (s_homeOverlay) {
     case HomeOverlayPage::Indoor:
       drawIndoorWeatherScreen();
@@ -180,17 +664,6 @@ static void serviceHomeRedraw() {
   }
 }
 
-void setHomeUiProfile(uint8_t profileIndex) {
-  if (profileIndex > static_cast<uint8_t>(HomeUiProfile::Extreme)) {
-    profileIndex = 0;
-  }
-
-  s_homeUiProfile = static_cast<HomeUiProfile>(profileIndex);
-  settingsUiScreenIndex = (int)profileIndex;
-  syncHomeOverlayToProfile(true);
-}
-
-// Zamiast bezpośredniego drawHome() w kodzie aplikacji wywołuj to.
 static void drawHomeThrottled() {
   requestHomeRedraw();
   serviceHomeRedraw();
@@ -201,7 +674,6 @@ static void serviceHomeOverlayRotation() {
 
   const unsigned long nowMs = millis();
   const uint8_t overlayCount = homeOverlayCountForProfile(s_homeUiProfile);
-
   if (overlayCount == 0) {
     return;
   }
@@ -222,23 +694,12 @@ static void serviceHomeOverlayRotation() {
     requestHomeRedraw();
     return;
   }
-
-  if (s_homeOverlay == HomeOverlayPage::Indoor) {
-    constexpr unsigned long HOME_INDOOR_ANIM_MS = 3500UL;
-    if (s_homeIndoorAnimSinceMs == 0) {
-      s_homeIndoorAnimSinceMs = nowMs;
-    } else if ((nowMs - s_homeIndoorAnimSinceMs) >= HOME_INDOOR_ANIM_MS) {
-      s_homeIndoorAnimSinceMs = nowMs;
-      requestHomeRedraw();
-    }
-  }
 }
 
 static void handleHomeEntryIfStateChanged() {
   static AppState lastState = STATE_HOME;
   if (appState == lastState) return;
 
-  // We just entered HOME: start from TIME view for 3 seconds.
   if (appState == STATE_HOME) {
     s_homeOverlayIndex = 0;
     syncHomeOverlayToProfile(true);
@@ -246,257 +707,17 @@ static void handleHomeEntryIfStateChanged() {
 
   lastState = appState;
 }
-constexpr unsigned long SETUP_DELAY_MS      = 100;  // min delay for serial init
 
-// ============================================================================
-// DEKLARACJE FUNKCJI (dla PlatformIO)
-// ============================================================================
+void setHomeUiProfile(uint8_t profileIndex) {
+  if (profileIndex > static_cast<uint8_t>(HomeUiProfile::Extreme)) {
+    profileIndex = 0;
+  }
 
-
-// --- Logika zegara ---
-void tickClock();
-void playAlarmMelody();
-
-// --- Wrapper dla kompatybilności ---
-void syncTimeFromWiFi() {
-  // Uruchom sync w trybie Wi-Fi, wymuszając wyłączenie BT.
-  ModeManager::wifiOn();
+  s_homeUiProfile = static_cast<HomeUiProfile>(profileIndex);
+  settingsUiScreenIndex = (int)profileIndex;
+  syncHomeOverlayToProfile(true);
 }
 
-// --- zasoby systemu ---
-void drawSystemResources();
-
-// ============================================================================
-// KONFIGURACJA SPRZĘTU (PINY + STAŁE)
-// ============================================================================
-
-// --- 7-SEG (74HC595) - piny zdefiniowane w UI_Draw.h jako makra ---
-// DATA_PIN = 23, CLOCK_PIN = 18, LATCH_PIN = 5
-
-// --- Buzzer ---
-constexpr uint8_t BUZZER_PIN = 19;
-const int melodyFreq[] = {1000, 1400, 1000, 1600};
-constexpr int MELODY_LEN = 4;
-
-// --- Encoder (piny dla encoder_begin) ---
-constexpr uint8_t ENC_CLK = 25;
-constexpr uint8_t ENC_DT  = 26;
-constexpr uint8_t ENC_SW  = 27;
-
-// --- UART / Komunikacja ---
-constexpr long UART_BAUD = 115200;
-HardwareSerial& uart = Serial2;
-
-// --- WiFi / NTP ---
-const char* const WIFI_SSID  = "Orange_Swiatlowod_98E2";
-const char* const WIFI_PASS  = "x1Z6P(~8pry<St.";
-const char* const NTP_SERVER = "pool.ntp.org";
-
-// --- DHT Sensor ---
-// --- DHT11 ---
-#define DHT_PIN 4
-#define DHT_TYPE DHT11
-
-// --- DHT11 ---
-void updateDHT();
-void drawTemperature();
-void drawHumidity();
-void showTemperature7Seg();
-void showHumidity7Seg();
-
-
-// ============================================================================
-// ZMIENNE GLOBALNE (pogrupowane funkcjonalnie)
-// ============================================================================
-
-// --- AppState (EXTERN z AppState.cpp) ---
-// extern AppState appState;   (zdefiniowane w AppState.cpp)
-// extern EditState editState; (zdefiniowane w AppState.cpp)
-
-// --- Menu Główne ---
-int menuIndex = 0;
-const char* menuItems[] = {
-  "Ustaw czas",
-  "Minutnik",
-  "Stoper",
-  "Budzik",
-  "Statystyki",
-  "Debug STM32",
-  "PMS5003",
-  "AHT21 + ENS160",
-  "BMP280",
-  "Temperatura",
-  "Wilgotnosc",
-  "Ustawienia",
-  "Wyjscie",
-  "Radio: Toggle"
-};
-constexpr int MENU_COUNT = 14;
-int menuCount = MENU_COUNT;
-
-// Diagnostyka pamięci
-static uint32_t heapBaseline = 0;
-
-// --- Menu Statystyk ---
-int statsMenuIndex = 0;
-const char* statsMenuItems[] = {
-  "Kliki",
-  "Kroki",
-  "Temp min/max",
-  "Wilg min/max",
-  "Zasoby",
-  "Wyjscie"
-};
-constexpr int STATS_MENU_COUNT = 6;
-int statsMenuCount = STATS_MENU_COUNT;
-
-// --- Menu Zasobów Systemu ---
-int resourcesMenuIndex = 0;
-const char* resourcesMenuItems[] = {
-  "RAM Free",
-  "CPU",
-  "Flash Free"
-};
-constexpr int RESOURCES_MENU_COUNT = 3;
-int resourcesMenuCount = RESOURCES_MENU_COUNT;
-
-// --- Menu PMS5003 ---
-int pms5003MenuIndex = 0;
-const char* pms5003MenuItems[] = {
-  "Tryb Fabryczny",
-  "Tryb Atmosferyczny",
-  "L.Czastek #/100cm3",
-  "Telemetria",
-  "Wyjscie"
-};
-constexpr int PMS5003_MENU_COUNT = 5;
-int pms5003MenuCount = PMS5003_MENU_COUNT;
-
-// --- Menu ENS160 + AHT21 ---
-int ens160MenuIndex = 0;
-const char* ens160MenuItems[] = {
-  "AQI",
-  "TVOC",
-  "eCO2",
-  "Temperature",
-  "Humidity",
-  "Status"
-};
-constexpr int ENS160_MENU_COUNT = 6;
-int ens160MenuCount = ENS160_MENU_COUNT;
-
-// --- Menu BMP280 ---
-int bmp280MenuIndex = 0;
-const char* bmp280MenuItems[] = {
-  "Temperature",
-  "Pressure",
-  "Status",
-  "Altitude"
-};
-constexpr int BMP280_MENU_COUNT = 4;
-int bmp280MenuCount = BMP280_MENU_COUNT;
-
-// --- Menu PMS5003 CF=1 (Wybór PM do szczegółów) ---
-int pms5003CF1MenuIndex = 0;
-const char* pms5003CF1MenuItems[] = {
-  "PM1.0",
-  "PM2.5",
-  "PM10"
-};
-constexpr int PMS5003_CF1_MENU_COUNT = 3;
-int pms5003CF1MenuCount = PMS5003_CF1_MENU_COUNT;
-
-// --- Menu PMS5003 ATM (Wybór PM do szczegółów) ---
-int pms5003ATMMenuIndex = 0;
-const char* pms5003ATMMenuItems[] = {
-  "PM1.0",
-  "PM2.5",
-  "PM10"
-};
-constexpr int PMS5003_ATM_MENU_COUNT = 3;
-int pms5003ATMMenuCount = PMS5003_ATM_MENU_COUNT;
-
-// --- Menu PMS5003 PARTICLE COUNT (Wybór rozmiaru cząstki) ---
-int pms5003ParticlesMenuIndex = 0;
-const char* pms5003ParticlesMenuItems[] = {
-  "0.3um",
-  "0.5um",
-  "1.0um",
-  "2.5um",
-  "5.0um",
-  "10um"
-};
-constexpr int PMS5003_PARTICLES_MENU_COUNT = 6;
-int pms5003ParticlesMenuCount = PMS5003_PARTICLES_MENU_COUNT;
-
-// --- Menu Ustawień (Settings) ---
-int settingsMenuIndex = 0;
-const char* settingsMenuItems[] = {
-  "PMS5003",
-  "Buzzer",
-  "MQTT",
-  "Synchronizacja",
-  "Rotacja Ekranu",
-  "UI EKRAN",
-  "Wyjscie"
-};
-constexpr int SETTINGS_MENU_COUNT = 7;
-int settingsMenuCount = SETTINGS_MENU_COUNT;
-
-// --- Menu: Synchronizacja (NTP) ---
-int settingsSyncMinutes = 60; // default 60 minutes
-int s_prevSettingsSyncMin = 60;
-
-// --- Menu Ustawienia UI EKRAN ---
-int settingsUiScreenIndex = 0;
-const char* settingsUiScreenItems[] = {
-  "Minimal",
-  "Balanced",
-  "Extreme"
-};
-constexpr int SETTINGS_UI_SCREEN_COUNT = 3;
-int settingsUiScreenCount = SETTINGS_UI_SCREEN_COUNT;
-
-// --- Menu Ustawienia PMS5003 (włącz/wyłącz) ---
-int settingsPmsMenuIndex = 0;
-const char* settingsPmsMenuItems[] = {
-  "Wlaczony",
-  "Wylaczony"
-};
-constexpr int SETTINGS_PMS_MENU_COUNT = 2;
-int settingsPmsMenuCount = SETTINGS_PMS_MENU_COUNT;
-
-// --- Menu Ustawienia Buzera (włącz/wyłącz) ---
-int settingsBuzzerMenuIndex = 0;
-const char* settingsBuzzerMenuItems[] = {
-  "Wlaczony",
-  "Wylaczony"
-};
-constexpr int SETTINGS_BUZZER_MENU_COUNT = 2;
-int settingsBuzzerMenuCount = SETTINGS_BUZZER_MENU_COUNT;
-
-// --- Menu Ustawienia MQTT (włącz/wyłącz) ---
-int settingsMqttMenuIndex = 0;
-const char* settingsMqttMenuItems[] = {
-  "Wlaczony",
-  "Wylaczony"
-};
-constexpr int SETTINGS_MQTT_MENU_COUNT = 2;
-int settingsMqttMenuCount = SETTINGS_MQTT_MENU_COUNT;
-
-// --- Dane PMS5003 TELEMETRIA ---
-uint16_t pms5003_errorCount_current = 0;
-uint16_t pms5003_errorCount_total = 0;
-uint16_t pms5003_bytesReceived = 0;
-uint32_t pms5003_lastFrameTime = 0;
-uint32_t pms5003_latency_ms = 0;
-
-// --- Dane PMS5003 BIEŻĄCE ---
-uint16_t pms5003_PM1_0_CF1 = 0;
-uint16_t pms5003_PM2_5_CF1 = 0;
-uint16_t pms5003_PM10_CF1 = 0;
-
-uint16_t pms5003_PM1_0_ATM = 0;
 uint16_t pms5003_PM2_5_ATM = 0;
 uint16_t pms5003_PM10_ATM = 0;
 
@@ -553,8 +774,6 @@ AlarmEntry alarms[MAX_ALARMS];
 int alarmsCount = 0; // number of configured alarms
 int alarmsMenuIndex = 0; // selection in list view
 int selectedAlarmIndex = 0; // index for editing/deleting
-unsigned long lastMelodyStep  = 0;
-int  melodyStep      = 0;
 int alarmEditCursor = 0; // 0=CZAS,1=STATUS,2=USUN
 
 // --- Minutnik (Timer) ---
@@ -783,7 +1002,7 @@ void tickClock() {
         alarmRinging = true;
         alarmStartTime = millis();
         alarms[i].lastTriggerDay = (uint16_t)today;
-        lastMelodyStep = 0;
+        AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, BUZZER_PIN);
         break;
       }
     }
@@ -796,7 +1015,7 @@ void tickClock() {
       timerRunning = false;
       alarmRinging = true;
       alarmStartTime = millis();
-      lastMelodyStep = 0;
+      AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, BUZZER_PIN);
       editState = EDIT_HOURS;
       timerStartMillis = 0;
       timerDurationMs = 0;
@@ -810,11 +1029,23 @@ void tickClock() {
 // ============================================================================
 
 void playAlarmMelody() {
-  if (millis() - lastMelodyStep >= MELODY_STEP_MS) {
-    lastMelodyStep = millis();
-    tone(BUZZER_PIN, melodyFreq[melodyStep]);
-    melodyStep = (melodyStep + 1) % MELODY_LEN;
+  AlarmMelodies::service(BUZZER_PIN, millis());
+}
+
+void startAlarmMelodyDemo(uint8_t melodyIndex) {
+  AlarmMelodies::start(melodyIndex, BUZZER_PIN);
+  s_alarmMelodyDemoActive = true;
+  s_alarmMelodyDemoEndMs = millis() + 10000UL;
+}
+
+void stopAlarmMelodyDemo() {
+  if (!s_alarmMelodyDemoActive) {
+    return;
   }
+
+  AlarmMelodies::stop(BUZZER_PIN);
+  s_alarmMelodyDemoActive = false;
+  s_alarmMelodyDemoEndMs = 0;
 }
 
 // ============================================================================
@@ -882,6 +1113,10 @@ void setup() {
   // ===== Menedżer trybów (Wi-Fi/BT) - inicjalizuj WCZEŚNIE =====
   ModeManager::begin(&appState);
 
+  s_prefs.begin("zegar", false);
+  showEpicIntro = s_prefs.getBool("epicIntro", true);
+  settingsEpicIntroIndex = showEpicIntro ? 0 : 1;
+
   // ===== RadioModeSwitch - inicjalizacja przełączania trybu =====
   // BĘDZIE NA KONIEC setup() po LCD i UI init!
   RadioModeSwitch::begin();
@@ -922,10 +1157,14 @@ void setup() {
   // Tighten hd44780 timings to near-datasheet values.
   lcd.setExecTimes(37, 1520);
   lcd.init();
-  lcd.noBacklight();
+  lcd.backlight();
   lcd.clear();
   lcdFrame.syncToCurrentFrame();
   LCDIcons::loadPalette(lcd, LCDIcons::Palette::Home);
+
+  if (showEpicIntro) {
+    introBegin();
+  }
 
   // --- Encoder init ---
   encoder_begin(ENC_CLK, ENC_DT, ENC_SW);
@@ -977,12 +1216,13 @@ void setup() {
 #endif
 
   // Load persisted rotation interval (seconds) from NVS/Preferences if present
-  s_prefs.begin("zegar", false);
   settingsRotationSec = s_prefs.getUShort("homeOverlaySec", (uint16_t)settingsRotationSec);
   if (settingsRotationSec < 1) settingsRotationSec = 1;
   if (settingsRotationSec > 10) settingsRotationSec = 10;
   s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
   s_prevSettingsRotationSec = settingsRotationSec;
+  settingsAlarmMelodyIndex = loadAlarmMelodyIndexFromPrefs();
+  s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
   settingsUiScreenIndex = (int)s_prefs.getUShort("uiScreenMode", (uint16_t)settingsUiScreenIndex);
   if (settingsUiScreenIndex < 0) settingsUiScreenIndex = 0;
   if (settingsUiScreenIndex > 2) settingsUiScreenIndex = 2;
@@ -1039,6 +1279,10 @@ void setup() {
 // ============================================================================
 
 void loop() {
+  if (serviceEpicBootSequence()) {
+    return;
+  }
+
   if (!bootDiagReprinted && millis() >= 5000UL) {
     bootDiagReprinted = true;
     Serial.printf("[boot] serial alive, i2c=%lu Hz, heap=%u\n",
@@ -1276,10 +1520,14 @@ void loop() {
   if (alarmRinging) {
     playAlarmMelody();
     if (millis() - alarmStartTime >= ALARM_DURATION_MS) {
-      noTone(BUZZER_PIN);
+      AlarmMelodies::stop(BUZZER_PIN);
       alarmRinging = false;
       alarmEnabled = false;
-      melodyStep   = 0;
+    }
+  } else if (s_alarmMelodyDemoActive) {
+    playAlarmMelody();
+    if ((long)(millis() - s_alarmMelodyDemoEndMs) >= 0) {
+      stopAlarmMelodyDemo();
     }
   }
 

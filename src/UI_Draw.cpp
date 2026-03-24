@@ -9,6 +9,7 @@
 #include "ENS160AHT21Screen.h"
 #include "BMP280Sensor.h"
 #include "LCDIcons.h"
+#include "AlarmMelodies.h"
 
 extern LiquidCrystal_I2C lcd;
 
@@ -141,11 +142,14 @@ extern bool  dhtReady;
 // --- Settings (z main.cpp / UI_Controller.cpp) ---
 extern bool pms5003Enabled;
 extern int settingsMqttMenuIndex;
+extern int settingsAlarmMelodyIndex;
+extern int settingsEpicIntroIndex;
 extern bool mqttEnabled;
 extern int settingsRotationSec;
 extern int settingsUiScreenIndex;
 extern int settingsUiScreenCount;
 extern const char* settingsUiScreenItems[];
+extern const char* settingsEpicIntroItems[];
 
 // ============================================================================
 // IMPLEMENTACJA FUNKCJI - 7-SEGMENT (74HC595)
@@ -1457,6 +1461,24 @@ void drawStats() {
     clearRow(3);
     break;
   }
+  // === 1f1. Wybór melodii alarmu ===
+  case STATE_SETTINGS_ALARM_MELODY: {
+    char header[21];
+    snprintf(header, sizeof(header), "ALARMY %02d/%02d", settingsAlarmMelodyIndex + 1, AlarmMelodies::kCount);
+    lcdPrintCentered(0, header);
+
+    const int first = (settingsAlarmMelodyIndex / 3) * 3;
+    for (int row = 0; row < 3; ++row) {
+      const int item = first + row;
+      if (item >= AlarmMelodies::kCount) break;
+
+      char line[21];
+      snprintf(line, sizeof(line), "%c%2d. %-15.15s", item == settingsAlarmMelodyIndex ? '>' : ' ', item + 1, AlarmMelodies::name((uint8_t)item));
+      LCD_SET(0, row + 1);
+      LCD_PRINT(line);
+    }
+    break;
+  }
   // === 1g. USTAWIENIE: ROTACJA EKRANU (1..10s, enkoder) ===
   case STATE_SETTINGS_ROTATION: {
     lcdPrintCentered(0, F("ROTACJA EKRANU"));
@@ -1486,9 +1508,20 @@ void drawStats() {
     }
     break;
   }
+  // === 1g2. USTAWIENIA BOOT INTRO (włącz/wyłącz) ===
+  case STATE_SETTINGS_BOOT_INTRO: {
+    lcdPrintCentered(0, F("BOOT INTRO"));
+    lcdPrintCentered(1, F(ALIGN_CENTER));
+
+    char valueBuf[32];
+    snprintf(valueBuf, sizeof(valueBuf), "START: <  %s  >", settingsEpicIntroItems[settingsEpicIntroIndex == 0 ? 0 : 1]);
+    lcdPrintCentered(2, valueBuf);
+    clearRow(3);
+    break;
+  }
   // === 1x. Lista budzików ===
   case STATE_ALARMS_LIST: {
-    lcdPrintCentered(0, F("BUDZIKI"));
+    lcdPrintCentered(0, F("ALARMY"));
     LCD_SET(0, 1);
     const int first = (alarmsMenuIndex / 3) * 3;
     for (int row = 0; row < 3; ++row) {
@@ -1501,7 +1534,7 @@ void drawStats() {
         snprintf(buf, sizeof(buf), "%2d. %02d:%02d [%s]   ", idx+1, alarms[idx].hour, alarms[idx].minute, alarms[idx].enabled ? "ON" : "OFF");
         LCD_PRINT(buf);
       } else if (idx == alarmsCount) {
-        LCD_PRINT(F("[+] DODAJ NOWY   "));
+        LCD_PRINT(F("[+] DODAJ ALARM  "));
       } else {
         LCD_PRINT(F("                    "));
       }
@@ -1511,7 +1544,7 @@ void drawStats() {
   // === 1y. Edycja budzika (ergonomiczna: kursor po lewej, opcja USUN) ===
   case STATE_ALARM_EDIT: {
     char header[21];
-    snprintf(header, sizeof(header), "EDYCJA BUDZIKA %d", selectedAlarmIndex + 1);
+    snprintf(header, sizeof(header), "EDYCJA ALARMU %d", selectedAlarmIndex + 1);
     lcdPrintCentered(0, header);
 
     lcdPrintCentered(1, F(ALIGN_CENTER));

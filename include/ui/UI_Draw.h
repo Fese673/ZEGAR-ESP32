@@ -115,6 +115,7 @@ void drawHome();
 void drawAirScreen();
 void drawIndoorWeatherScreen();
 void drawExtremeEnvironmentScreen();
+void drawExtremeAlgorithmScreen();
 void setHomeUiProfile(uint8_t profileIndex);
 void drawMenu();
 void drawSetTime();

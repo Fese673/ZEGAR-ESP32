@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 #include "WiFiSync.h"
-#include "Bluetooth/AudioBT.h"
+#include "bluetooth/AudioBT.h"
 #include "Encoder.h"
 
 namespace ModeManager {

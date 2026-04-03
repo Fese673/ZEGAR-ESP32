@@ -5,7 +5,14 @@
 #include "ModeManager.h"
 #include <LiquidCrystal_I2C.h>
 #include <Esp.h>
+#include <math.h>
 #include "PMS_Czujnik.h"
+
+// External shared utilities from main.cpp
+float computeDewPoint(float temperatureC, float humidityPct);
+float computeHumidex(float temperatureC, float humidityPct);
+float computeHeatIndexNWS(float temperatureC, float humidityPct);
+float computeAbsoluteHumidity(float temperatureC, float humidityPct);
 #include "ENS160AHT21Screen.h"
 #include "BMP280Sensor.h"
 #include "LCDIcons.h"
@@ -591,14 +598,135 @@ void drawExtremeEnvironmentScreen() {
   LCD_SET(0, 2);
   LCD_PRINT(line);
 
-  if (pmValid) {
-    snprintf(line, sizeof(line), "PM2.5:%u W:%s B:%s", (unsigned)pms5003_PM2_5_ATM, ModeManager::isWifiOn() ? "ON" : "OFF", ModeManager::isBtOn() ? "ON" : "OFF");
+  float temperature = NAN;
+  if (bmpValid && BMP280Screen::runtimeData.hasTemperature) {
+    temperature = BMP280Screen::runtimeData.temperatureC;
+  } else if (ensClimateValid) {
+    temperature = ENS160AHT21Screen::runtimeData.temperatureC;
+  } else if (dhtReady) {
+    temperature = dhtTemperature;
+  }
+
+  float humidity = NAN;
+  if (ensClimateValid) {
+    humidity = ENS160AHT21Screen::runtimeData.humidityPct;
+  } else if (dhtReady) {
+    humidity = dhtHumidity;
+  }
+
+  float dewPoint = NAN;
+  float dewDelta = NAN;
+  if (isfinite(temperature) && isfinite(humidity)) {
+    dewPoint = computeDewPoint(temperature, humidity);
+    if (isfinite(dewPoint)) {
+      dewDelta = temperature - dewPoint;
+    }
+  }
+
+  float humidex = NAN;
+  float absoluteHumidity = NAN;
+  if (isfinite(temperature) && isfinite(humidity)) {
+    humidex = computeHumidex(temperature, humidity);
+    absoluteHumidity = computeAbsoluteHumidity(temperature, humidity);
+  }
+
+  if (isfinite(humidex) && isfinite(absoluteHumidity)) {
+    snprintf(line, sizeof(line), "HMDX:%4.1f AH:%3.0fg", humidex, absoluteHumidity);
+  } else if (isfinite(humidex)) {
+    snprintf(line, sizeof(line), "HMDX:%4.1f DP:%4.1f", humidex, dewPoint);
+  } else if (isfinite(dewPoint)) {
+    snprintf(line, sizeof(line), "DP:%4.1f D:%4.1f", dewPoint, dewDelta);
   } else {
-    snprintf(line, sizeof(line), "PM2.5:-- W:%s B:%s", ModeManager::isWifiOn() ? "ON" : "OFF", ModeManager::isBtOn() ? "ON" : "OFF");
+    snprintf(line, sizeof(line), "HMDX:--.- AH:--.-");
   }
   padRightTo20(line);
   LCD_SET(0, 3);
   LCD_PRINT(line);
+
+  LCD_DUMP();
+}
+
+void drawExtremeAlgorithmScreen() {
+  LCD_CLEAR();
+  lcdPrintCentered(0, F("EXTREME ALGOS"));
+
+  float temperature = NAN;
+  if (BMP280Screen::runtimeData.hasTemperature) {
+    temperature = BMP280Screen::runtimeData.temperatureC;
+  } else if (ENS160AHT21Screen::runtimeData.hasClimateSample) {
+    temperature = ENS160AHT21Screen::runtimeData.temperatureC;
+  } else if (dhtReady) {
+    temperature = dhtTemperature;
+  }
+
+  float humidity = NAN;
+  if (ENS160AHT21Screen::runtimeData.hasClimateSample) {
+    humidity = ENS160AHT21Screen::runtimeData.humidityPct;
+  } else if (dhtReady) {
+    humidity = dhtHumidity;
+  }
+
+  float dewPoint = NAN;
+  float humidex = NAN;
+  float absoluteHumidity = NAN;
+  float heatIndex = NAN;
+
+  if (isfinite(temperature) && isfinite(humidity)) {
+    dewPoint = computeDewPoint(temperature, humidity);
+    humidex = computeHumidex(temperature, humidity);
+    absoluteHumidity = computeAbsoluteHumidity(temperature, humidity);
+    heatIndex = computeHeatIndexNWS(temperature, humidity);
+  }
+
+  char line[21];
+  if (isfinite(dewPoint) && isfinite(humidex)) {
+    snprintf(line, sizeof(line), "DP:%4.1f HMDX:%4.1f", dewPoint, humidex);
+  } else if (isfinite(dewPoint)) {
+    snprintf(line, sizeof(line), "DP:%4.1f HMDX:--.-", dewPoint);
+  } else {
+    snprintf(line, sizeof(line), "DP:--.- HMDX:--.-");
+  }
+  padRightTo20(line);
+  LCD_SET(0, 1);
+  LCD_PRINT(line);
+
+  if (isfinite(absoluteHumidity) && isfinite(heatIndex)) {
+    snprintf(line, sizeof(line), "AH:%3.1fg HI:%4.1f", absoluteHumidity, heatIndex);
+  } else if (isfinite(absoluteHumidity)) {
+    snprintf(line, sizeof(line), "AH:%3.1fg HI:--.-", absoluteHumidity);
+  } else {
+    snprintf(line, sizeof(line), "AH:--.- HI:--.-");
+  }
+  padRightTo20(line);
+  LCD_SET(0, 2);
+  LCD_PRINT(line);
+
+  float dewDelta = NAN;
+  if (isfinite(temperature) && isfinite(dewPoint)) {
+    dewDelta = temperature - dewPoint;
+  }
+
+  const char *condRisk = "N/A";
+  if (isfinite(dewDelta)) {
+    if (dewDelta < 2.0f) {
+      condRisk = "CRIT";
+    } else if (dewDelta < 4.0f) {
+      condRisk = "WARN";
+    } else {
+      condRisk = "SAFE";
+    }
+  }
+
+  if (isfinite(dewDelta)) {
+    snprintf(line, sizeof(line), "Dlt:%4.1f %s", dewDelta, condRisk);
+  } else {
+    snprintf(line, sizeof(line), "Dlt:--.- %-5s", condRisk);
+  }
+
+  padRightTo20(line);
+  LCD_SET(0, 3);
+  LCD_PRINT(line);
+
 
   LCD_DUMP();
 }

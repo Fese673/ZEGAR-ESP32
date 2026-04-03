@@ -5,5 +5,9 @@
 .vscode/ipch
 .vscode/c_cpp_properties.json
 .vscode/launch.json
-KiCAD ZEGAR-ESP32/ZEGAR ESP32-backups
-KiCAD ZEGAR-ESP32/fp-info-cache
+hardware/kicad/ZEGAR ESP32-backups
+hardware/kicad/fp-info-cache
+__pycache__
+.venv
+.pio_build
+docs/reports

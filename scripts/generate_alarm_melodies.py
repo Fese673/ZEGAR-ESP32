@@ -10,7 +10,7 @@ except Exception:
     ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path.cwd()
 
 SOURCE_DIR = ROOT / "DZWIEKI DO WDROZENIA"
-OUTPUT_FILE = ROOT / "src" / "AlarmMelodies.generated.inc"
+OUTPUT_FILE = ROOT / "src" / "audio" / "AlarmMelodies.generated.inc"
 
 NOTE_DEFINE_RE = re.compile(r"^\s*#define\s+(NOTE_[A-Z0-9]+)\s+(\d+)\s*$", re.MULTILINE)
 TEMPO_RE = re.compile(r"int\s+tempo\s*=\s*(\d+)\s*;", re.MULTILINE)
@@ -110,12 +110,17 @@ def emit_array(values: list[int], value_type: str, name: str) -> str:
 
 
 def main() -> None:
+    if not SOURCE_DIR.exists():
+        print(f"Melody source directory not found: {SOURCE_DIR}")
+        return
+
     songs: list[dict[str, object]] = []
     for path in sorted(SOURCE_DIR.rglob("*.ino")):
         songs.append(parse_song(path))
 
     if not songs:
-        raise SystemExit("No songs found")
+        print(f"No songs found in {SOURCE_DIR}; keeping existing generated file")
+        return
 
     out: list[str] = []
     out.append("// Auto-generated from DZWIEKI DO WDROZENIA/*.ino. Do not edit manually.\n\n")

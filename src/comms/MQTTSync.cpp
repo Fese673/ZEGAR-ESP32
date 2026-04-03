@@ -1,5 +1,7 @@
 #include "MQTTSync.h"
 #include "WiFiSync.h"
+#include <NetworkClientSecure.h>
+#include <WiFi.h>
 
 // Externy PMS5003 - zmienne globalne z `main.cpp`
 extern uint16_t pms5003_PM1_0_CF1;
@@ -63,7 +65,7 @@ namespace MQTTSync {
 // ============================================================================
 // Static Variables
 // ============================================================================
-static WiFiClientSecure wifiClientSecure;
+static NetworkClientSecure wifiClientSecure;
 static PubSubClient mqttClient;
 static unsigned long lastPublishTime = 0;
 static unsigned long publishInterval = 5000; // 5 seconds
@@ -226,7 +228,8 @@ void stopCore1Task() {
     }
 }
 
-void publishSensorData(float temp, int humidity, int pressure) {
+void publishSensorData(float temp, int humidity, int pressure,
+                       uint8_t aqi, uint16_t tvoc, uint16_t eco2) {
     // NOTE: scheduling is handled by the caller (`main.cpp`).
     // Do not duplicate rate-limiting here to avoid missing every-other publish.
     // Check if connected
@@ -236,18 +239,22 @@ void publishSensorData(float temp, int humidity, int pressure) {
     }
 
     // Compact JSON payload as an array to save bytes:
-    // [ t, h, p, ts, [F_pm1,F_pm25,F_pm10], [A_pm1,A_pm25,A_pm10], [n0.3,n0.5,1.0,2.5,5.0,10.0] ]
+    // [ t, h, p, aqi, tvoc, eco2, ts, [A_pm1,A_pm25,A_pm10], [n0.3,n0.5,1.0,2.5,5.0,10.0] ]
     StaticJsonDocument<512> doc;
     JsonArray root = doc.to<JsonArray>();
-    root.add(temp);
+    char tempBuffer[16];
+    snprintf(tempBuffer, sizeof(tempBuffer), "%.2f", temp);
+    root.add(serialized(tempBuffer));
     root.add(humidity);
     root.add(pressure);
+    root.add(aqi);
+    root.add(tvoc);
+    root.add(eco2);
     root.add(millis());
 
-    JsonArray f = root.createNestedArray();
-    f.add(pms5003_PM1_0_CF1);
-    f.add(pms5003_PM2_5_CF1);
-    f.add(pms5003_PM10_CF1);
+    Serial.print("[MQTT] ENS160 values: AQI="); Serial.print(aqi);
+    Serial.print(" TVOC="); Serial.print(tvoc);
+    Serial.print(" eCO2="); Serial.println(eco2);
 
     JsonArray a = root.createNestedArray();
     a.add(pms5003_PM1_0_ATM);

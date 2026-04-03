@@ -12,10 +12,10 @@ namespace {
 SemaphoreHandle_t gI2cMutex = nullptr;
 #endif
 
-volatile bool gDiagEnabled = false;
-volatile uint32_t gTimeoutCount = 0;
-volatile uint32_t gNackCount = 0;
-volatile uint32_t gErrorCount = 0;
+bool gDiagEnabled = false;
+uint32_t gTimeoutCount = 0;
+uint32_t gNackCount = 0;
+uint32_t gErrorCount = 0;
 
 uint8_t clampRetries(uint8_t retries)
 {
@@ -29,11 +29,11 @@ void classifyWireError(int err)
     if (!gDiagEnabled) return;
 
     if (err == 2 || err == 3) {
-        gNackCount++;
+        ++gNackCount;
     } else if (err == 5) {
-        gTimeoutCount++;
+        ++gTimeoutCount;
     } else if (err != 0) {
-        gErrorCount++;
+        ++gErrorCount;
     }
 }
 
@@ -161,7 +161,9 @@ bool lock(uint32_t timeoutMs)
     }
 
     if (xSemaphoreTakeRecursive(gI2cMutex, ticks) != pdTRUE) {
-        if (gDiagEnabled) gTimeoutCount++;
+        if (gDiagEnabled) {
+            ++gTimeoutCount;
+        }
         return false;
     }
 #endif
@@ -290,7 +292,9 @@ bool writeRead(TwoWire *wire,
 
         const size_t received = wire->requestFrom((int)address7bit, (int)readLen);
         if (received != readLen) {
-            if (gDiagEnabled) gErrorCount++;
+            if (gDiagEnabled) {
+                ++gErrorCount;
+            }
             while (wire->available()) {
                 (void)wire->read();
             }
@@ -304,7 +308,9 @@ bool writeRead(TwoWire *wire,
 
         for (size_t idx = 0; idx < readLen; idx++) {
             if (!wire->available()) {
-                if (gDiagEnabled) gErrorCount++;
+                if (gDiagEnabled) {
+                    ++gErrorCount;
+                }
                 break;
             }
             readData[idx] = (uint8_t)wire->read();

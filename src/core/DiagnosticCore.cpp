@@ -15,29 +15,29 @@ void update() {
     last_diag = millis();
     
     // Pobierz info o taskach
-    TaskStatus_t* pxTaskStatusArray;
-    volatile UBaseType_t uxArraySize, x;
+    TaskStatus_t* pxTaskStatusArray = nullptr;
+    UBaseType_t taskCount = 0;
     uint32_t ulTotalRunTime = 0;
     
-    uxArraySize = uxTaskGetNumberOfTasks();
-    pxTaskStatusArray = (TaskStatus_t*)pvPortMalloc(uxArraySize * sizeof(TaskStatus_t));
+    taskCount = uxTaskGetNumberOfTasks();
+    pxTaskStatusArray = static_cast<TaskStatus_t*>(pvPortMalloc(taskCount * sizeof(TaskStatus_t)));
     
     if (pxTaskStatusArray == NULL) {
         Serial.println("[DIAG] Brak pamięci na task info");
         return;
     }
     
-    uxArraySize = uxTaskGetSystemState(pxTaskStatusArray, uxArraySize, &ulTotalRunTime);
+    taskCount = uxTaskGetSystemState(pxTaskStatusArray, taskCount, &ulTotalRunTime);
     
     Serial.println("\n=== DIAGNOSTIC TASK INFO (every 2s) ===");
     Serial.printf("Free Heap: %u bytes\n", ESP.getFreeHeap());
     Serial.println("Task Name\t\tState\tPrio\tRunTime%%");
     Serial.println("-----------------------------------------");
     
-    for (x = 0; x < uxArraySize; x++) {
-        if (pxTaskStatusArray[x].ulRunTimeCounter > 0) {
+    for (UBaseType_t taskIndex = 0; taskIndex < taskCount; ++taskIndex) {
+        if (pxTaskStatusArray[taskIndex].ulRunTimeCounter > 0) {
             const char* state_str = "?";
-            switch (pxTaskStatusArray[x].eCurrentState) {
+            switch (pxTaskStatusArray[taskIndex].eCurrentState) {
                 case eRunning:   state_str = "RUN"; break;
                 case eReady:     state_str = "RDY"; break;
                 case eBlocked:   state_str = "BLK"; break;
@@ -46,12 +46,12 @@ void update() {
                 default:         state_str = "???"; break;
             }
             
-            uint32_t percent = (pxTaskStatusArray[x].ulRunTimeCounter * 100) / (ulTotalRunTime ? ulTotalRunTime : 1);
+            uint32_t percent = (pxTaskStatusArray[taskIndex].ulRunTimeCounter * 100) / (ulTotalRunTime ? ulTotalRunTime : 1);
             
             Serial.printf("%-20s\t%s\t%u\t%u%%\n",
-                pxTaskStatusArray[x].pcTaskName,
+                pxTaskStatusArray[taskIndex].pcTaskName,
                 state_str,
-                pxTaskStatusArray[x].uxCurrentPriority,
+                pxTaskStatusArray[taskIndex].uxCurrentPriority,
                 percent);
         }
     }

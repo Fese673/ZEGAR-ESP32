@@ -23,6 +23,7 @@
 #include "PMS_Czujnik.h"
 #include "ENS160AHT21Screen.h"
 #include "ENS160AHT21Sensor.h"
+#include "BMP280Screen.h"
 #include "BMP280Sensor.h"
 #include "LCDIcons.h"
 #include "AlarmMelodies.h"
@@ -62,11 +63,12 @@ enum class HomeUiProfile : uint8_t {
 };
 
 enum class HomeOverlayPage : uint8_t {
-  Time     = 0,
-  Indoor   = 1,
-  Outdoor  = 2,
-  Extreme  = 3,
-  Systems  = 4,
+  Time            = 0,
+  Indoor          = 1,
+  Outdoor         = 2,
+  Extreme         = 3,
+  Systems         = 4,
+  ExtremeAlgos    = 5,
 };
 
 static HomeUiProfile   s_homeUiProfile       = HomeUiProfile::Minimal;
@@ -120,9 +122,22 @@ struct BootIntroState {
 
 static BootIntroState s_intro;
 
+static size_t boundedTextLength(const char* text, size_t maxLength) {
+  if (text == nullptr) {
+    return 0;
+  }
+
+  size_t length = 0;
+  while (length < maxLength && text[length] != '\0') {
+    ++length;
+  }
+
+  return length;
+}
+
 static void introPrintPaddedLine(uint8_t row, const char* text) {
   char line[21];
-  const size_t length = strnlen(text, 20);
+  const size_t length = boundedTextLength(text, 20);
   memset(line, ' ', 20);
   memcpy(line, text, length);
   line[20] = '\0';
@@ -132,7 +147,7 @@ static void introPrintPaddedLine(uint8_t row, const char* text) {
 
 static void introPrintCentered(uint8_t row, const char* text) {
   constexpr size_t width = 20;
-  const size_t length = strnlen(text, width);
+  const size_t length = boundedTextLength(text, width);
   char line[21];
   memset(line, ' ', width);
   const size_t start = (width - length) / 2;
@@ -578,7 +593,7 @@ static uint8_t homeOverlayCountForProfile(HomeUiProfile profile) {
     case HomeUiProfile::Balanced:
       return 3;
     case HomeUiProfile::Extreme:
-      return 5;
+      return 6;
   }
   return 2;
 }
@@ -594,12 +609,13 @@ static HomeOverlayPage homeOverlayPageFor(HomeUiProfile profile, uint8_t index) 
         default: return HomeOverlayPage::Outdoor;
       }
     case HomeUiProfile::Extreme:
-      switch (index % 5) {
+      switch (index % 6) {
         case 0: return HomeOverlayPage::Time;
         case 1: return HomeOverlayPage::Indoor;
         case 2: return HomeOverlayPage::Outdoor;
         case 3: return HomeOverlayPage::Extreme;
-        default: return HomeOverlayPage::Systems;
+        case 4: return HomeOverlayPage::Systems;
+        default: return HomeOverlayPage::ExtremeAlgos;
       }
   }
   return HomeOverlayPage::Time;
@@ -656,6 +672,9 @@ static void serviceHomeRedraw() {
       break;
     case HomeOverlayPage::Systems:
       drawSystemResources();
+      break;
+    case HomeOverlayPage::ExtremeAlgos:
+      drawExtremeAlgorithmScreen();
       break;
     case HomeOverlayPage::Time:
     default:
@@ -948,6 +967,107 @@ float dhtHumidity    = 0.0f;
 bool dhtReady = false;
 unsigned long dhtLastRead = 0;
 constexpr unsigned long DHT_READ_INTERVAL_MS = 2000;
+
+static void buildMqttTelemetrySample(float &temperatureC, int &humidityPct, int &pressureHpa,
+                                     uint8_t &aqi, uint16_t &tvoc, uint16_t &eco2) {
+  temperatureC = 0.0f;
+  humidityPct = 0;
+  pressureHpa = 0;
+  aqi = 0;
+  tvoc = 0;
+  eco2 = 0;
+
+  if (BMP280Screen::runtimeData.hasTemperature) {
+    temperatureC = BMP280Screen::runtimeData.temperatureC;
+  } else if (ENS160AHT21Screen::runtimeData.hasClimateSample) {
+    temperatureC = ENS160AHT21Screen::runtimeData.temperatureC;
+  } else {
+    temperatureC = dhtTemperature;
+  }
+
+  if (ENS160AHT21Screen::runtimeData.hasClimateSample) {
+    humidityPct = (int)ENS160AHT21Screen::runtimeData.humidityPct;
+  } else {
+    humidityPct = (int)dhtHumidity;
+  }
+
+  if (BMP280Screen::runtimeData.hasPressure) {
+    pressureHpa = (int)BMP280Screen::runtimeData.pressureHpa;
+  }
+
+  if (ENS160AHT21Screen::runtimeData.hasGasSample) {
+    aqi = ENS160AHT21Screen::runtimeData.aqi;
+    tvoc = ENS160AHT21Screen::runtimeData.tvoc;
+    eco2 = ENS160AHT21Screen::runtimeData.eco2;
+  }
+}
+
+float computeDewPoint(float temperatureC, float humidityPct) {
+  const float b = 17.625f;
+  const float c = 243.04f;
+
+  if (!isfinite(temperatureC) || !isfinite(humidityPct) || humidityPct <= 0.0f || humidityPct > 100.0f) {
+    return NAN;
+  }
+
+  const float rh = humidityPct;
+  const float gamma = logf(rh / 100.0f) + (b * temperatureC) / (c + temperatureC);
+  return (c * gamma) / (b - gamma);
+}
+
+float computeHumidex(float temperatureC, float humidityPct) {
+  if (!isfinite(temperatureC) || !isfinite(humidityPct) || humidityPct <= 0.0f || humidityPct > 100.0f) {
+    return NAN;
+  }
+
+  // Humidex (Meteorological Service of Canada) z RH i temperatury.
+  // Wynik sensowny w praktyce dla T >= 20°C oraz RH >= 40%.
+  if (temperatureC < 20.0f || humidityPct < 40.0f) {
+    return NAN;
+  }
+
+  const float e = 6.112f * powf(10.0f, (7.5f * temperatureC) / (237.7f + temperatureC)) * (humidityPct / 100.0f);
+  return temperatureC + (5.0f / 9.0f) * (e - 10.0f);
+}
+
+float computeHeatIndexNWS(float temperatureC, float humidityPct) {
+  if (!isfinite(temperatureC) || !isfinite(humidityPct) || temperatureC < 27.0f || humidityPct < 40.0f) {
+    return NAN;
+  }
+
+  float T = temperatureC * 9.0f / 5.0f + 32.0f;
+  float RH = humidityPct;
+
+  float HI = -42.379f
+    + 2.04901523f * T
+    + 10.14333127f * RH
+    - 0.22475541f * T * RH
+    - 0.00683783f * T * T
+    - 0.05481717f * RH * RH
+    + 0.00122874f * T * T * RH
+    + 0.00085282f * T * RH * RH
+    - 0.00000199f * T * T * RH * RH;
+
+  // poprawki (opcjonalne) mogłyby zostać dodane, ale nie są konieczne w prostym modelu.
+  return (HI - 32.0f) * 5.0f / 9.0f;
+}
+
+float computeAbsoluteHumidity(float temperatureC, float humidityPct) {
+  if (!isfinite(temperatureC) || !isfinite(humidityPct) || humidityPct < 0.0f || humidityPct > 100.0f) {
+    return NAN;
+  }
+
+  const float Rw = 461.5f; // J/(kg·K)
+  const float Tk = temperatureC + 273.15f;
+  if (Tk <= 0.0f) {
+    return NAN;
+  }
+
+  const float Ps = 611.2f * expf((17.625f * temperatureC) / (243.04f + temperatureC)); // Pa
+  const float Pv = (humidityPct / 100.0f) * Ps;
+  // wynik g/m^3
+  return (Pv / (Rw * Tk)) * 1000.0f;
+}
 
 
 // ============================================================================
@@ -1452,7 +1572,14 @@ void loop() {
     static unsigned long lastMQTTPublish = 0;
     if (millis() - lastMQTTPublish >= 5000) {
       lastMQTTPublish = millis();
-      MQTTSync::publishSensorData(dhtTemperature, (int)dhtHumidity, 1013);
+      float mqttTemperature = 0.0f;
+      int mqttHumidity = 0;
+      int mqttPressure = 0;
+      uint8_t mqttAqi = 0;
+      uint16_t mqttTvoc = 0;
+      uint16_t mqttEco2 = 0;
+      buildMqttTelemetrySample(mqttTemperature, mqttHumidity, mqttPressure, mqttAqi, mqttTvoc, mqttEco2);
+      MQTTSync::publishSensorData(mqttTemperature, mqttHumidity, mqttPressure, mqttAqi, mqttTvoc, mqttEco2);
     }
   }
 

@@ -74,7 +74,6 @@ static void wifiInitTask(void* param) {
   // Step 1: WiFi driver init (this is the 2-8s blocker on Core 0 — now safe here)
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
-  WiFi.setAutoConnect(false);
   WiFi.setAutoReconnect(false);
   Serial.println("[WiFiSync] wifiInitTask: WiFi.mode(STA) done");
 

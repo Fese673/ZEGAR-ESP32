@@ -2,7 +2,6 @@
 #define MQTTSYNC_H
 
 #include <Arduino.h>
-#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
@@ -65,8 +64,14 @@ void stopCore1Task();
 /**
  * Publish sensor data (static test values for now)
  * Call this from main loop
+ *
+ * Added:
+ *   aqi  - ENS160 air quality index
+ *   tvoc - ENS160 TVOC in ppb
+ *   eco2 - ENS160 eCO2 in ppm
  */
-void publishSensorData(float temp = 23.5f, int humidity = 65, int pressure = 1013);
+void publishSensorData(float temp = 23.5f, int humidity = 65, int pressure = 1013,
+                       uint8_t aqi = 0, uint16_t tvoc = 0, uint16_t eco2 = 0);
 
 /**
  * Publish raw JSON string

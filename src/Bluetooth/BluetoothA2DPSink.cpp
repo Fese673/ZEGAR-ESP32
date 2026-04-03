@@ -166,11 +166,14 @@ void BluetoothA2DPSink::start(const char *name) {
     delay_ms(reconnect_delay);
   }
 
-  // setup i2s
-  init_i2s();
-
   // setup bluetooth
-  init_bluetooth();
+  if (!init_bluetooth()) {
+    ESP_LOGE(BT_AV_TAG, "BT init failed, aborting start()");
+    return;
+  }
+
+  // setup i2s only after controller and bluedroid are ready
+  init_i2s();
 
   // create application task
   app_task_start_up();
@@ -321,15 +324,25 @@ int BluetoothA2DPSink::init_bluetooth() {
     ESP_LOGI(BT_AV_TAG, "bluedroid initialized");
   }
 
-  while (bt_stack_status != ESP_BLUEDROID_STATUS_ENABLED) {
-    if (esp_bluedroid_enable() != ESP_OK) {
-      ESP_LOGE(BT_AV_TAG, "Failed to enable bluedroid");
-      delay_ms(100);
-      // return false;
-    } else {
-      ESP_LOGI(BT_AV_TAG, "bluedroid enabled");
+  int enableAttempts = 15;
+  while (bt_stack_status != ESP_BLUEDROID_STATUS_ENABLED && enableAttempts-- > 0) {
+    esp_err_t enableRet = esp_bluedroid_enable();
+    if (enableRet != ESP_OK && enableRet != ESP_ERR_INVALID_STATE) {
+      ESP_LOGE(BT_AV_TAG, "Failed to enable bluedroid: %d", enableRet);
     }
+
     bt_stack_status = esp_bluedroid_get_status();
+    if (bt_stack_status == ESP_BLUEDROID_STATUS_ENABLED) {
+      ESP_LOGI(BT_AV_TAG, "bluedroid enabled");
+      break;
+    }
+
+    delay_ms(50);
+  }
+
+  if (bt_stack_status != ESP_BLUEDROID_STATUS_ENABLED) {
+    ESP_LOGE(BT_AV_TAG, "bluedroid enable timeout, status=%d", bt_stack_status);
+    return false;
   }
 
   if (esp_bt_gap_register_callback(ccall_app_gap_callback) != ESP_OK) {

@@ -3,6 +3,7 @@
 #include <Esp.h>
 #include <Arduino.h>
 
+#include "RadioModeSwitch.h"
 #include "WiFiSync.h"
 #include "bluetooth/AudioBT.h"
 #include "Encoder.h"
@@ -43,6 +44,7 @@ void wifiOn() {
   // ALL WiFi hardware init is now in WiFiSync background task (Core 1)
   // No WiFi.mode/begin/disconnect here — prevents blocking main loop
   wifiActive = true;
+  radioMode = WIFI_ONLY;
   ensureHome();
   WiFiSync::startSync();
 }
@@ -63,8 +65,17 @@ void btOn() {
   }
 
   if (!btActive) {
-    audioBT_init();
+    if (!audioBT_init()) {
+      Serial.println("[ModeManager] BT init failed (BT mode retained, no WiFi fallback)");
+      btActive = false;
+      radioMode = BT_ONLY;
+      RadioModeSwitch::forceMode(RADIO_STATE_BT, RADIO_NEXT_BT);
+      ensureHome();
+      return;
+    }
     btActive = true;
+    radioMode = BT_ONLY;
+    RadioModeSwitch::forceMode(RADIO_STATE_BT, RADIO_NEXT_BT);
     // BEZPIECZEŃSTWO: Przywróć piny enkodera (GPIO 25, 26) do INPUT_PULLUP
     // I2S teraz używa GPIO 33/32 zamiast 25/26 - konflikt ROZWIĄZANY
     // encoder_reinit_pins() zapewnia stabilną reinicjalizację po I2S init

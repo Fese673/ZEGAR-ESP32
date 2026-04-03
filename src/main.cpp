@@ -4,6 +4,10 @@
 #include <WiFi.h>
 #include <time.h>
 #include <Esp.h>
+#ifdef ARDUINO_ARCH_ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
 
 #include "STM32_Data.h"
 #include "LCDMirror.h"
@@ -339,7 +343,7 @@ int settingsEpicIntroIndex = 0;
 int settingsEpicIntroMenuCount = 2;
 const char* settingsEpicIntroItems[] = {"ON", "OFF"};
 
-constexpr unsigned long SETUP_DELAY_MS      = 100;  // min delay for serial init
+constexpr unsigned long SETUP_DELAY_MS      = 100;  // cooperative startup wait for serial init
 constexpr long UART_BAUD = 115200;
 HardwareSerial& uart = Serial2;
 static uint32_t heapBaseline = 0;
@@ -372,7 +376,7 @@ const char* menuItems[] = {
   "BMP280",
   "Ustawienia",
   "Wyjscie",
-  "Radio: Toggle"
+  "Tryb radia"
 };
 constexpr int MENU_COUNT = 12;
 int menuCount = MENU_COUNT;
@@ -549,16 +553,16 @@ static bool looksLikePlaceholder(const String& value) {
 }
 
 static void loadNetworkConfigFromPreferences() {
-  s_wifiSsid = s_prefs.getString("wifiSsid", PROJECT_WIFI_SSID);
-  s_wifiPass = s_prefs.getString("wifiPass", PROJECT_WIFI_PASS);
-  s_ntpServer = s_prefs.getString("ntpServer", PROJECT_NTP_SERVER);
+  s_wifiSsid = s_prefs.isKey("wifiSsid") ? s_prefs.getString("wifiSsid", PROJECT_WIFI_SSID) : PROJECT_WIFI_SSID;
+  s_wifiPass = s_prefs.isKey("wifiPass") ? s_prefs.getString("wifiPass", PROJECT_WIFI_PASS) : PROJECT_WIFI_PASS;
+  s_ntpServer = s_prefs.isKey("ntpServer") ? s_prefs.getString("ntpServer", PROJECT_NTP_SERVER) : PROJECT_NTP_SERVER;
 
-  s_mqttConfig.brokerAddress = s_prefs.getString("mqttHost", PROJECT_MQTT_BROKER);
+  s_mqttConfig.brokerAddress = s_prefs.isKey("mqttHost") ? s_prefs.getString("mqttHost", PROJECT_MQTT_BROKER) : PROJECT_MQTT_BROKER;
   s_mqttConfig.brokerPort = (uint16_t)s_prefs.getUShort("mqttPort", PROJECT_MQTT_PORT);
-  s_mqttConfig.username = s_prefs.getString("mqttUser", PROJECT_MQTT_USERNAME);
-  s_mqttConfig.password = s_prefs.getString("mqttPass", PROJECT_MQTT_PASSWORD);
-  s_mqttConfig.topic = s_prefs.getString("mqttTopic", PROJECT_MQTT_TOPIC);
-  s_mqttConfig.clientId = s_prefs.getString("mqttClient", PROJECT_MQTT_CLIENT_ID);
+  s_mqttConfig.username = s_prefs.isKey("mqttUser") ? s_prefs.getString("mqttUser", PROJECT_MQTT_USERNAME) : PROJECT_MQTT_USERNAME;
+  s_mqttConfig.password = s_prefs.isKey("mqttPass") ? s_prefs.getString("mqttPass", PROJECT_MQTT_PASSWORD) : PROJECT_MQTT_PASSWORD;
+  s_mqttConfig.topic = s_prefs.isKey("mqttTopic") ? s_prefs.getString("mqttTopic", PROJECT_MQTT_TOPIC) : PROJECT_MQTT_TOPIC;
+  s_mqttConfig.clientId = s_prefs.isKey("mqttClient") ? s_prefs.getString("mqttClient", PROJECT_MQTT_CLIENT_ID) : PROJECT_MQTT_CLIENT_ID;
 
   if (looksLikePlaceholder(s_wifiSsid) || looksLikePlaceholder(s_wifiPass)) {
     Serial.println("[config] WiFi credentials are placeholders; configure NVS keys wifiSsid/wifiPass.");
@@ -725,7 +729,14 @@ void updateSystemResources() {
 
 void setup() {
   Serial.begin(UART_BAUD);
-  delay(SETUP_DELAY_MS);
+#ifdef ARDUINO_ARCH_ESP32
+  vTaskDelay(pdMS_TO_TICKS(SETUP_DELAY_MS));
+#else
+  const unsigned long setupWaitUntilMs = millis() + SETUP_DELAY_MS;
+  while ((long)(millis() - setupWaitUntilMs) < 0) {
+    yield();
+  }
+#endif
 
   RtcSyncService::applyTimezone();
 
@@ -735,6 +746,10 @@ void setup() {
 
   // ===== Menedżer trybów (Wi-Fi/BT) - inicjalizuj WCZEŚNIE =====
   ModeManager::begin(&appState);
+
+  // --- 7-Segment setup ---
+  // Inicjalizuj przed wczesnym przywróceniem czasu, żeby nie pisać na GPIO przed pinMode().
+  initSevenSeg();
 
   s_prefs.begin("zegar", false);
   loadNetworkConfigFromPreferences();
@@ -798,10 +813,6 @@ void setup() {
 
   // --- Buzzer setup ---
   pinMode(BUZZER_PIN, OUTPUT);
-  noTone(BUZZER_PIN);
-
-  // --- 7-Segment setup ---
-  initSevenSeg();
 
   // --- Inicjalizacja statystyk ---
   statsManager.begin();

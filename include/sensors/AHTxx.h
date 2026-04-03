@@ -3,8 +3,8 @@
    Non-blocking AHT2x library for ESP32-WROOM-32D
    Based on enjoyneering AHTxx (GPL), fully rewritten as state machine
 
-   Features:
-   - 100% non-blocking -- zero delay() calls anywhere
+    Features:
+    - 100% non-blocking -- zero hard waits anywhere
    - CRC8 validation on every read (AHT2x)
    - Built-in 5-sample median filter for outlier rejection
    - Built-in 1D Kalman filter for optimal estimation

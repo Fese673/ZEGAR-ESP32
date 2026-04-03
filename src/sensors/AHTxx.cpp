@@ -1,7 +1,7 @@
 /***************************************************************************************************/
 /*
-   Non-blocking AHT2x library -- ESP32 implementation
-   100% state-machine driven, zero delay() calls
+    Non-blocking AHT2x library -- ESP32 implementation
+    100% state-machine driven, zero hard waits
 
    GNU GPL license
 */

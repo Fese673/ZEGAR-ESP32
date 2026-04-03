@@ -140,7 +140,7 @@ SerialPM::STATUS SerialPM::trigRead()
     #ifdef ESP32
     yield();  // allow other tasks to run on ESP32 (non-blocking)
     #else
-    delay(10);  // small delay on other platforms
+    yield();
     #endif
     wait_ms = millis() - start_ms; // time waited so far
   } while (size_t(uart->available()) < headLen && wait_ms < max_wait_ms);
@@ -199,7 +199,7 @@ SerialPM::STATUS SerialPM::trigRead()
     #ifdef ESP32
     yield();  // allow other tasks to run on ESP32 (non-blocking)
     #else
-    delay(10);  // small delay on other platforms
+    yield();
     #endif
     wait_ms = millis() - start_ms; // time waited so far
   } while (size_t(uart->available()) < bodyLen && wait_ms < max_wait_ms);
@@ -300,7 +300,10 @@ void SerialPM::waitNonBlocking(uint16_t ms)
     delayMicroseconds(0);  // tiny deferral to prevent tight loop on some systems
   }
   #else
-  // On other platforms, fall back to blocking delay
-  delay(ms);
+  uint32_t start = millis();
+  while (millis() - start < ms)
+  {
+    yield();
+  }
   #endif
 }

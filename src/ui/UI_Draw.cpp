@@ -3,8 +3,13 @@
 #include "StatsManager.h"
 #include "WiFiSync.h"
 #include "ModeManager.h"
+#include "RadioModeSwitch.h"
 #include <LiquidCrystal_I2C.h>
 #include <Esp.h>
+#ifdef ARDUINO_ARCH_ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
 #include <math.h>
 #include "TelemetryComposer.h"
 #include "PMS_Czujnik.h"
@@ -22,6 +27,8 @@ extern LcdMirror20x4 lcdMirror;
 // ============================================================================
 // ZMIENNE GLOBALNE (extern)
 // ============================================================================
+
+static bool s_sevenSegReady = false;
 
 // --- Menu ---
 extern int menuIndex;
@@ -179,7 +186,14 @@ void initSevenSeg() {
   digitalWrite(DATA_PIN, LOW);
   digitalWrite(CLOCK_PIN, LOW);
   digitalWrite(LATCH_PIN, LOW);
-  delay(50);
+#ifdef ARDUINO_ARCH_ESP32
+  vTaskDelay(pdMS_TO_TICKS(50));
+#else
+  const unsigned long initWaitUntilMs = millis() + 50UL;
+  while ((long)(millis() - initWaitUntilMs) < 0) {
+    yield();
+  }
+#endif
 
   // Wyzeruj wyświetlacz
   digitalWrite(LATCH_PIN, LOW);
@@ -187,9 +201,14 @@ void initSevenSeg() {
   slowShiftOut(0);
   slowShiftOut(0);
   digitalWrite(LATCH_PIN, HIGH);
+  s_sevenSegReady = true;
 }
 
 void updateSevenSeg() {
+  if (!s_sevenSegReady) {
+    return;
+  }
+
   uint8_t HH, MM, SS;
 
   if (timerRunning) {
@@ -217,6 +236,10 @@ void updateSevenSeg() {
 }
 
 void updateSevenSegStoper(int mins, int secs, int centisec) {
+  if (!s_sevenSegReady) {
+    return;
+  }
+
   const uint8_t MM = ((mins / 10) << 4) | (mins % 10);
   const uint8_t SS = ((secs / 10) << 4) | (secs % 10);
   const uint8_t CS = ((centisec / 10) << 4) | (centisec % 10);
@@ -626,7 +649,6 @@ void drawExtremeEnvironmentScreen() {
 
 void drawExtremeAlgorithmScreen() {
   LCD_CLEAR();
-  lcdPrintCentered(0, F("EXTREME ALGOS"));
 
   float temperature = NAN;
   if (BMP280Screen::runtimeData.hasTemperature) {
@@ -652,29 +674,6 @@ void drawExtremeAlgorithmScreen() {
     heatIndex = TelemetryComposer::computeHeatIndexNWS(temperature, humidity);
   }
 
-  char line[21];
-  if (isfinite(dewPoint) && isfinite(humidex)) {
-    snprintf(line, sizeof(line), "DP:%4.1f HMDX:%4.1f", dewPoint, humidex);
-  } else if (isfinite(dewPoint)) {
-    snprintf(line, sizeof(line), "DP:%4.1f HMDX:--.-", dewPoint);
-  } else {
-    snprintf(line, sizeof(line), "DP:--.- HMDX:--.-");
-  }
-  padRightTo20(line);
-  LCD_SET(0, 1);
-  LCD_PRINT(line);
-
-  if (isfinite(absoluteHumidity) && isfinite(heatIndex)) {
-    snprintf(line, sizeof(line), "AH:%3.1fg HI:%4.1f", absoluteHumidity, heatIndex);
-  } else if (isfinite(absoluteHumidity)) {
-    snprintf(line, sizeof(line), "AH:%3.1fg HI:--.-", absoluteHumidity);
-  } else {
-    snprintf(line, sizeof(line), "AH:--.- HI:--.-");
-  }
-  padRightTo20(line);
-  LCD_SET(0, 2);
-  LCD_PRINT(line);
-
   float dewDelta = NAN;
   if (isfinite(temperature) && isfinite(dewPoint)) {
     dewDelta = temperature - dewPoint;
@@ -691,16 +690,70 @@ void drawExtremeAlgorithmScreen() {
     }
   }
 
-  if (isfinite(dewDelta)) {
-    snprintf(line, sizeof(line), "Dlt:%4.1f %s", dewDelta, condRisk);
+  const uint8_t phase = (uint8_t)((millis() / 3500UL) % 2UL);
+  char line[21];
+
+  if (phase == 0) {
+    lcdPrintCentered(0, F("KONDENSACJA:"));
+
+    if (isfinite(dewPoint)) {
+      snprintf(line, sizeof(line), "P.Rosy | %5.1f 'C", dewPoint);
+    } else {
+      snprintf(line, sizeof(line), "P.Rosy |   --.- 'C");
+    }
+    padRightTo20(line);
+    LCD_SET(0, 1);
+    LCD_PRINT(line);
+
+    if (isfinite(absoluteHumidity)) {
+      snprintf(line, sizeof(line), "W.Abs. | %5.1f g", absoluteHumidity);
+    } else {
+      snprintf(line, sizeof(line), "W.Abs. |   --.- g");
+    }
+    padRightTo20(line);
+    LCD_SET(0, 2);
+    LCD_PRINT(line);
+
+    if (isfinite(dewDelta)) {
+      const char *okTag = (strcmp(condRisk, "SAFE") == 0) ? "OK" : (strcmp(condRisk, "WARN") == 0 ? "WARN" : "CRIT");
+      snprintf(line, sizeof(line), "DELTA: %4.1f [%s]", dewDelta, okTag);
+    } else {
+      snprintf(line, sizeof(line), "DELTA:   --.- [N/A]");
+    }
+    padRightTo20(line);
+    LCD_SET(0, 3);
+    LCD_PRINT(line);
+
   } else {
-    snprintf(line, sizeof(line), "Dlt:--.- %-5s", condRisk);
+    lcdPrintCentered(0, F("ODCZUCIE CIEPLA"));
+
+    if (isfinite(humidex)) {
+      snprintf(line, sizeof(line), "HUMIDEX: %6.1f", humidex);
+    } else {
+      snprintf(line, sizeof(line), "HUMIDEX:   --.-");
+    }
+    padRightTo20(line);
+    LCD_SET(0, 1);
+    LCD_PRINT(line);
+
+    if (isfinite(heatIndex)) {
+      snprintf(line, sizeof(line), "IND.UPA: %6.1f", heatIndex);
+    } else {
+      snprintf(line, sizeof(line), "IND.UPA:   --.-");
+    }
+    padRightTo20(line);
+    LCD_SET(0, 2);
+    LCD_PRINT(line);
+
+    if (isfinite(dewDelta)) {
+      snprintf(line, sizeof(line), "STATUS : %6s", condRisk);
+    } else {
+      snprintf(line, sizeof(line), "STATUS :   N/A");
+    }
+    padRightTo20(line);
+    LCD_SET(0, 3);
+    LCD_PRINT(line);
   }
-
-  padRightTo20(line);
-  LCD_SET(0, 3);
-  LCD_PRINT(line);
-
 
   LCD_DUMP();
 }
@@ -717,11 +770,19 @@ void drawMenu() {
     LCD_SET(0, i);
     LCD_PRINT(item == menuIndex ? F("> ") : F("  "));
 
-    if (item == 12) {
-      if (radioMode == WIFI_ONLY) {
-        LCD_PRINT(F("BLUETOOTH MODE"));
-      } else {
-        LCD_PRINT(F("WIFI MODE     "));
+    if (item == 11) {
+      RadioModeSwitchState mode = RadioModeSwitch::getCurrentState();
+      switch (mode) {
+        case RADIO_STATE_WIFI:
+          LCD_PRINT(F("Tryb: WIFI   "));
+          break;
+        case RADIO_STATE_BT:
+          LCD_PRINT(F("Tryb: BT     "));
+          break;
+        case RADIO_STATE_TRANSITIONING:
+        default:
+          LCD_PRINT(F("Tryb: TRANS    "));
+          break;
       }
     } else {
       LCD_PRINT(menuItems[item]);

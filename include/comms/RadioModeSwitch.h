@@ -107,6 +107,11 @@ namespace RadioModeSwitch {
    */
   bool isDefaultStartupWiFi();
 
+  /**
+   * Wymusza stan bez restartu, używane przy awarii BT jako bezpieczny fallback.
+   */
+  void forceMode(RadioModeSwitchState state, RadioModeSwitchNextMode nextMode = RADIO_NEXT_NONE);
+
   // ========================================================================
   // POBIERANIE CZASU Z RTC (do przywrócenia po soft reset)
   // ========================================================================

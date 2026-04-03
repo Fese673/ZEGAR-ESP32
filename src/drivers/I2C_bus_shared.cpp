@@ -101,7 +101,11 @@ bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
                       (unsigned long)actualClockHz);
 
         wire->end();
-        delay(1);
+        TickType_t settleTicks = pdMS_TO_TICKS(1);
+        if (settleTicks == 0) {
+            settleTicks = 1;
+        }
+        vTaskDelay(settleTicks);
         wire->begin(sdaPin, sclPin);
         applied = applyClockAndVerify(wire, clockHz, &actualClockHz);
     }

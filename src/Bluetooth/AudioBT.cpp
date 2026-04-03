@@ -1,6 +1,8 @@
 #include "AudioBT.h"
 #include "BluetoothA2DPSinkQueued.h"
 #include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "esp_log.h"
 #include "BoardPins.h"
 
 #if A2DP_I2S_AUDIOTOOLS
@@ -15,10 +17,12 @@ static void connection_state_callback(esp_a2d_connection_state_t state, void*) {
     connected = (state == ESP_A2D_CONNECTION_STATE_CONNECTED);
 }
 
-void audioBT_init() {
-    // KROK 1: Zwolnij BLE (oszczędność 50-70KB RAM)
-    esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
-    
+bool audioBT_init() {
+    // Reduce BT stack log churn in runtime audio mode to minimize UART-side jitter.
+    esp_log_level_set("BT_AV", ESP_LOG_WARN);
+    esp_log_level_set("BT_API", ESP_LOG_WARN);
+    esp_log_level_set("RCCT", ESP_LOG_WARN);
+
     // KROK 2: Utwórz A2DP sink (Queued = osobny ringbuffer + I2S task)
     if (a2dp == nullptr) {
         a2dp = new BluetoothA2DPSinkQueued();
@@ -41,7 +45,7 @@ void audioBT_init() {
 
     if (!s_audioStream.begin(i2sConfig)) {
         Serial.println("[BT] Failed to initialize AudioTools I2S output");
-        return;
+        return false;
     }
 
     a2dp->set_output(s_audioStream);
@@ -70,28 +74,57 @@ void audioBT_init() {
     a2dp->set_pin_config(pin_config);
 #else
     Serial.println("[BT] No supported audio backend available");
-    return;
+    return false;
 #endif
 
-    // KROK 4: Ringbuffer 16KB - bufor między BT a I2S (~0.18s audio)
-    a2dp->set_i2s_ringbuffer_size(16 * 1024);       // 16KB - lekki bufor
-    a2dp->set_i2s_ringbuffer_prefetch_percent(40);   // 40% (~6.4KB) start szybki
-    a2dp->set_i2s_stack_size(2048);                  // domyślny stos I2S task
+    // KROK 4: Ringbuffer + I2S queue tuned for stable playback under mixed system load.
+    a2dp->set_i2s_ringbuffer_size(24 * 1024);
+    a2dp->set_i2s_ringbuffer_prefetch_percent(50);
+    a2dp->set_i2s_stack_size(3072);
+    a2dp->set_i2s_write_size_upto(240 * 8);
+    a2dp->set_i2s_ticks(4);
     
-    // KROK 5: FreeRTOS - I2S task na Core 0, wysoki priorytet
+    // KROK 5: FreeRTOS isolation profile.
+    // - Core 0: BT app + I2S queue task
+    // - Core 1: UI/WiFi/MQTT path
     a2dp->set_task_core(0);
+    a2dp->set_task_priority(configMAX_PRIORITIES - 4);
+    a2dp->set_event_queue_size(32);
+    a2dp->set_event_stack_size(4096);
     a2dp->set_i2s_task_priority(configMAX_PRIORITIES - 2);
     
     // KROK 6: Callback połączenia
     a2dp->set_on_connection_state_changed(connection_state_callback);
     
     // KROK 7: Start
-    a2dp->start("ESP32_AUDIO");
+    a2dp->start("ESP32-BASS");
+
+    const bool controllerReady = esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED;
+    const bool bluedroidReady = esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED;
+    if (!controllerReady || !bluedroidReady) {
+        Serial.printf("[BT] start failed: controller=%d bluedroid=%d\n",
+                      (int)esp_bt_controller_get_status(),
+                      (int)esp_bluedroid_get_status());
+        audioBT_deinit();
+        return false;
+    }
+
+    return true;
 }
 
 void audioBT_deinit() {
     if (a2dp != nullptr) {
-        a2dp->end(true);
+        const esp_bt_controller_status_t controllerStatus = esp_bt_controller_get_status();
+        const esp_bluedroid_status_t bluedroidStatus = esp_bluedroid_get_status();
+        const bool stackWasInitialized =
+            (controllerStatus != ESP_BT_CONTROLLER_STATUS_IDLE) ||
+            (bluedroidStatus != ESP_BLUEDROID_STATUS_UNINITIALIZED);
+
+        if (stackWasInitialized) {
+            // Keep CLASSIC BT memory allocated so BT can be re-started without reboot.
+            a2dp->end(false);
+        }
+
         delete a2dp;
         a2dp = nullptr;
     }

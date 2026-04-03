@@ -38,6 +38,17 @@ namespace RadioModeSwitch {
   static bool s_initialized = false;
   static bool s_mode_initialized = false;       // Flaga czy tryb (WiFi/BT) był już zainicjalizowany
   static unsigned long s_init_start_time = 0;   // Czas startu systemu - opóźniamy inicjalizację
+  static bool s_restartPending = false;
+  static unsigned long s_restartAtMs = 0;
+  static unsigned long s_next_bt_retry_ms = 0;
+
+  constexpr unsigned long kRestartDelayMs = 100UL;
+  constexpr unsigned long kBtRetryIntervalMs = 3000UL;
+
+  static void scheduleRestart() {
+    s_restartPending = true;
+    s_restartAtMs = millis() + kRestartDelayMs;
+  }
 
   // ========================================================================
   // INICJALIZACJA
@@ -74,6 +85,9 @@ namespace RadioModeSwitch {
 
     s_initialized = true;
     s_init_start_time = millis();  // Zanotuj czas startu
+    s_restartPending = false;
+    s_restartAtMs = 0;
+    s_next_bt_retry_ms = 0;
 
     Serial.println("[RadioModeSwitch] Inicjalizacja zakończona");
     printDiagnostics();
@@ -113,9 +127,8 @@ namespace RadioModeSwitch {
     statsManager.saveStats();
     Serial.flush();
 
-    // KROK 4: Krótki delay i restart
-    delay(100);
-    esp_restart();
+    // KROK 4: Zaplanuj restart bez blokowania
+    scheduleRestart();
   }
 
   void requestModeSwitch_BT() {
@@ -134,9 +147,8 @@ namespace RadioModeSwitch {
     statsManager.saveStats();
     Serial.flush();
 
-    // KROK 4: Krótki delay i restart
-    delay(100);
-    esp_restart();
+    // KROK 4: Zaplanuj restart bez blokowania
+    scheduleRestart();
   }
 
   void cancelModeSwitch() {
@@ -152,6 +164,14 @@ namespace RadioModeSwitch {
   // ========================================================================
   
   void update() {
+    if (s_restartPending) {
+      const unsigned long nowMs = millis();
+      if ((long)(nowMs - s_restartAtMs) >= 0) {
+        esp_restart();
+      }
+      return;
+    }
+
     // Opóźniona inicjalizacja trybu WiFi/BT
     // Czekamy aż system będzie w pełni gotowy (LCD, UI, itd.)
     const unsigned long INIT_DELAY_MS = 200;   // min delay for LCD readiness
@@ -161,11 +181,24 @@ namespace RadioModeSwitch {
       
       // Teraz faktycznie inicjalizuj WiFi/BT
       if (s_next_mode == RADIO_NEXT_BT) {
+        s_current_state = RADIO_STATE_BT;
+        s_next_bt_retry_ms = millis() + kBtRetryIntervalMs;
         Serial.println("[RadioModeSwitch] update() - Inicjalizacja Bluetooth (po delay)");
         ModeManager::btOn();
       } else {
+        s_current_state = RADIO_STATE_WIFI;
+        s_next_bt_retry_ms = 0;
         Serial.println("[RadioModeSwitch] update() - Inicjalizacja WiFi (po delay)");
         ModeManager::wifiOn();
+      }
+    }
+
+    if (s_mode_initialized && s_current_state == RADIO_STATE_BT && !ModeManager::isBtOn()) {
+      const unsigned long nowMs = millis();
+      if ((long)(nowMs - s_next_bt_retry_ms) >= 0) {
+        Serial.println("[RadioModeSwitch] BT inactive in BT mode, retrying init");
+        ModeManager::btOn();
+        s_next_bt_retry_ms = nowMs + kBtRetryIntervalMs;
       }
     }
   }
@@ -200,6 +233,24 @@ namespace RadioModeSwitch {
 
   bool isDefaultStartupWiFi() {
     return (s_next_mode == RADIO_NEXT_WIFI || s_next_mode == RADIO_NEXT_NONE);
+  }
+
+  void forceMode(RadioModeSwitchState state, RadioModeSwitchNextMode nextMode) {
+    s_current_state = state;
+    s_next_mode = nextMode;
+    s_mode_initialized = true;
+    s_restartPending = false;
+    s_restartAtMs = 0;
+
+    if (state == RADIO_STATE_WIFI) {
+      s_next_bt_retry_ms = 0;
+      rtc_state.mode_flag = RTC_FLAG_NONE;
+    } else if (state == RADIO_STATE_BT) {
+      s_next_bt_retry_ms = millis() + kBtRetryIntervalMs;
+    }
+
+    Serial.printf("[RadioModeSwitch] Force mode: %s\n",
+                  (state == RADIO_STATE_BT) ? "Bluetooth" : "WiFi");
   }
 
   // ========================================================================

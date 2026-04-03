@@ -523,17 +523,17 @@ void ui_handleEvent(EncoderEvent e) {
           drawHomeSafe();
           return;
 
-        case 11:  // Radio Toggle (WiFi ↔ Bluetooth)
-          // Przełącz na inny tryb z resetem - BEZ żadnych operacji LCD!
-          if (radioMode == WIFI_ONLY) {
-            // Przejdź na Bluetooth
+        case 11:  // Radio Mode (WiFi/Bluetooth)
+          // Nie przełączaj jeśli już w trybie przejścia
+          if (RadioModeSwitch::getCurrentState() == RADIO_STATE_TRANSITIONING) {
+            return;
+          }
+
+          if (RadioModeSwitch::getCurrentState() == RADIO_STATE_WIFI) {
             radioMode = BT_ONLY;
-            // Od razu restart - nie rysuj nic na LCD
             RadioModeSwitch::requestModeSwitch_BT();
           } else {
-            // Przejdź na WiFi
             radioMode = WIFI_ONLY;
-            // Od razu restart - nie rysuj nic na LCD
             RadioModeSwitch::requestModeSwitch_WiFi();
           }
           return;

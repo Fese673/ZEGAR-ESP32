@@ -6,6 +6,10 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <ScioSense_ENS16x.h>
+#ifdef ARDUINO_ARCH_ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
 
 #include "AHTxx.h"
 #include "ENS160AHT21Screen.h"
@@ -13,8 +17,8 @@
 
 namespace {
 
-constexpr uint8_t ENS160_I2C_ADDRESS = 0x52;
-constexpr uint8_t ENS160_I2C_ADDRESS_ALT = 0x53;
+constexpr uint8_t ENS160_I2C_ADDRESS = 0x53;
+constexpr uint8_t ENS160_I2C_ADDRESS_ALT = 0x52;
 constexpr uint8_t I2C_SDA_PIN = 21;
 constexpr uint8_t I2C_SCL_PIN = 22;
 constexpr uint8_t ENS160_INIT_RETRIES = 3;
@@ -186,8 +190,14 @@ bool tryInitENS160AtAddress(uint8_t address) {
         }
 
         if ((attempt + 1) < ENS160_INIT_RETRIES) {
-            delay(ENS160_INIT_RETRY_DELAY_MS);
-            yield();
+#ifdef ARDUINO_ARCH_ESP32
+            vTaskDelay(pdMS_TO_TICKS(ENS160_INIT_RETRY_DELAY_MS));
+#else
+            const unsigned long retryWaitUntilMs = millis() + ENS160_INIT_RETRY_DELAY_MS;
+            while ((long)(millis() - retryWaitUntilMs) < 0) {
+                yield();
+            }
+#endif
         }
     }
 

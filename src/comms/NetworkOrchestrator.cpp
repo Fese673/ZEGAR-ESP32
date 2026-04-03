@@ -12,6 +12,7 @@ Config s_config;
 bool s_initialized = false;
 bool s_mqttEnabled = true;
 bool s_mqttInitialized = false;
+bool s_btIsolationEnforced = false;
 unsigned long s_lastWifiCheckMs = 0;
 RadioModeSwitchState s_lastRadioMode = RADIO_STATE_WIFI;
 
@@ -21,6 +22,7 @@ void begin(const Config& config) {
   s_config = config;
   s_initialized = true;
   s_mqttInitialized = false;
+  s_btIsolationEnforced = false;
   s_lastWifiCheckMs = 0;
   s_lastRadioMode = RadioModeSwitch::getCurrentState();
 }
@@ -39,6 +41,22 @@ void update() {
   RadioModeSwitch::update();
 
   const RadioModeSwitchState currentRadioMode = RadioModeSwitch::getCurrentState();
+
+  if (currentRadioMode == RADIO_STATE_BT) {
+    if (!s_btIsolationEnforced) {
+      Serial.println("[NetworkOrchestrator] Enforcing BT isolation: stopping WiFi and MQTT");
+      WiFiSync::stop();
+      if (s_mqttInitialized) {
+        MQTTSync::stopCore1Task();
+        s_mqttInitialized = false;
+      }
+      s_btIsolationEnforced = true;
+    }
+    s_lastRadioMode = RADIO_STATE_BT;
+    return;
+  }
+
+  s_btIsolationEnforced = false;
 
   if (!s_mqttEnabled) {
     if (s_mqttInitialized) {
@@ -61,14 +79,6 @@ void update() {
         s_lastRadioMode = RADIO_STATE_WIFI;
       }
     }
-    return;
-  }
-
-  if (currentRadioMode == RADIO_STATE_BT && s_mqttInitialized) {
-    Serial.println("[NetworkOrchestrator] BT mode active -> stopping MQTT task");
-    MQTTSync::stopCore1Task();
-    s_mqttInitialized = false;
-    s_lastRadioMode = RADIO_STATE_BT;
     return;
   }
 

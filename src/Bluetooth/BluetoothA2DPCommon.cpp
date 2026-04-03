@@ -13,7 +13,13 @@
 //
 // Copyright 2020 Phil Schatzmann
 
+#include <Arduino.h>
+
 #include "BluetoothA2DPCommon.h"
+
+#ifdef ARDUINO_ARCH_ESP32
+#include "esp32-hal-bt-mem.h"
+#endif
 
 #if IS_VALID_PLATFORM
 
@@ -399,44 +405,78 @@ const char* BluetoothA2DPCommon::to_str(esp_bd_addr_t bda) {
  * @return false
  */
 bool BluetoothA2DPCommon::bt_start() {
-#ifdef ARDUINO
-  return btStart();
-#else
   esp_bt_controller_config_t cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
   // esp_bt_controller_enable(MODE) This mode must be equal as the mode in “cfg”
   // of esp_bt_controller_init().
   cfg.mode = bt_mode;
-  if (cfg.mode == ESP_BT_MODE_CLASSIC_BT) {
-    ESP_LOGI(BT_APP_TAG, "mode is ESP_BT_MODE_CLASSIC_BT");
-    esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
-  }
-
-  if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED) {
+  esp_bt_controller_status_t status = esp_bt_controller_get_status();
+  if (status == ESP_BT_CONTROLLER_STATUS_ENABLED) {
     return true;
   }
-  esp_err_t ret;
-  if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE) {
-    if ((ret = esp_bt_controller_init(&cfg)) != ESP_OK) {
+
+  esp_err_t ret = ESP_OK;
+
+  if (cfg.mode == ESP_BT_MODE_CLASSIC_BT &&
+      status == ESP_BT_CONTROLLER_STATUS_IDLE) {
+    ESP_LOGI(BT_APP_TAG, "mode is ESP_BT_MODE_CLASSIC_BT");
+    ret = esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+      ESP_LOGE(BT_APP_TAG, "esp_bt_controller_mem_release(BLE) failed: %d", ret);
+      return false;
+    }
+  }
+
+  status = esp_bt_controller_get_status();
+
+  if (status == ESP_BT_CONTROLLER_STATUS_IDLE) {
+    ret = esp_bt_controller_init(&cfg);
+    if (ret == ESP_ERR_INVALID_STATE) {
+      ESP_LOGW(BT_APP_TAG, "esp_bt_controller_init invalid state, attempting recovery");
+      (void)esp_bt_controller_disable();
+      (void)esp_bt_controller_deinit();
+      vTaskDelay(pdMS_TO_TICKS(20));
+
+      if (cfg.mode == ESP_BT_MODE_CLASSIC_BT) {
+        esp_err_t releaseRet = esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+        if (releaseRet != ESP_OK && releaseRet != ESP_ERR_INVALID_STATE) {
+          ESP_LOGE(BT_APP_TAG, "BLE memory release during recovery failed: %d", releaseRet);
+          return false;
+        }
+      }
+
+      ret = esp_bt_controller_init(&cfg);
+    }
+
+    if (ret != ESP_OK) {
       ESP_LOGE(BT_APP_TAG, "esp_bt_controller_init failed: %d", ret);
       return false;
     }
-    while (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE) {
-      delay_ms(100);
+
+    const unsigned long initDeadlineMs = millis() + 300;
+    while (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE &&
+           (long)(millis() - initDeadlineMs) < 0) {
+      vTaskDelay(pdMS_TO_TICKS(1));
     }
   }
-  if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED) {
-    if ((ret = esp_bt_controller_enable(bt_mode)) != ESP_OK) {
+
+  status = esp_bt_controller_get_status();
+  if (status == ESP_BT_CONTROLLER_STATUS_INITED) {
+    ret = esp_bt_controller_enable(bt_mode);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
       ESP_LOGE(BT_APP_TAG, "BT Enable failed: %d", ret);
       return false;
     }
+  } else if (status != ESP_BT_CONTROLLER_STATUS_ENABLED) {
+    ESP_LOGW(BT_APP_TAG, "Unexpected BT controller status before enable: %d", status);
   }
+
   if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED) {
     ESP_LOGI(BT_APP_TAG, "BT enabled");
     return true;
   }
-  ESP_LOGE(BT_APP_TAG, "BT Start failed");
+
+  ESP_LOGE(BT_APP_TAG, "BT Start failed, status=%d", esp_bt_controller_get_status());
   return false;
-#endif
 }
 
 esp_err_t BluetoothA2DPCommon::bluedroid_init() {
@@ -584,12 +624,24 @@ void BluetoothA2DPCommon::set_scan_mode_connectable(bool connectable) {
 #endif
 
 void BluetoothA2DPCommon::delay_ms(uint32_t millis) {
+  if (millis == 0) {
+    taskYIELD();
+    return;
+  }
+
 #ifdef ARDUINO
-  delay(millis);
-#else
-  const TickType_t xDelay = millis / portTICK_PERIOD_MS;
-  vTaskDelay(xDelay);
+  if (millis < portTICK_PERIOD_MS) {
+    delayMicroseconds(millis * 1000UL);
+    return;
+  }
 #endif
+
+  TickType_t xDelay = pdMS_TO_TICKS(millis);
+  if (xDelay == 0) {
+    xDelay = 1;
+  }
+
+  vTaskDelay(xDelay);
 }
 
 unsigned long BluetoothA2DPCommon::get_millis() {

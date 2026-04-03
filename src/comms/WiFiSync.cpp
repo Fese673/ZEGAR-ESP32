@@ -194,8 +194,12 @@ void stop() {
     wifiBeginTaskHandle = NULL;
   }
 
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
+  // Avoid disconnect noise when WiFi driver is already off/uninitialized.
+  const wifi_mode_t currentMode = WiFi.getMode();
+  if (currentMode != WIFI_MODE_NULL) {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+  }
 }
 
 bool isBusy() {

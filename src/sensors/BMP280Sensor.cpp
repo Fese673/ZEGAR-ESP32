@@ -372,8 +372,9 @@ void begin() {
   // Load persisted pressure offset for simple calibration
   {
     Preferences prefs;
-    if (prefs.begin("bmp280", true)) {
-      s_pressureOffsetHpa = prefs.getFloat("offset", 0.0f);
+    // Open read-write to avoid NOT_FOUND namespace log on first boot.
+    if (prefs.begin("bmp280", false)) {
+      s_pressureOffsetHpa = prefs.isKey("offset") ? prefs.getFloat("offset", 0.0f) : 0.0f;
       prefs.end();
     }
   }

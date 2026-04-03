@@ -37,20 +37,24 @@ public:
       EnvStats getEnvStats() const;
 
     void begin() {
-       prefs.begin(PREFS_NAMESPACE, true);
+         // Open read-write to create namespace on first boot and avoid NOT_FOUND noise.
+         if (prefs.begin(PREFS_NAMESPACE, false)) {
+            // Kliknięcia / kroki
+            currentStats.totalClicks = prefs.isKey("clicks") ? prefs.getUInt("clicks", 0) : 0;
+            currentStats.stepsLeft  = prefs.isKey("left") ? prefs.getUInt("left", 0) : 0;
+            currentStats.stepsRight = prefs.isKey("right") ? prefs.getUInt("right", 0) : 0;
 
-      // Kliknięcia / kroki
-        currentStats.totalClicks = prefs.getUInt("clicks", 0);
-        currentStats.stepsLeft  = prefs.getUInt("left", 0);
-        currentStats.stepsRight = prefs.getUInt("right", 0);
+            // ENV
+            envStats.tempMin = prefs.isKey("tmin") ? prefs.getFloat("tmin", 1000.0f) : 1000.0f;
+            envStats.tempMax = prefs.isKey("tmax") ? prefs.getFloat("tmax", -1000.0f) : -1000.0f;
+            envStats.humMin  = prefs.isKey("hmin") ? prefs.getFloat("hmin", 1000.0f) : 1000.0f;
+            envStats.humMax  = prefs.isKey("hmax") ? prefs.getFloat("hmax", -1000.0f) : -1000.0f;
 
-      // ENV
-      envStats.tempMin = prefs.getFloat("tmin",  1000.0);
-      envStats.tempMax = prefs.getFloat("tmax", -1000.0);
-      envStats.humMin  = prefs.getFloat("hmin",  1000.0);
-      envStats.humMax  = prefs.getFloat("hmax", -1000.0);
-
-     prefs.end();
+            prefs.end();
+         } else {
+            currentStats = {0, 0, 0};
+            envStats = {1000.0f, -1000.0f, 1000.0f, -1000.0f};
+         }
 
      isDirty = false;
      envDirty = false;

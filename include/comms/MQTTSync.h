@@ -4,21 +4,16 @@
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include "SecretsConfig.h"
 
 // HiveMQ Cloud CA Certificate (required for TLS)
 extern const char* g_mqtt_ca_cert;
 
 /*
   MQTT Sync Module - runs on Core 1 (second core)
-  
-  Configuration for HiveMQ Cloud:
-  - Broker: 984611e746574f4e8a109c011da25400.s1.eu.hivemq.cloud
-  - Port: 8883 (TLS required)
-  - Username: SDdfs32sSD
-  - Password: F43GJA1sdW
-  
-  Publish Topic: sensors/device1/data
-  Payload: {"t": 23.5, "h": 65, "p": 1013}
+
+  Broker credentials and topics are provided through `configure()` and can be
+  loaded from Preferences with build-time placeholders as fallback.
   
   API:
     begin(ssid, password)
@@ -30,15 +25,17 @@ extern const char* g_mqtt_ca_cert;
 
 namespace MQTTSync {
 
-// ============================================================================
-// Configuration
-// ============================================================================
-#define MQTT_BROKER_ADDRESS "984611e746574f4e8a109c011da25400.s1.eu.hivemq.cloud"
-#define MQTT_BROKER_PORT 8883
-#define MQTT_USERNAME "ESP32_CLOCK"
-#define MQTT_PASSWORD "SDdfs32sSD"
-#define MQTT_TOPIC "sensors/device1/data"
-#define MQTT_CLIENT_ID "ESP32_CLOCK"
+struct Config {
+  String brokerAddress = PROJECT_MQTT_BROKER;
+  uint16_t brokerPort = PROJECT_MQTT_PORT;
+  String username = PROJECT_MQTT_USERNAME;
+  String password = PROJECT_MQTT_PASSWORD;
+  String topic = PROJECT_MQTT_TOPIC;
+  String clientId = PROJECT_MQTT_CLIENT_ID;
+};
+
+void configure(const Config& config);
+Config currentConfig();
 
 // ============================================================================
 // Public API

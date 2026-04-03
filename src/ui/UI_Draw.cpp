@@ -6,13 +6,8 @@
 #include <LiquidCrystal_I2C.h>
 #include <Esp.h>
 #include <math.h>
+#include "TelemetryComposer.h"
 #include "PMS_Czujnik.h"
-
-// External shared utilities from main.cpp
-float computeDewPoint(float temperatureC, float humidityPct);
-float computeHumidex(float temperatureC, float humidityPct);
-float computeHeatIndexNWS(float temperatureC, float humidityPct);
-float computeAbsoluteHumidity(float temperatureC, float humidityPct);
 #include "ENS160AHT21Screen.h"
 #include "BMP280Sensor.h"
 #include "LCDIcons.h"
@@ -140,11 +135,6 @@ extern uint8_t cpuCore1Percent;
 // --- System Resources ---
 extern uint32_t ramFreeBytes;
 extern uint32_t flashFreeBytes;
-
-// --- DHT / Climate (z main.cpp) ---
-extern float dhtTemperature;
-extern float dhtHumidity;
-extern bool  dhtReady;
 
 // --- Settings (z main.cpp / UI_Controller.cpp) ---
 extern bool pms5003Enabled;
@@ -452,12 +442,9 @@ void drawAirScreen() {
   // Row 1: temperature + humidity.
   {
     char line[21];
-    // Temperature comes from BMP280; humidity stays with AHT21, with DHT as a fallback only if AHT is unavailable.
+    // Temperature comes from BMP280; humidity comes from AHT21 only.
     if (BMP280Screen::runtimeData.hasTemperature && ensClimateValid) {
       const int hum = (int)(ENS160AHT21Screen::runtimeData.humidityPct + 0.5f);
-      snprintf(line, sizeof(line), " %5.1f\xDF" "C |  %3d%%    ", BMP280Screen::runtimeData.temperatureC, hum);
-    } else if (BMP280Screen::runtimeData.hasTemperature && dhtReady) {
-      const int hum = (int)(dhtHumidity + 0.5f);
       snprintf(line, sizeof(line), " %5.1f\xDF" "C |  %3d%%    ", BMP280Screen::runtimeData.temperatureC, hum);
     } else if (BMP280Screen::runtimeData.hasTemperature) {
       snprintf(line, sizeof(line), " %5.1f\xDF" "C |   --%%    ", BMP280Screen::runtimeData.temperatureC);
@@ -525,9 +512,6 @@ void drawIndoorWeatherScreen() {
     const float temp = ENS160AHT21Screen::runtimeData.temperatureC;
     const int hum = (int)(ENS160AHT21Screen::runtimeData.humidityPct + 0.5f);
     snprintf(line, sizeof(line), " T:%5.1f C H:%3d%% ", temp, hum);
-  } else if (dhtReady) {
-    const int hum = (int)(dhtHumidity + 0.5f);
-    snprintf(line, sizeof(line), " T:%5.1f C H:%3d%% ", dhtTemperature, hum);
   } else {
     snprintf(line, sizeof(line), " T:  --.- C H: --%% ");
   }
@@ -537,10 +521,8 @@ void drawIndoorWeatherScreen() {
 
   if (ensClimateValid) {
     snprintf(line, sizeof(line), " ENS:%s", ENS160AHT21Screen::runtimeData.statusText);
-  } else if (dhtReady) {
-    snprintf(line, sizeof(line), " DHT:READY");
   } else {
-    snprintf(line, sizeof(line), " DHT:WAITING");
+    snprintf(line, sizeof(line), " ENS:WAITING");
   }
   padRightTo20(line);
   LCD_SET(0, 2);
@@ -603,21 +585,17 @@ void drawExtremeEnvironmentScreen() {
     temperature = BMP280Screen::runtimeData.temperatureC;
   } else if (ensClimateValid) {
     temperature = ENS160AHT21Screen::runtimeData.temperatureC;
-  } else if (dhtReady) {
-    temperature = dhtTemperature;
   }
 
   float humidity = NAN;
   if (ensClimateValid) {
     humidity = ENS160AHT21Screen::runtimeData.humidityPct;
-  } else if (dhtReady) {
-    humidity = dhtHumidity;
   }
 
   float dewPoint = NAN;
   float dewDelta = NAN;
   if (isfinite(temperature) && isfinite(humidity)) {
-    dewPoint = computeDewPoint(temperature, humidity);
+    dewPoint = TelemetryComposer::computeDewPoint(temperature, humidity);
     if (isfinite(dewPoint)) {
       dewDelta = temperature - dewPoint;
     }
@@ -626,8 +604,8 @@ void drawExtremeEnvironmentScreen() {
   float humidex = NAN;
   float absoluteHumidity = NAN;
   if (isfinite(temperature) && isfinite(humidity)) {
-    humidex = computeHumidex(temperature, humidity);
-    absoluteHumidity = computeAbsoluteHumidity(temperature, humidity);
+    humidex = TelemetryComposer::computeHumidex(temperature, humidity);
+    absoluteHumidity = TelemetryComposer::computeAbsoluteHumidity(temperature, humidity);
   }
 
   if (isfinite(humidex) && isfinite(absoluteHumidity)) {
@@ -655,15 +633,11 @@ void drawExtremeAlgorithmScreen() {
     temperature = BMP280Screen::runtimeData.temperatureC;
   } else if (ENS160AHT21Screen::runtimeData.hasClimateSample) {
     temperature = ENS160AHT21Screen::runtimeData.temperatureC;
-  } else if (dhtReady) {
-    temperature = dhtTemperature;
   }
 
   float humidity = NAN;
   if (ENS160AHT21Screen::runtimeData.hasClimateSample) {
     humidity = ENS160AHT21Screen::runtimeData.humidityPct;
-  } else if (dhtReady) {
-    humidity = dhtHumidity;
   }
 
   float dewPoint = NAN;
@@ -672,10 +646,10 @@ void drawExtremeAlgorithmScreen() {
   float heatIndex = NAN;
 
   if (isfinite(temperature) && isfinite(humidity)) {
-    dewPoint = computeDewPoint(temperature, humidity);
-    humidex = computeHumidex(temperature, humidity);
-    absoluteHumidity = computeAbsoluteHumidity(temperature, humidity);
-    heatIndex = computeHeatIndexNWS(temperature, humidity);
+    dewPoint = TelemetryComposer::computeDewPoint(temperature, humidity);
+    humidex = TelemetryComposer::computeHumidex(temperature, humidity);
+    absoluteHumidity = TelemetryComposer::computeAbsoluteHumidity(temperature, humidity);
+    heatIndex = TelemetryComposer::computeHeatIndexNWS(temperature, humidity);
   }
 
   char line[21];
@@ -2099,124 +2073,6 @@ void drawStats() {
   LCD_DUMP();
 }
 
-
-// ============================================================================
-// IMPLEMENTACJA DHT (TEMPERATURA/WILGOTNOŚĆ)
-// ============================================================================
-
-void drawTemperature() {
-    static float lastTemp = -1000;
-
-    // Jeśli czujnik nie gotowy
-    if (!dhtReady) {
-        LCD_CLEAR();
-        LCD_SET(0, 0);
-        LCD_PRINT(F("Temperatura"));
-        LCD_SET(0, 1);
-        LCD_PRINT(F("Odczyt..."));
-        LCD_DUMP();
-        return;
-    }
-
-    // Optymalizacja: nie rysuj jeśli nic się nie zmieniło
-    if (!dhtScreenDirty && dhtTemperature == lastTemp) return;
-    
-    dhtScreenDirty = false;
-    lastTemp = dhtTemperature;
-
-    LCD_CLEAR();
-    LCD_SET(0, 0);
-    LCD_PRINT(F("Temperatura"));
-    
-    LCD_SET(0, 1);
-    LCD_PRINT(dhtTemperature); 
-    LCD_WRITE(223); // Znak stopnia
-    LCD_PRINT(F("C"));
-
-    LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Wyjscie"));
-    
-    LCD_DUMP();
-}
-
-void drawHumidity() {
-    static float lastHum = -1000;
-
-    if (!dhtReady) {
-        LCD_CLEAR();
-        LCD_SET(0, 0);
-        LCD_PRINT(F("Wilgotnosc"));
-        LCD_SET(0, 1);
-        LCD_PRINT(F("Odczyt..."));
-        LCD_DUMP();
-        return;
-    }
-
-    if (!dhtScreenDirty && dhtHumidity == lastHum) return;
-    
-    dhtScreenDirty = false;
-    lastHum = dhtHumidity;
-
-    LCD_CLEAR();
-    LCD_SET(0, 0);
-    LCD_PRINT(F("Wilgotnosc"));
-    
-    LCD_SET(0, 1);
-    LCD_PRINT((int)dhtHumidity); // Rzutowanie na int dla ładniejszego wyglądu
-    LCD_PRINT(F(" %"));
-
-    LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Wyjscie"));
-
-    LCD_DUMP();
-}
-
-// ============================================================================
-// OBSŁUGA 7-SEGMENTOWEGO WYŚWIETLACZA DLA DHT
-// ============================================================================
-
-void showTemperature7Seg() {
-    if (!dhtReady) return;
-
-    // Zapisz aktualny czas tylko raz przy wejściu
-    if (!timeSaved) {
-        savedHours   = hours;
-        savedMinutes = minutes;
-        savedSeconds = seconds;
-        timeSaved    = true;
-    }
-
-    // Formatowanie: np. 24.5°C -> wyświetl jako 00:24:50
-    const int tempInt = constrain(static_cast<int>(dhtTemperature), 0, 99);
-    const int tempDec = constrain(static_cast<int>((dhtTemperature - tempInt) * 10), 0, 99);
-
-    // Nadpisz zmienne czasu dla wyświetlacza 7-seg
-    // UWAGA: Prawdziwy czas przywracamy przy wyjściu (w UI_Controller)
-    hours   = 0;
-    minutes = tempInt;
-    seconds = tempDec * 10;
-
-    updateSevenSeg();
-}
-
-void showHumidity7Seg() {
-    if (!dhtReady) return;
-
-    if (!timeSaved) {
-        savedHours   = hours;
-        savedMinutes = minutes;
-        savedSeconds = seconds;
-        timeSaved    = true;
-    }
-
-    const int hum = constrain(static_cast<int>(dhtHumidity), 0, 99);
-
-    hours   = 0;
-    minutes = hum;
-    seconds = 0;
-
-    updateSevenSeg();
-}
 
 // ============================================================================
 // ZASOBY SYSTEMU

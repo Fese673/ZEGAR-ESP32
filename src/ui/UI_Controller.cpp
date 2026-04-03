@@ -6,9 +6,11 @@
 #include "PMS_Czujnik.h"
 #include "ENS160AHT21Screen.h"
 #include "BMP280Sensor.h"
-#include "UI_Draw.h"
 #include "AlarmMelodies.h"
+#include "AlarmMelodyPrefs.h"
+#include "AlarmTypes.h"
 #include <Preferences.h>
+#include "HomeRuntime.h"
 #include "WiFiSync.h"
 
 // ============================================================================
@@ -27,8 +29,6 @@ extern int  alarmMinute;
 extern bool alarmEnabled;
 extern bool alarmRinging;
 extern unsigned long alarmStartTime;
-extern unsigned long lastMelodyStep;
-extern int  melodyStep;
 extern int alarmEditCursor;
 
 // --- Stoper ---
@@ -68,8 +68,18 @@ extern int bmp280MenuCount;
 extern int timerSetMinutes;
 extern int timerSetSeconds;
 extern bool timerRunning;
+extern int timerSetHours;
 extern unsigned long timerStartMillis;
 extern unsigned long timerDurationMs;
+extern int timerUiCursor;
+extern int timerPresetIndex;
+
+// --- Multi-Alarm shared state ---
+extern const int MAX_ALARMS;
+extern AlarmEntry alarms[];
+extern int alarmsCount;
+extern int alarmsMenuIndex;
+extern int selectedAlarmIndex;
 
 // --- Dane PMS5003 ---
 extern uint16_t pms5003_PM1_0_CF1;
@@ -144,42 +154,8 @@ extern Preferences s_prefs;
 // ============================================================================
 // FUNKCJE EXTERN (z main.cpp)
 // ============================================================================
-extern void syncTimeFromWiFi();
-extern void updateSevenSeg();
-extern void updateSevenSegStoper(int mins, int secs, int centisec);
-extern void drawHome();
-extern void drawMenu();
-extern void drawSetTime();
-extern void drawAlarm();
-extern void drawTimer();
-extern void drawStoper();
-extern void drawDebugSTM32();
-extern void drawStats();
-extern void drawTemperature();
-extern void drawHumidity();
-extern void showTemperature7Seg();
-extern void showHumidity7Seg();
 extern void startAlarmMelodyDemo(uint8_t melodyIndex);
 extern void stopAlarmMelodyDemo();
-
-static int loadAlarmMelodyIndexFromPrefs() {
-  String savedMelodyId = s_prefs.getString("alarmMelodyId", "");
-  if (savedMelodyId.length() > 0) {
-    int loadedIndex = AlarmMelodies::indexOfId(savedMelodyId.c_str());
-    if (loadedIndex >= 0 && loadedIndex < AlarmMelodies::kCount) {
-      return loadedIndex;
-    }
-  }
-
-  int loadedIndex = (int)s_prefs.getUShort("alarmMelody", 0);
-  if (loadedIndex < 0) loadedIndex = 0;
-  if (loadedIndex >= AlarmMelodies::kCount) loadedIndex = AlarmMelodies::kCount - 1;
-  return loadedIndex;
-}
-
-// --- DHT (potrzebne do przywracania czasu) ---
-extern int  savedHours, savedMinutes, savedSeconds;
-extern bool timeSaved;
 
 // ============================================================================
 // UI CONTROLLER - IMPLEMENTACJA
@@ -203,6 +179,11 @@ static inline void drawStoperSafe() { callDraw(s_callbacks.drawStoper); }
 static inline void drawDebugSTM32Safe() { callDraw(s_callbacks.drawDebugSTM32); }
 static inline void drawStatsSafe() { callDraw(s_callbacks.drawStats); }
 static inline void updateSevenSegSafe() { callDraw(s_callbacks.updateSevenSeg); }
+static inline void setHomeUiProfileSafe(uint8_t profileIndex) {
+  if (s_callbacks.setHomeUiProfile) {
+    s_callbacks.setHomeUiProfile(profileIndex);
+  }
+}
 
 static inline void markPmsDirtyAndDrawStats() {
   pmsScreenDirty = true;
@@ -339,15 +320,13 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_SETTINGS_ROTATION:
         // adjust rotation seconds (1..10)
         settingsRotationSec = constrain(settingsRotationSec + dir, 1, 10);
-        // apply immediately to runtime ms value
-        extern unsigned long s_homeOverlaySwitchMs; // declared in main.cpp
-        s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
+        HomeRuntime::setOverlayIntervalSeconds((uint8_t)settingsRotationSec);
         drawStatsSafe();
         break;
 
       case STATE_SETTINGS_UI_SCREEN:
         settingsUiScreenIndex = constrain(settingsUiScreenIndex + dir, 0, settingsUiScreenCount - 1);
-        setHomeUiProfile((uint8_t)settingsUiScreenIndex);
+        setHomeUiProfileSafe((uint8_t)settingsUiScreenIndex);
         drawStatsSafe();
         break;
 
@@ -532,31 +511,19 @@ void ui_handleEvent(EncoderEvent e) {
           drawStatsSafe();
           return;
 
-        case 9:  // Temperatura
-          appState = STATE_TEMPERATURE;
-          drawTemperature();
-          showTemperature7Seg();
-          return;
-
-        case 10:  // Wilgotność
-          appState = STATE_HUMIDITY;
-          drawHumidity();
-          showHumidity7Seg();
-          return;
-
-        case 11:  // Ustawienia
+        case 9:  // Ustawienia
           appState        = STATE_SETTINGS;
           settingsMenuIndex = 0;
           drawStatsSafe();
           return;
 
-        case 12:  // Wyjście
+        case 10:  // Wyjście
           appState = STATE_HOME;
           updateSevenSegSafe();
           drawHomeSafe();
           return;
 
-        case 13:  // Radio Toggle (WiFi ↔ Bluetooth)
+        case 11:  // Radio Toggle (WiFi ↔ Bluetooth)
           // Przełącz na inny tryb z resetem - BEZ żadnych operacji LCD!
           if (radioMode == WIFI_ONLY) {
             // Przejdź na Bluetooth
@@ -825,7 +792,7 @@ void ui_handleEvent(EncoderEvent e) {
           drawStatsSafe();
           break;
         case 3:  // ALARMY
-          settingsAlarmMelodyIndex = loadAlarmMelodyIndexFromPrefs();
+          settingsAlarmMelodyIndex = AlarmMelodyPrefs::loadIndex(s_prefs);
           s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
           appState = STATE_SETTINGS_ALARM_MELODY;
           drawStatsSafe();
@@ -880,8 +847,7 @@ void ui_handleEvent(EncoderEvent e) {
 
     // --- LOGIKA MENU USTAWIEŃ MELODII ALARMU ---
     if (appState == STATE_SETTINGS_ALARM_MELODY) {
-      s_prefs.putString("alarmMelodyId", AlarmMelodies::id((uint8_t)settingsAlarmMelodyIndex));
-      s_prefs.putUShort("alarmMelody", (uint16_t)settingsAlarmMelodyIndex);
+      AlarmMelodyPrefs::saveSelection(s_prefs, settingsAlarmMelodyIndex);
       drawStatsSafe();
       startAlarmMelodyDemo((uint8_t)settingsAlarmMelodyIndex);
       return;
@@ -1234,8 +1200,7 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_SETTINGS_ROTATION:
         // cancel: restore previous value and go back
         settingsRotationSec = s_prevSettingsRotationSec;
-        extern unsigned long s_homeOverlaySwitchMs;
-        s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
+        HomeRuntime::setOverlayIntervalSeconds((uint8_t)settingsRotationSec);
         appState = STATE_SETTINGS;
         drawStatsSafe();
         return;
@@ -1249,7 +1214,7 @@ void ui_handleEvent(EncoderEvent e) {
 
       case STATE_SETTINGS_UI_SCREEN:
         settingsUiScreenIndex = s_prevSettingsUiScreenIndex;
-        setHomeUiProfile((uint8_t)settingsUiScreenIndex);
+        setHomeUiProfileSafe((uint8_t)settingsUiScreenIndex);
         appState = STATE_SETTINGS;
         drawStatsSafe();
         return;
@@ -1307,19 +1272,6 @@ void ui_handleEvent(EncoderEvent e) {
         appState = STATE_HOME;
         updateSevenSegSafe();
         drawHomeSafe();
-        return;
-
-      case STATE_TEMPERATURE:
-      case STATE_HUMIDITY:
-        // DHT (temp/wilg) -> powrót do MENU + przywrócenie czasu
-        if (timeSaved) {
-          hours     = savedHours;
-          minutes   = savedMinutes;
-          seconds   = savedSeconds;
-          timeSaved = false;
-        }
-        appState = STATE_MENU;
-        drawMenuSafe();
         return;
 
       case STATE_STOPER:

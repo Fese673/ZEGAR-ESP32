@@ -6,6 +6,7 @@ Communication services and connectivity control.
 - Wi-Fi synchronization
 - MQTT publish and transport logic
 - Radio mode switching
+- Central orchestration for WiFi/MQTT/radio ownership (`NetworkOrchestrator`)
 
 ## Rules
 - Keep protocol logic isolated from UI rendering.

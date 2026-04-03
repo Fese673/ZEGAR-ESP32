@@ -6,17 +6,19 @@
 #include <LiquidCrystal_I2C.h>
 #include "LCDMirror.h"
 #include "AppState.h" // for EditState / AppState enums
+#include "BoardPins.h"
+#include "AlarmTypes.h"
 
 
 // --- Fallback pin definitions (will not override existing defines in main) ---
 #ifndef DATA_PIN
-#define DATA_PIN 23
+#define DATA_PIN BoardPins::kSevenSegData
 #endif
 #ifndef CLOCK_PIN
-#define CLOCK_PIN 18
+#define CLOCK_PIN BoardPins::kSevenSegClock
 #endif
 #ifndef LATCH_PIN
-#define LATCH_PIN 5
+#define LATCH_PIN BoardPins::kSevenSegLatch
 #endif
 
 
@@ -47,12 +49,6 @@ extern unsigned long stoperElapsed;
 extern int displayedBPM;
 extern int displayedSPO2;
 extern bool stm32Connected;
-
-// === Zmienne dla DHT ===
-extern float dhtTemperature;
-extern float dhtHumidity;
-extern bool dhtReady;
-extern bool dhtScreenDirty;
 // === Flaga ekranów PMS5003 - wymusi rysowanie przy wejściu do podmenu ===
 extern bool pmsScreenDirty;
 
@@ -78,7 +74,6 @@ extern int s_prevSettingsRotationSec;
 extern int settingsSyncMinutes;
 extern int s_prevSettingsSyncMin;
 // Alarms
-struct AlarmEntry { uint8_t hour; uint8_t minute; bool enabled; uint16_t lastTriggerDay; };
 extern const int MAX_ALARMS;
 extern AlarmEntry alarms[];
 extern int alarmsCount;
@@ -96,11 +91,6 @@ extern unsigned long timerStartMillis;
 extern unsigned long timerDurationMs;
 extern int timerUiCursor;   // 0=CZAS, 1=PRESETY
 extern int timerPresetIndex; // 0=2m, 1=15m, 2=45m
-
-
-// Zmienne do triku z zamrażaniem czasu na 7-seg
-extern int savedHours, savedMinutes, savedSeconds;
-extern bool timeSaved;
 
 
 // LCD object (your main must define it, e.g. LiquidCrystal_I2C lcd(...))
@@ -128,12 +118,6 @@ void printVal(int v, bool sel);
 void drawStats();  // UI statystyk
 void drawSystemResources(); // UI zasobów systemu (RAM/FLASH)
 void drawModeTransition(); // UI przejścia trybu (WiFi ↔ Bluetooth)
-
-// === Funkcje DHT ===
-void drawTemperature();
-void drawHumidity();
-void showTemperature7Seg();
-void showHumidity7Seg();
 
 
 

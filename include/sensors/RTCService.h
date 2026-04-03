@@ -4,8 +4,9 @@
 #include <time.h>
 #include <Wire.h>
 
+#include "BoardPins.h"
 #include "ErriezDS3231.h"
-#include "I2C_bus_shared.h"
+#include "i2c/SharedBus.h"
 
 namespace RTCService {
 
@@ -34,9 +35,9 @@ struct DateTime {
 
 struct Config {
     TwoWire *wire = &Wire;
-    int sdaPin = 21;
-    int sclPin = 22;
-    uint32_t i2cClockHz = 400000;
+    int sdaPin = BoardPins::kI2cSda;
+    int sclPin = BoardPins::kI2cScl;
+    uint32_t i2cClockHz = BoardPins::kI2cClockHz;
     uint32_t i2cTimeoutMs = 10;
     uint8_t i2cRetries = 2;
     bool initI2cMaster = true;

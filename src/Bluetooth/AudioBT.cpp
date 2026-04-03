@@ -1,6 +1,7 @@
 #include "AudioBT.h"
 #include "BluetoothA2DPSinkQueued.h"
 #include "esp_bt.h"
+#include "BoardPins.h"
 
 #if A2DP_I2S_AUDIOTOOLS
 static audio_tools::I2SStream s_audioStream;
@@ -34,9 +35,9 @@ void audioBT_init() {
     i2sConfig.auto_clear = true;
     i2sConfig.buffer_count = 12;
     i2sConfig.buffer_size = 128;
-    i2sConfig.pin_bck = 33;
-    i2sConfig.pin_ws = 32;
-    i2sConfig.pin_data = 14;
+    i2sConfig.pin_bck = BoardPins::kBtI2sBclk;
+    i2sConfig.pin_ws = BoardPins::kBtI2sWs;
+    i2sConfig.pin_data = BoardPins::kBtI2sData;
 
     if (!s_audioStream.begin(i2sConfig)) {
         Serial.println("[BT] Failed to initialize AudioTools I2S output");
@@ -59,9 +60,9 @@ void audioBT_init() {
     };
 
     i2s_pin_config_t pin_config = {
-        .bck_io_num = 33,
-        .ws_io_num = 32,
-        .data_out_num = 14,
+        .bck_io_num = BoardPins::kBtI2sBclk,
+        .ws_io_num = BoardPins::kBtI2sWs,
+        .data_out_num = BoardPins::kBtI2sData,
         .data_in_num = I2S_PIN_NO_CHANGE
     };
 

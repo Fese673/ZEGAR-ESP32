@@ -41,7 +41,7 @@
 #include <Wire.h>
 
 #include "ErriezDS3231.h"
-#include "I2C_bus_shared.h"
+#include "i2c/SharedBus.h"
 
 #define DS3231_DEFAULT_I2C_TIMEOUT_MS 10U
 

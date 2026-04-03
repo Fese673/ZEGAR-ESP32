@@ -71,6 +71,7 @@ static unsigned long lastPublishTime = 0;
 static unsigned long publishInterval = 5000; // 5 seconds
 static bool mqttConnected = false;
 static TaskHandle_t mqtt_task_handle = NULL;
+static Config s_config;
 
 // ============================================================================
 // Forward declarations
@@ -78,6 +79,7 @@ static TaskHandle_t mqtt_task_handle = NULL;
 static void mqtt_callback(char* topic, byte* payload, unsigned int length);
 static void mqtt_reconnect();
 static void mqtt_task(void *parameter);
+static void applyConfigToClient();
 
 // ============================================================================
 // Callback for incoming MQTT messages
@@ -90,6 +92,21 @@ static void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         Serial.print((char)payload[i]);
     }
     Serial.println();
+}
+
+static void applyConfigToClient() {
+    mqttClient.setClient(wifiClientSecure);
+    mqttClient.setServer(s_config.brokerAddress.c_str(), s_config.brokerPort);
+    mqttClient.setCallback(mqtt_callback);
+}
+
+void configure(const Config& config) {
+    s_config = config;
+    applyConfigToClient();
+}
+
+Config currentConfig() {
+    return s_config;
 }
 
 // ============================================================================
@@ -107,11 +124,13 @@ static void mqtt_reconnect() {
     }
 
     Serial.print("[MQTT] WiFi connected. Attempting MQTT connection to ");
-    Serial.print(MQTT_BROKER_ADDRESS);
+    Serial.print(s_config.brokerAddress);
     Serial.println("...");
 
     // Try to connect
-    if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD)) {
+    if (mqttClient.connect(s_config.clientId.c_str(),
+                           s_config.username.c_str(),
+                           s_config.password.c_str())) {
         Serial.println("[MQTT] ✅ Connected to HiveMQ Cloud!");
         mqttConnected = true;
         // Trigger immediate NTP sync when MQTT becomes connected
@@ -179,24 +198,25 @@ static void mqtt_task(void *parameter) {
 // ============================================================================
 
 void begin(const char* ssid, const char* password) {
+    (void)ssid;
+    (void)password;
+
     Serial.println("[MQTT] Initializing MQTT client...");
     
     // Configure secure WiFi client with CA certificate
     wifiClientSecure.setCACert(g_mqtt_ca_cert);
-    
+
     // Set up MQTT client with secure WiFi client
-    mqttClient.setClient(wifiClientSecure);
-    mqttClient.setServer(MQTT_BROKER_ADDRESS, MQTT_BROKER_PORT);
-    mqttClient.setCallback(mqtt_callback);
+    applyConfigToClient();
 
     // Configure buffer sizes for JSON payload (increase to support particle arrays)
     mqttClient.setBufferSize(1024);
     
     Serial.println("[MQTT] Client configured");
     Serial.print("[MQTT] Broker: ");
-    Serial.println(MQTT_BROKER_ADDRESS);
+    Serial.println(s_config.brokerAddress);
     Serial.print("[MQTT] Port: ");
-    Serial.println(MQTT_BROKER_PORT);
+    Serial.println(s_config.brokerPort);
 }
 
 void startCore1Task() {
@@ -284,7 +304,7 @@ void publishSensorData(float temp, int humidity, int pressure,
     Serial.print("[MQTT] Payload size: "); Serial.println(n);
 
     // Publish
-    if (mqttClient.publish(MQTT_TOPIC, buffer)) {
+    if (mqttClient.publish(s_config.topic.c_str(), buffer)) {
         Serial.print("[MQTT] Published: ");
         Serial.println(buffer);
         lastPublishTime = millis();
@@ -299,7 +319,7 @@ void publishRawJSON(const char* jsonString) {
         return;
     }
     
-    if (mqttClient.publish(MQTT_TOPIC, jsonString)) {
+    if (mqttClient.publish(s_config.topic.c_str(), jsonString)) {
         Serial.print("[MQTT] Published: ");
         Serial.println(jsonString);
         lastPublishTime = millis();

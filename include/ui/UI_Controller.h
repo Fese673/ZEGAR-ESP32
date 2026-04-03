@@ -5,6 +5,7 @@
 typedef void (*DrawFn)();
 typedef void (*Update7SegFn)();
 typedef void (*Update7SegStoperFn)(int mins, int secs, int centisec);
+typedef void (*SetHomeUiProfileFn)(uint8_t profileIndex);
 
 // Struktura zawierająca wszystkie callbacki UI
 // Przekazujesz je w ui_begin() - wszystkie funkcje są zdefiniowane w main.cpp
@@ -20,6 +21,7 @@ typedef struct {
   Update7SegStoperFn updateSevenSegStoper; // Odśwież 7-seg dla stopera (min, sec, centisec)
   DrawFn drawStats; // UI statystyk
   DrawFn drawSystemResources; // Rysowanie zasobów systemu (RAM/FLASH)
+  SetHomeUiProfileFn setHomeUiProfile;     // Ustawienie profilu HOME
 } UI_Callbacks;
 
 // Inicjalizacja kontrolera UI

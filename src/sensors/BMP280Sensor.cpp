@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "BMP280Screen.h"
-#include "I2C_bus_shared.h"
+#include "i2c/SharedBus.h"
 #include <Preferences.h>
 
 namespace {

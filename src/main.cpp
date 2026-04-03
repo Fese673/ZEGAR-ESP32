@@ -12,10 +12,10 @@
 #include "AppState.h"
 #include "UI_Draw.h"
 #include "WiFiSync.h"
-#include "RTCService.h"
 
 #include <sys/time.h>
 #include "MQTTSync.h"
+#include "NetworkOrchestrator.h"
 #include "StatsManager.h" 
 #include "AudioBT.h" 
 #include "ModeManager.h"
@@ -26,11 +26,16 @@
 #include "BMP280Screen.h"
 #include "BMP280Sensor.h"
 #include "LCDIcons.h"
-#include "AlarmMelodies.h"
+#include "AlarmMelodyPrefs.h"
+#include "ClockAlarmService.h"
+#include "RtcSyncService.h"
+#include "TelemetryComposer.h"
+#include "HomeRuntime.h"
+#include "AlarmTypes.h"
 #include <cstring>
-#include <DHT.h>
-#include "TemperatureConfig.h"
-#include "I2C_bus_shared.h"
+#include "SecretsConfig.h"
+#include "BoardPins.h"
+#include "i2c/SharedBus.h"
 #include <Preferences.h>
 
 // ============================================================================
@@ -41,50 +46,15 @@ constexpr unsigned long ALARM_DURATION_MS   = 60000; // jak długo gra alarm
 constexpr unsigned long STM32_UPDATE_MS     = 500;  // odświeżanie danych STM32
 constexpr unsigned long STM32_TIMEOUT_MS    = 3000; // timeout połączenia STM32
 constexpr unsigned long STOPER_DRAW_MS      = 100;  // odświeżanie stopera
-constexpr unsigned long WIFI_RETRY_DELAY_MS = 500;  // próba połączenia WiFi
-constexpr int           WIFI_MAX_RETRIES    = 20;   // max prób połączenia
-constexpr unsigned long MSG_DISPLAY_MS      = 1500; // wyświetlanie komunikatów
 
-// ============================================================================
-// HOME LCD refresh policy
-// ============================================================================
-// Wymóg: ekran HOME (LCD + UART mirror) ma odświeżać się maks. 1x/s.
-// Zamiast wołać drawHome() bezpośrednio z wielu miejsc, używamy bramki:
-// - requestHomeRedraw(): zaznacza, że HOME wymaga odświeżenia
-// - serviceHomeRedraw(): wykonuje drawHome() nie częściej niż co 1000ms
-static bool          s_homeRedrawDirty      = true;
-static unsigned long s_lastHomeRedrawMs    = 0;
-static constexpr unsigned long HOME_REDRAW_MIN_INTERVAL_MS = 1000;
-
-enum class HomeUiProfile : uint8_t {
-  Minimal  = 0,
-  Balanced = 1,
-  Extreme  = 2,
-};
-
-enum class HomeOverlayPage : uint8_t {
-  Time            = 0,
-  Indoor          = 1,
-  Outdoor         = 2,
-  Extreme         = 3,
-  Systems         = 4,
-  ExtremeAlgos    = 5,
-};
-
-static HomeUiProfile   s_homeUiProfile       = HomeUiProfile::Minimal;
-static HomeOverlayPage s_homeOverlay         = HomeOverlayPage::Time;
-static uint8_t         s_homeOverlayIndex    = 0;
-static unsigned long   s_homeOverlaySinceMs  = 0;
-static unsigned long   s_homeIndoorAnimSinceMs = 0;
 // Runtime-configurable overlay switch interval (ms). Persisted via Preferences as seconds.
-unsigned long s_homeOverlaySwitchMs = 7000; // default 7s
 int settingsRotationSec = 7;               // 1..10 seconds (user-facing)
 int s_prevSettingsRotationSec = 7;         // used to restore on cancel
 int s_prevSettingsUiScreenIndex = 0;        // used to restore UI screen selection on cancel
 
 extern int settingsUiScreenIndex;
 
-constexpr uint8_t BUZZER_PIN = 19;
+constexpr uint8_t BUZZER_PIN = BoardPins::kBuzzer;
 
 enum class IntroPhase : uint8_t {
   Idle,
@@ -372,24 +342,21 @@ const char* settingsEpicIntroItems[] = {"ON", "OFF"};
 constexpr unsigned long SETUP_DELAY_MS      = 100;  // min delay for serial init
 constexpr long UART_BAUD = 115200;
 HardwareSerial& uart = Serial2;
-#define DHT_PIN 4
-#define DHT_TYPE DHT11
 static uint32_t heapBaseline = 0;
-static bool s_alarmMelodyDemoActive = false;
-static unsigned long s_alarmMelodyDemoEndMs = 0;
 int settingsUiScreenIndex = 0;
 int settingsAlarmMelodyIndex = 0;
 int s_prevSettingsAlarmMelodyIndex = 0;
-constexpr uint8_t ENC_CLK = 25;
-constexpr uint8_t ENC_DT  = 26;
-constexpr uint8_t ENC_SW  = 27;
-const char* const WIFI_SSID  = "Orange_Swiatlowod_98E2";
-const char* const WIFI_PASS   = "x1Z6P(~8pry<St.";
-const char* const NTP_SERVER  = "pool.ntp.org";
+constexpr uint8_t ENC_CLK = BoardPins::kEncoderClk;
+constexpr uint8_t ENC_DT  = BoardPins::kEncoderDt;
+constexpr uint8_t ENC_SW  = BoardPins::kEncoderSw;
+
+static String s_wifiSsid = PROJECT_WIFI_SSID;
+static String s_wifiPass = PROJECT_WIFI_PASS;
+static String s_ntpServer = PROJECT_NTP_SERVER;
+static MQTTSync::Config s_mqttConfig;
+
 constexpr int BMP280_MENU_COUNT = 4;
 int bmp280MenuCount = BMP280_MENU_COUNT;
-
-void updateDHT();
 
 // --- Menu Główne ---
 int menuIndex = 0;
@@ -403,13 +370,11 @@ const char* menuItems[] = {
   "PMS5003",
   "AHT21 + ENS160",
   "BMP280",
-  "Temperatura",
-  "Wilgotnosc",
   "Ustawienia",
   "Wyjscie",
   "Radio: Toggle"
 };
-constexpr int MENU_COUNT = 14;
+constexpr int MENU_COUNT = 12;
 int menuCount = MENU_COUNT;
 
 // --- Menu Statystyk ---
@@ -569,172 +534,49 @@ uint16_t pms5003_PM10_CF1 = 0;
 
 uint16_t pms5003_PM1_0_ATM = 0;
 
-static void requestHomeRedraw();
-
-static int loadAlarmMelodyIndexFromPrefs() {
-  String savedMelodyId = s_prefs.getString("alarmMelodyId", "");
-  if (savedMelodyId.length() > 0) {
-    int loadedIndex = AlarmMelodies::indexOfId(savedMelodyId.c_str());
-    if (loadedIndex >= 0 && loadedIndex < AlarmMelodies::kCount) {
-      return loadedIndex;
-    }
-  }
-
-  int loadedIndex = (int)s_prefs.getUShort("alarmMelody", 0);
-  if (loadedIndex < 0) loadedIndex = 0;
-  if (loadedIndex >= AlarmMelodies::kCount) loadedIndex = AlarmMelodies::kCount - 1;
-  return loadedIndex;
-}
-
-static uint8_t homeOverlayCountForProfile(HomeUiProfile profile) {
-  switch (profile) {
-    case HomeUiProfile::Minimal:
-      return 2;
-    case HomeUiProfile::Balanced:
-      return 3;
-    case HomeUiProfile::Extreme:
-      return 6;
-  }
-  return 2;
-}
-
-static HomeOverlayPage homeOverlayPageFor(HomeUiProfile profile, uint8_t index) {
-  switch (profile) {
-    case HomeUiProfile::Minimal:
-      return (index % 2 == 0) ? HomeOverlayPage::Time : HomeOverlayPage::Outdoor;
-    case HomeUiProfile::Balanced:
-      switch (index % 3) {
-        case 0: return HomeOverlayPage::Time;
-        case 1: return HomeOverlayPage::Indoor;
-        default: return HomeOverlayPage::Outdoor;
-      }
-    case HomeUiProfile::Extreme:
-      switch (index % 6) {
-        case 0: return HomeOverlayPage::Time;
-        case 1: return HomeOverlayPage::Indoor;
-        case 2: return HomeOverlayPage::Outdoor;
-        case 3: return HomeOverlayPage::Extreme;
-        case 4: return HomeOverlayPage::Systems;
-        default: return HomeOverlayPage::ExtremeAlgos;
-      }
-  }
-  return HomeOverlayPage::Time;
-}
-
-static void syncHomeOverlayToProfile(bool resetTimer) {
-  const uint8_t overlayCount = homeOverlayCountForProfile(s_homeUiProfile);
-  if (overlayCount == 0) {
-    s_homeOverlayIndex = 0;
-    s_homeOverlay = HomeOverlayPage::Time;
-    s_homeOverlaySinceMs = 0;
-    s_homeIndoorAnimSinceMs = 0;
-    requestHomeRedraw();
-    return;
-  }
-
-  if (s_homeOverlayIndex >= overlayCount) {
-    s_homeOverlayIndex = 0;
-  }
-
-  s_homeOverlay = homeOverlayPageFor(s_homeUiProfile, s_homeOverlayIndex);
-  if (resetTimer) {
-    s_homeOverlaySinceMs = millis();
-    s_homeIndoorAnimSinceMs = s_homeOverlay == HomeOverlayPage::Indoor ? s_homeOverlaySinceMs : 0;
-  }
-  requestHomeRedraw();
-}
-
-static void requestHomeRedraw() {
-  s_homeRedrawDirty = true;
-}
-
-static void serviceHomeRedraw() {
-  if (appState != STATE_HOME) return;
-  if (!s_homeRedrawDirty) return;
-
-  const unsigned long nowMs = millis();
-  if (s_lastHomeRedrawMs != 0 && (nowMs - s_lastHomeRedrawMs) < HOME_REDRAW_MIN_INTERVAL_MS) {
-    return;
-  }
-
-  s_lastHomeRedrawMs = nowMs;
-  s_homeRedrawDirty  = false;
-
-  switch (s_homeOverlay) {
-    case HomeOverlayPage::Indoor:
-      drawIndoorWeatherScreen();
-      break;
-    case HomeOverlayPage::Outdoor:
-      drawAirScreen();
-      break;
-    case HomeOverlayPage::Extreme:
-      drawExtremeEnvironmentScreen();
-      break;
-    case HomeOverlayPage::Systems:
-      drawSystemResources();
-      break;
-    case HomeOverlayPage::ExtremeAlgos:
-      drawExtremeAlgorithmScreen();
-      break;
-    case HomeOverlayPage::Time:
-    default:
-      drawHome();
-      break;
-  }
-}
-
 static void drawHomeThrottled() {
-  requestHomeRedraw();
-  serviceHomeRedraw();
-}
-
-static void serviceHomeOverlayRotation() {
-  if (appState != STATE_HOME) return;
-
-  const unsigned long nowMs = millis();
-  const uint8_t overlayCount = homeOverlayCountForProfile(s_homeUiProfile);
-  if (overlayCount == 0) {
-    return;
-  }
-
-  if (s_homeOverlaySinceMs == 0) {
-    s_homeOverlayIndex = 0;
-    s_homeOverlay = homeOverlayPageFor(s_homeUiProfile, s_homeOverlayIndex);
-    s_homeOverlaySinceMs = nowMs;
-    requestHomeRedraw();
-    return;
-  }
-
-  if (nowMs - s_homeOverlaySinceMs >= s_homeOverlaySwitchMs) {
-    s_homeOverlaySinceMs = nowMs;
-    s_homeOverlayIndex = (uint8_t)((s_homeOverlayIndex + 1) % overlayCount);
-    s_homeOverlay = homeOverlayPageFor(s_homeUiProfile, s_homeOverlayIndex);
-    s_homeIndoorAnimSinceMs = s_homeOverlay == HomeOverlayPage::Indoor ? nowMs : 0;
-    requestHomeRedraw();
-    return;
-  }
-}
-
-static void handleHomeEntryIfStateChanged() {
-  static AppState lastState = STATE_HOME;
-  if (appState == lastState) return;
-
-  if (appState == STATE_HOME) {
-    s_homeOverlayIndex = 0;
-    syncHomeOverlayToProfile(true);
-  }
-
-  lastState = appState;
+  HomeRuntime::markHomeDirty();
+  HomeRuntime::serviceRedraw(appState);
 }
 
 void setHomeUiProfile(uint8_t profileIndex) {
-  if (profileIndex > static_cast<uint8_t>(HomeUiProfile::Extreme)) {
-    profileIndex = 0;
+  HomeRuntime::setProfile(profileIndex);
+  settingsUiScreenIndex = (int)HomeRuntime::getProfile();
+}
+
+static bool looksLikePlaceholder(const String& value) {
+  return value.length() == 0 || value.startsWith("REPLACE_");
+}
+
+static void loadNetworkConfigFromPreferences() {
+  s_wifiSsid = s_prefs.getString("wifiSsid", PROJECT_WIFI_SSID);
+  s_wifiPass = s_prefs.getString("wifiPass", PROJECT_WIFI_PASS);
+  s_ntpServer = s_prefs.getString("ntpServer", PROJECT_NTP_SERVER);
+
+  s_mqttConfig.brokerAddress = s_prefs.getString("mqttHost", PROJECT_MQTT_BROKER);
+  s_mqttConfig.brokerPort = (uint16_t)s_prefs.getUShort("mqttPort", PROJECT_MQTT_PORT);
+  s_mqttConfig.username = s_prefs.getString("mqttUser", PROJECT_MQTT_USERNAME);
+  s_mqttConfig.password = s_prefs.getString("mqttPass", PROJECT_MQTT_PASSWORD);
+  s_mqttConfig.topic = s_prefs.getString("mqttTopic", PROJECT_MQTT_TOPIC);
+  s_mqttConfig.clientId = s_prefs.getString("mqttClient", PROJECT_MQTT_CLIENT_ID);
+
+  if (looksLikePlaceholder(s_wifiSsid) || looksLikePlaceholder(s_wifiPass)) {
+    Serial.println("[config] WiFi credentials are placeholders; configure NVS keys wifiSsid/wifiPass.");
   }
 
-  s_homeUiProfile = static_cast<HomeUiProfile>(profileIndex);
-  settingsUiScreenIndex = (int)profileIndex;
-  syncHomeOverlayToProfile(true);
+  if (looksLikePlaceholder(s_mqttConfig.brokerAddress) ||
+      looksLikePlaceholder(s_mqttConfig.username) ||
+      looksLikePlaceholder(s_mqttConfig.password)) {
+    Serial.println("[config] MQTT credentials are placeholders; configure NVS keys mqttHost/mqttUser/mqttPass.");
+  }
+}
+
+void startAlarmMelodyDemo(uint8_t melodyIndex) {
+  ClockAlarmService::startAlarmMelodyDemo(melodyIndex, BUZZER_PIN);
+}
+
+void stopAlarmMelodyDemo() {
+  ClockAlarmService::stopAlarmMelodyDemo(BUZZER_PIN);
 }
 
 uint16_t pms5003_PM2_5_ATM = 0;
@@ -829,344 +671,11 @@ bool bootDiagReprinted = false;
 // --- Flaga do przywrócenia czasu z RTC (po soft reset) ---
 static bool timeRestored = false;
 
-// DS3231 persistence: write system time to RTC after successful NTP sync
-static bool rtcWritePending = false;
-static unsigned long lastRtcWriteAttemptMillis = 0;
-static unsigned long rtcWriteNotBeforeMillis = 0;
-static uint8_t rtcWriteFailureCount = 0;
-static time_t rtcPendingEpoch = 0;
-static unsigned long lastSeenNtpSyncMillis = 0;
-
-static const char* TZ_POLAND = "CET-1CEST,M3.5.0,M10.5.0/3";
-
-static bool isSystemTimeValid() {
-  // 2021-01-01 00:00:00 UTC
-  return time(nullptr) >= 1609459200;
-}
-
-static unsigned long rtcComputeBackoffMs(uint8_t failures) {
-  // 0->0ms, 1->1s, 2->2s, 3->5s, 4->10s, 5->20s, >=6->60s
-  if (failures == 0) return 0;
-  if (failures == 1) return 1000;
-  if (failures == 2) return 2000;
-  if (failures == 3) return 5000;
-  if (failures == 4) return 10000;
-  if (failures == 5) return 20000;
-  return 60000;
-}
-
-static void scheduleRtcWriteFromSystemTime() {
-  if (!isSystemTimeValid()) return;
-  rtcPendingEpoch = time(nullptr);
-  rtcWritePending = true;
-  rtcWriteFailureCount = 0;
-
-  // Give the loop a moment after SNTP update (and reduce chance of I2C collisions)
-  rtcWriteNotBeforeMillis = millis() + 2000UL;
-}
-
-static void syncLocalClockFromSystemTime() {
-  time_t now = time(nullptr);
-  struct tm ti;
-  localtime_r(&now, &ti);
-  hours = ti.tm_hour;
-  minutes = ti.tm_min;
-  seconds = ti.tm_sec;
-}
-
-static void tryRestoreSystemTimeFromDs3231() {
-  RTCService::Config rtcCfg;
-  rtcCfg.wire = &Wire;
-  rtcCfg.sdaPin = 21;
-  rtcCfg.sclPin = 22;
-  rtcCfg.i2cClockHz = 400000;
-  rtcCfg.i2cTimeoutMs = 10;
-  rtcCfg.i2cRetries = 2;
-  rtcCfg.initI2cMaster = false; // Wire.begin() already done in setup()
-  rtcCfg.enableI2cDiagnostics = true;
-
-  const RTCService::Status st = RTCService::begin(rtcCfg);
-  Serial.printf("[RTC] begin: %s\n", RTCService::statusToString(st));
-  if (st != RTCService::Status::Ok) {
-    return;
-  }
-
-  time_t epoch = 0;
-  const RTCService::Status rd = RTCService::getEpoch(&epoch);
-  Serial.printf("[RTC] getEpoch: %s epoch=%ld\n", RTCService::statusToString(rd), (long)epoch);
-  if (rd != RTCService::Status::Ok) {
-    return;
-  }
-
-  // Additional sanity: ignore clearly invalid timestamps.
-  if (epoch < 1609459200) {
-    Serial.println("[RTC] epoch too old/invalid; ignoring");
-    return;
-  }
-
-  timeval tv;
-  tv.tv_sec = epoch;
-  tv.tv_usec = 0;
-  settimeofday(&tv, nullptr);
-
-  lastTick = millis();
-  syncLocalClockFromSystemTime();
-  Serial.printf("[RTC] system time restored from DS3231 (local %02d:%02d:%02d)\n", hours, minutes, seconds);
-}
-
-static void handleRtcWriteIfPending() {
-  if (!rtcWritePending) return;
-  if (!RTCService::isReady()) return;
-  if (!isSystemTimeValid()) return;
-
-  const unsigned long nowMs = millis();
-
-  if (nowMs < rtcWriteNotBeforeMillis) return;
-  // Avoid hammering the device on repeated failures.
-  if (lastRtcWriteAttemptMillis != 0 && (nowMs - lastRtcWriteAttemptMillis) < 1000UL) return;
-
-  const time_t epochToWrite = (rtcPendingEpoch != 0) ? rtcPendingEpoch : time(nullptr);
-  const RTCService::Status st = RTCService::setEpoch(epochToWrite, true);
-  Serial.printf("[RTC] setEpoch: %s epoch=%ld\n", RTCService::statusToString(st), (long)epochToWrite);
-  lastRtcWriteAttemptMillis = nowMs;
-
-  if (st == RTCService::Status::Ok) {
-    rtcWritePending = false;
-    rtcPendingEpoch = 0;
-    rtcWriteFailureCount = 0;
-    rtcWriteNotBeforeMillis = 0;
-    return;
-  }
-
-  rtcWriteFailureCount++;
-  rtcWriteNotBeforeMillis = nowMs + rtcComputeBackoffMs(rtcWriteFailureCount);
-}
-
 // --- MQTT Mode Control ---
-static bool mqtt_initialized = false;
-static RadioModeSwitchState last_radio_mode = RADIO_STATE_WIFI;
 bool mqttEnabled = true;
-
-// --- DHT Sensor ---
-DHT dht(DHT_PIN, DHT_TYPE);
-bool dhtScreenDirty = true;
-int  savedHours     = 0;
-int  savedMinutes   = 0;
-int  savedSeconds   = 0;
-bool timeSaved      = false;
 
 // Flaga do wymuszenia rysowania ekranów PMS5003 przy wejściu do podmenu
 bool pmsScreenDirty = true;
-
-// Odczyty DHT
-float dhtTemperature = 0.0f; // compensated (used by app)
-float dhtTemperatureRaw = 0.0f; // raw sensor reading for diagnostics
-float dhtHumidity    = 0.0f;
-
-// Stabilizacja odczytów
-bool dhtReady = false;
-unsigned long dhtLastRead = 0;
-constexpr unsigned long DHT_READ_INTERVAL_MS = 2000;
-
-static void buildMqttTelemetrySample(float &temperatureC, int &humidityPct, int &pressureHpa,
-                                     uint8_t &aqi, uint16_t &tvoc, uint16_t &eco2) {
-  temperatureC = 0.0f;
-  humidityPct = 0;
-  pressureHpa = 0;
-  aqi = 0;
-  tvoc = 0;
-  eco2 = 0;
-
-  if (BMP280Screen::runtimeData.hasTemperature) {
-    temperatureC = BMP280Screen::runtimeData.temperatureC;
-  } else if (ENS160AHT21Screen::runtimeData.hasClimateSample) {
-    temperatureC = ENS160AHT21Screen::runtimeData.temperatureC;
-  } else {
-    temperatureC = dhtTemperature;
-  }
-
-  if (ENS160AHT21Screen::runtimeData.hasClimateSample) {
-    humidityPct = (int)ENS160AHT21Screen::runtimeData.humidityPct;
-  } else {
-    humidityPct = (int)dhtHumidity;
-  }
-
-  if (BMP280Screen::runtimeData.hasPressure) {
-    pressureHpa = (int)BMP280Screen::runtimeData.pressureHpa;
-  }
-
-  if (ENS160AHT21Screen::runtimeData.hasGasSample) {
-    aqi = ENS160AHT21Screen::runtimeData.aqi;
-    tvoc = ENS160AHT21Screen::runtimeData.tvoc;
-    eco2 = ENS160AHT21Screen::runtimeData.eco2;
-  }
-}
-
-float computeDewPoint(float temperatureC, float humidityPct) {
-  const float b = 17.625f;
-  const float c = 243.04f;
-
-  if (!isfinite(temperatureC) || !isfinite(humidityPct) || humidityPct <= 0.0f || humidityPct > 100.0f) {
-    return NAN;
-  }
-
-  const float rh = humidityPct;
-  const float gamma = logf(rh / 100.0f) + (b * temperatureC) / (c + temperatureC);
-  return (c * gamma) / (b - gamma);
-}
-
-float computeHumidex(float temperatureC, float humidityPct) {
-  if (!isfinite(temperatureC) || !isfinite(humidityPct) || humidityPct <= 0.0f || humidityPct > 100.0f) {
-    return NAN;
-  }
-
-  // Humidex (Meteorological Service of Canada) z RH i temperatury.
-  // Wynik sensowny w praktyce dla T >= 20°C oraz RH >= 40%.
-  if (temperatureC < 20.0f || humidityPct < 40.0f) {
-    return NAN;
-  }
-
-  const float e = 6.112f * powf(10.0f, (7.5f * temperatureC) / (237.7f + temperatureC)) * (humidityPct / 100.0f);
-  return temperatureC + (5.0f / 9.0f) * (e - 10.0f);
-}
-
-float computeHeatIndexNWS(float temperatureC, float humidityPct) {
-  if (!isfinite(temperatureC) || !isfinite(humidityPct) || temperatureC < 27.0f || humidityPct < 40.0f) {
-    return NAN;
-  }
-
-  float T = temperatureC * 9.0f / 5.0f + 32.0f;
-  float RH = humidityPct;
-
-  float HI = -42.379f
-    + 2.04901523f * T
-    + 10.14333127f * RH
-    - 0.22475541f * T * RH
-    - 0.00683783f * T * T
-    - 0.05481717f * RH * RH
-    + 0.00122874f * T * T * RH
-    + 0.00085282f * T * RH * RH
-    - 0.00000199f * T * T * RH * RH;
-
-  // poprawki (opcjonalne) mogłyby zostać dodane, ale nie są konieczne w prostym modelu.
-  return (HI - 32.0f) * 5.0f / 9.0f;
-}
-
-float computeAbsoluteHumidity(float temperatureC, float humidityPct) {
-  if (!isfinite(temperatureC) || !isfinite(humidityPct) || humidityPct < 0.0f || humidityPct > 100.0f) {
-    return NAN;
-  }
-
-  const float Rw = 461.5f; // J/(kg·K)
-  const float Tk = temperatureC + 273.15f;
-  if (Tk <= 0.0f) {
-    return NAN;
-  }
-
-  const float Ps = 611.2f * expf((17.625f * temperatureC) / (243.04f + temperatureC)); // Pa
-  const float Pv = (humidityPct / 100.0f) * Ps;
-  // wynik g/m^3
-  return (Pv / (Rw * Tk)) * 1000.0f;
-}
-
-
-// ============================================================================
-// IMPLEMENTACJA FUNKCJI - LOGIKA ZEGARA
-// ============================================================================
-
-void tickClock() {
-  if (appState == STATE_SET_TIME) return;
-
-  const unsigned long nowMs = millis();
-
-  if (isSystemTimeValid()) {
-    if (nowMs - lastTick >= CLOCK_TICK_MS) {
-      // align tick
-      lastTick = nowMs - ((nowMs - lastTick) % CLOCK_TICK_MS);
-      syncLocalClockFromSystemTime();
-      if (appState != STATE_STOPER) updateSevenSeg();
-      if (appState == STATE_HOME) requestHomeRedraw();
-    }
-  } else {
-    // catch up missed ticks
-    if (nowMs - lastTick >= CLOCK_TICK_MS) {
-      int loops = 0;
-      unsigned long now = nowMs;
-      while (now - lastTick >= CLOCK_TICK_MS && loops < 60) {
-        lastTick += CLOCK_TICK_MS;
-        seconds++;
-        if (seconds >= 60) {
-          seconds = 0;
-          minutes++;
-          if (minutes >= 60) {
-            minutes = 0;
-            hours = (hours + 1) % 24;
-          }
-        }
-        loops++;
-      }
-      if (appState != STATE_STOPER) updateSevenSeg();
-      if (appState == STATE_HOME) requestHomeRedraw();
-    }
-  }
-
-  // Check alarms (multi)
-  if (!alarmRinging && seconds == 0 && alarmsCount > 0) {
-    time_t now_t = time(nullptr);
-    struct tm timeinfo;
-    localtime_r(&now_t, &timeinfo);
-    int today = timeinfo.tm_yday;
-    for (int i = 0; i < alarmsCount; ++i) {
-      if (!alarms[i].enabled) continue;
-      if (alarms[i].hour == hours && alarms[i].minute == minutes && alarms[i].lastTriggerDay != (uint16_t)today) {
-        alarmRinging = true;
-        alarmStartTime = millis();
-        alarms[i].lastTriggerDay = (uint16_t)today;
-        AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, BUZZER_PIN);
-        break;
-      }
-    }
-  }
-
-  // Timer expiry
-  if (timerRunning) {
-    unsigned long elapsed = millis() - timerStartMillis;
-    if (elapsed >= timerDurationMs) {
-      timerRunning = false;
-      alarmRinging = true;
-      alarmStartTime = millis();
-      AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, BUZZER_PIN);
-      editState = EDIT_HOURS;
-      timerStartMillis = 0;
-      timerDurationMs = 0;
-    }
-  }
-}
-
-
-// ============================================================================
-// IMPLEMENTACJA FUNKCJI - ALARM / BUZZER
-// ============================================================================
-
-void playAlarmMelody() {
-  AlarmMelodies::service(BUZZER_PIN, millis());
-}
-
-void startAlarmMelodyDemo(uint8_t melodyIndex) {
-  AlarmMelodies::start(melodyIndex, BUZZER_PIN);
-  s_alarmMelodyDemoActive = true;
-  s_alarmMelodyDemoEndMs = millis() + 10000UL;
-}
-
-void stopAlarmMelodyDemo() {
-  if (!s_alarmMelodyDemoActive) {
-    return;
-  }
-
-  AlarmMelodies::stop(BUZZER_PIN);
-  s_alarmMelodyDemoActive = false;
-  s_alarmMelodyDemoEndMs = 0;
-}
 
 // ============================================================================
 // MONITOROWANIE ZASOBÓW SYSTEMU
@@ -1218,22 +727,17 @@ void setup() {
   Serial.begin(UART_BAUD);
   delay(SETUP_DELAY_MS);
 
-  // Set TZ early so localtime_r() is correct even before WiFiSync begins.
-  if (setenv("TZ", TZ_POLAND, 1) == 0) {
-    tzset();
-  }
+  RtcSyncService::applyTimezone();
 
   heapBaseline = ESP.getFreeHeap();
   Serial.printf("[diag] baseline_heap=%u\n", heapBaseline);
   ModeManager::logDiag("boot");
 
-  // --- DHT Sensor Init ---
-  dht.begin();
-
   // ===== Menedżer trybów (Wi-Fi/BT) - inicjalizuj WCZEŚNIE =====
   ModeManager::begin(&appState);
 
   s_prefs.begin("zegar", false);
+  loadNetworkConfigFromPreferences();
   showEpicIntro = s_prefs.getBool("epicIntro", true);
   settingsEpicIntroIndex = showEpicIntro ? 0 : 1;
 
@@ -1265,14 +769,17 @@ void setup() {
 #endif
   lcdFrame.begin();
 
-  // I2C initialization with explicit pins: SDA=21, SCL=22 (GPIO22 now free from I2S after fix)
-  const bool i2cClockApplied = I2cShared::initMaster(&Wire, 21, 22, 400000);
+  // I2C initialization from centralized board pin mapping.
+  const bool i2cClockApplied = I2cShared::initMaster(&Wire,
+                                                     BoardPins::kI2cSda,
+                                                     BoardPins::kI2cScl,
+                                                     BoardPins::kI2cClockHz);
   Serial.printf("[main] I2C clock readback: %lu Hz (%s)\n",
                 (unsigned long)Wire.getClock(),
                 i2cClockApplied ? "applied" : "fallback/mismatch");
 
   // ===== DS3231: restore system time early (before heavy UI/I2C traffic) =====
-  tryRestoreSystemTimeFromDs3231();
+  RtcSyncService::tryRestoreSystemTimeFromDs3231(hours, minutes, seconds, lastTick);
 
   // Tighten hd44780 timings to near-datasheet values.
   lcd.setExecTimes(37, 1520);
@@ -1300,7 +807,7 @@ void setup() {
   statsManager.begin();
 
   // --- STM32 setup ---
-  STM32data_begin(uart, UART_BAUD, 16, 17);
+  STM32data_begin(uart, UART_BAUD, BoardPins::kStm32UartRx, BoardPins::kStm32UartTx);
 
   // --- PMS5003 Czujnik pyłu ---
   PMS5003Sensor::begin();
@@ -1308,6 +815,15 @@ void setup() {
   ENS160AHT21Sensor::begin();
   BMP280Sensor::begin();
   bmp280MenuCount = BMP280Sensor::menuItemCount();
+
+  HomeRuntime::DrawCallbacks homeDrawCallbacks;
+  homeDrawCallbacks.drawHome = drawHome;
+  homeDrawCallbacks.drawIndoorWeather = drawIndoorWeatherScreen;
+  homeDrawCallbacks.drawOutdoorAir = drawAirScreen;
+  homeDrawCallbacks.drawExtremeEnvironment = drawExtremeEnvironmentScreen;
+  homeDrawCallbacks.drawSystemResources = drawSystemResources;
+  homeDrawCallbacks.drawExtremeAlgorithms = drawExtremeAlgorithmScreen;
+  HomeRuntime::begin(homeDrawCallbacks, (uint8_t)settingsUiScreenIndex, (uint8_t)settingsRotationSec);
 
   // ===== UI CONTROLLER =====
   UI_Callbacks callbacks;
@@ -1322,6 +838,7 @@ void setup() {
   callbacks.updateSevenSegStoper = updateSevenSegStoper;
   callbacks.drawStats           = drawStats;           // Callbacki do UI statystyk
   callbacks.drawSystemResources = drawSystemResources; // Zasoby systemu (RAM/FLASH)
+  callbacks.setHomeUiProfile    = setHomeUiProfile;
 
   // Ensure first screen (boot/home) performs a full redraw once
   lcdFrame.forceFullRedrawOnce();
@@ -1339,9 +856,9 @@ void setup() {
   settingsRotationSec = s_prefs.getUShort("homeOverlaySec", (uint16_t)settingsRotationSec);
   if (settingsRotationSec < 1) settingsRotationSec = 1;
   if (settingsRotationSec > 10) settingsRotationSec = 10;
-  s_homeOverlaySwitchMs = (unsigned long)settingsRotationSec * 1000UL;
+  HomeRuntime::setOverlayIntervalSeconds((uint8_t)settingsRotationSec);
   s_prevSettingsRotationSec = settingsRotationSec;
-  settingsAlarmMelodyIndex = loadAlarmMelodyIndexFromPrefs();
+  settingsAlarmMelodyIndex = AlarmMelodyPrefs::loadIndex(s_prefs);
   s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
   settingsUiScreenIndex = (int)s_prefs.getUShort("uiScreenMode", (uint16_t)settingsUiScreenIndex);
   if (settingsUiScreenIndex < 0) settingsUiScreenIndex = 0;
@@ -1369,23 +886,27 @@ void setup() {
   WiFiSync::setTimeRefs(hours, minutes, seconds, lastTick);        // referencje do zmiennych czasu
   WiFiSync::setOnDone([]() {
     const unsigned long ntpSyncMs = WiFiSync::getLastNtpSyncTime();
-    if (ntpSyncMs != 0 && ntpSyncMs != lastSeenNtpSyncMillis) {
-      lastSeenNtpSyncMillis = ntpSyncMs;
-      scheduleRtcWriteFromSystemTime();
-    }
+    RtcSyncService::noteNtpSync(ntpSyncMs);
     drawHomeThrottled();
   });
-  WiFiSync::begin(WIFI_SSID, WIFI_PASS, NTP_SERVER);
+  WiFiSync::begin(s_wifiSsid.c_str(), s_wifiPass.c_str(), s_ntpServer.c_str());
 
-  // ===== MQTT Sync (Core 1) - initialized only in WiFi mode =====
-  // MQTTSync will be initialized later in RadioModeSwitch::update() when WiFi mode is confirmed
-  Serial.println("[main] MQTT will start when WiFi mode is active");
+  MQTTSync::configure(s_mqttConfig);
+
+  // ===== Central orchestration for WiFi/Radio/MQTT =====
+  NetworkOrchestrator::Config netCfg;
+  netCfg.wifiSsid = s_wifiSsid.c_str();
+  netCfg.wifiPass = s_wifiPass.c_str();
+  netCfg.wifiStatusCheckMs = 2000UL;
+  NetworkOrchestrator::begin(netCfg);
+  NetworkOrchestrator::setMqttEnabled(mqttEnabled);
+  Serial.println("[main] Network orchestrator armed (WiFi/Radio/MQTT)");
 
   // ===== RadioModeSwitch inicjalizuje się, ale faktyczna inicjalizacja WiFi/BT =====
   // będzie opóźniona w loop() aby zagwarantować że LCD jest w pełni gotowe
   
   // Synchronizuj radioMode ze stanem RadioModeSwitch na starcie
-  if (RadioModeSwitch::getCurrentState() == RADIO_STATE_BT) {
+  if (NetworkOrchestrator::getCurrentRadioState() == RADIO_STATE_BT) {
     radioMode = BT_ONLY;
   } else {
     radioMode = WIFI_ONLY;
@@ -1410,7 +931,7 @@ void loop() {
                   ESP.getFreeHeap());
   }
 
-  handleHomeEntryIfStateChanged();
+  HomeRuntime::handleHomeEntryIfStateChanged(appState);
 
   // --- Encoder handling ---
   while (true) {
@@ -1438,11 +959,11 @@ void loop() {
   statsManager.update();
 
   // Rotacja zawartości HOME (co 3s) — non-blocking.
-  serviceHomeOverlayRotation();
+  HomeRuntime::serviceOverlayRotation(appState);
 
   // HOME LCD refresh (1Hz max, LCD + UART mirror)
   // tickClock() / callbacks mark HOME dirty; this performs the actual draw.
-  serviceHomeRedraw();
+  HomeRuntime::serviceRedraw(appState);
 
   // --- System resources update ---
   updateSystemResources();
@@ -1496,11 +1017,11 @@ void loop() {
     
     Serial.printf("[STATUS] WiFi:%s MQTT:%s BT:%s Heap:%u (%+d) Mode:%s\n",
       ModeManager::isWifiOn() ? "ON" : "OFF",
-      mqtt_initialized ? "ON" : "OFF",
+      NetworkOrchestrator::isMqttInitialized() ? "ON" : "OFF",
       ModeManager::isBtOn() ? "ON" : "OFF",
       current_heap,
       heap_delta,
-      (RadioModeSwitch::getCurrentState() == RADIO_STATE_BT) ? "BT" : "WiFi");
+      (NetworkOrchestrator::getCurrentRadioState() == RADIO_STATE_BT) ? "BT" : "WiFi");
   }
 
 #if CORE_DEBUG_LEVEL > 0
@@ -1522,70 +1043,34 @@ void loop() {
 #endif
 
   // --- Clock tick ---
-  tickClock();
+  ClockAlarmService::tickClock(CLOCK_TICK_MS, BUZZER_PIN);
 
-  // --- WiFi sync update ---
-  WiFiSync::update();
+  // --- Central comms orchestration (WiFi + RadioModeSwitch + MQTT) ---
+  NetworkOrchestrator::setMqttEnabled(mqttEnabled);
+  NetworkOrchestrator::update();
 
   // --- Persist current system time to DS3231 when requested ---
-  handleRtcWriteIfPending();
-
-  // --- RadioModeSwitch update (delayed WiFi/BT init after startup) ---
-  RadioModeSwitch::update();
-
-  // --- MQTT Control (start/stop based on WiFi mode + user setting) ---
-  RadioModeSwitchState current_radio_mode = RadioModeSwitch::getCurrentState();
-
-  // Hard switch OFF: stop task and never publish.
-  if (!mqttEnabled) {
-    if (mqtt_initialized) {
-      Serial.println("[main] MQTT disabled in settings -> stopping MQTT task");
-      MQTTSync::stopCore1Task();
-      mqtt_initialized = false;
-    }
-  }
-  else if (current_radio_mode == RADIO_STATE_WIFI && !mqtt_initialized) {
-    // Start MQTT only when WiFi is ACTUALLY connected (not just in WiFi mode)
-    // Use periodic timer (every 2s) to avoid lock contention with WiFi.status() calls
-    static unsigned long lastWiFiCheck = 0;
-    if (millis() - lastWiFiCheck >= 2000) {
-      lastWiFiCheck = millis();
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[main] WiFi connected! Activating MQTT");
-        MQTTSync::begin(WIFI_SSID, WIFI_PASS);
-        MQTTSync::startCore1Task();
-        mqtt_initialized = true;
-        last_radio_mode = RADIO_STATE_WIFI;
-      }
-    }
-  } 
-  else if (current_radio_mode == RADIO_STATE_BT && mqtt_initialized) {
-    // Stop MQTT when switching to BT mode
-    Serial.println("[main] Deactivating MQTT for BT mode");
-    MQTTSync::stopCore1Task();
-    mqtt_initialized = false;
-    last_radio_mode = RADIO_STATE_BT;
-  }
+  RtcSyncService::processPendingWrite();
 
   // --- MQTT Update (publish sensor data only if enabled+initialized) ---
-  if (mqttEnabled && mqtt_initialized) {
+  if (mqttEnabled && NetworkOrchestrator::isMqttInitialized()) {
     static unsigned long lastMQTTPublish = 0;
     if (millis() - lastMQTTPublish >= 5000) {
       lastMQTTPublish = millis();
-      float mqttTemperature = 0.0f;
-      int mqttHumidity = 0;
-      int mqttPressure = 0;
-      uint8_t mqttAqi = 0;
-      uint16_t mqttTvoc = 0;
-      uint16_t mqttEco2 = 0;
-      buildMqttTelemetrySample(mqttTemperature, mqttHumidity, mqttPressure, mqttAqi, mqttTvoc, mqttEco2);
-      MQTTSync::publishSensorData(mqttTemperature, mqttHumidity, mqttPressure, mqttAqi, mqttTvoc, mqttEco2);
+      TelemetryComposer::Sample sample;
+      TelemetryComposer::buildMqttTelemetrySample(sample);
+      MQTTSync::publishSensorData(sample.temperatureC,
+                                  sample.humidityPct,
+                                  sample.pressureHpa,
+                                  sample.aqi,
+                                  sample.tvoc,
+                                  sample.eco2);
     }
   }
 
   // --- Synchronizuj radioMode ze stanem RadioModeSwitch ---
   // Ważne: to zapewnia, że menu zawsze pokazuje prawidłowy stan
-  if (RadioModeSwitch::getCurrentState() == RADIO_STATE_BT) {
+  if (NetworkOrchestrator::getCurrentRadioState() == RADIO_STATE_BT) {
     radioMode = BT_ONLY;
   } else {
     radioMode = WIFI_ONLY;
@@ -1644,19 +1129,7 @@ void loop() {
   }
 
   // --- Alarm Ringing ---
-  if (alarmRinging) {
-    playAlarmMelody();
-    if (millis() - alarmStartTime >= ALARM_DURATION_MS) {
-      AlarmMelodies::stop(BUZZER_PIN);
-      alarmRinging = false;
-      alarmEnabled = false;
-    }
-  } else if (s_alarmMelodyDemoActive) {
-    playAlarmMelody();
-    if ((long)(millis() - s_alarmMelodyDemoEndMs) >= 0) {
-      stopAlarmMelodyDemo();
-    }
-  }
+  ClockAlarmService::serviceAlarmPlayback(BUZZER_PIN, ALARM_DURATION_MS);
 
   // --- Stopwatch Drawing ---
   if (appState == STATE_STOPER &&
@@ -1673,47 +1146,4 @@ void loop() {
     Serial.println(audioBT_isConnected() ? "TAK" : "NIE");
   }
 
-  // --- DHT Sensor Update ---
-  updateDHT();
-
-  // --- Ekran temperatury/wilgotności ---
-  if (appState == STATE_TEMPERATURE) {
-    drawTemperature();
-    showTemperature7Seg();
-  }
-
-  if (appState == STATE_HUMIDITY) {
-    drawHumidity();
-    showHumidity7Seg();
-  }
-}
-
-// ============================================================================
-// FUNKCJE DHT (TEMPERATURA/WILGOTNOŚĆ)
-// ============================================================================
-
-void updateDHT() {
-  // NAPRAWA: DHT czytanie blokuje główny loop - wyłącz w trybie BT aby uniknąć zniekształceń audio
-  if (ModeManager::isBtOn()) {
-    return;  // DHT wyłączony w trybie BT - priorytet dla czystego audio
-  }
-
-  if (millis() - dhtLastRead < DHT_READ_INTERVAL_MS) return;
-  dhtLastRead = millis();
-
-  const float t = dht.readTemperature();  // ~2-3ms blokada
-  const float h = dht.readHumidity();     // ~2-3ms blokada
-
-  if (!isnan(t) && !isnan(h)) {
-    dhtTemperatureRaw = t;
-    dhtTemperature = dhtTemperatureRaw + TempConfig::TEMPERATURE_OFFSET_C;
-    dhtHumidity    = h;
-    statsManager.updateTemperature(dhtTemperature);
-    statsManager.updateHumidity(h);
-
-    if (!dhtReady) {
-      dhtScreenDirty = true;
-    }
-    dhtReady = true;
-  }
 }

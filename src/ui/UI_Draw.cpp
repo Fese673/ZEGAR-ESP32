@@ -134,10 +134,10 @@ extern int  displayedBPM;
 extern int  displayedSPO2;
 extern bool stm32Connected;
 
-// --- CPU Load ---
-extern uint8_t cpuLoadPercent;
-extern uint8_t cpuCore0Percent;
-extern uint8_t cpuCore1Percent;
+// --- Heap Usage ---
+extern uint8_t heapUsagePercent;
+extern uint8_t heapUsageCore0Percent;
+extern uint8_t heapUsageCore1Percent;
 
 // --- System Resources ---
 extern uint32_t ramFreeBytes;
@@ -1872,21 +1872,21 @@ void drawStats() {
   // === 5d. WIDOK OBCIĄŻENIA CPU ===
   case STATE_STATS_RESOURCES_CPU: {
     LCD_SET(0, 0);
-    LCD_PRINT(F("CPU LOAD"));
+    LCD_PRINT(F("HEAP LOAD"));
 
     LCD_SET(0, 1);
     LCD_PRINT(F("Calkowite: "));
-    LCD_PRINT(cpuLoadPercent);
+    LCD_PRINT(heapUsagePercent);
     LCD_PRINT(F("%"));
 
     LCD_SET(0, 2);
     LCD_PRINT(F("CORE0: "));
-    LCD_PRINT(cpuCore0Percent);
+    LCD_PRINT(heapUsageCore0Percent);
     LCD_PRINT(F("%"));
 
     LCD_SET(0, 3);
     LCD_PRINT(F("CORE1: "));
-    LCD_PRINT(cpuCore1Percent);
+    LCD_PRINT(heapUsageCore1Percent);
     LCD_PRINT(F("%"));
     break;
   }

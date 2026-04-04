@@ -8,7 +8,7 @@
 #endif
 
 #ifndef PROJECT_WIFI_PASS
-#define PROJECT_WIFI_PASS "x1Z6P(~8pry<St."
+#define PROJECT_WIFI_PASS "x1Z6P(~8pry<St."  // ależ z ciebie haker, nie? :D
 #endif
 
 #ifndef PROJECT_NTP_SERVER

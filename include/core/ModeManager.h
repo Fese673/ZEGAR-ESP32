@@ -1,29 +1,32 @@
+/*
+ * ModeManager.h
+ * Menedżer trybów Wi-Fi / Bluetooth dla aplikacji.
+ */
 #pragma once
-
-#include <Arduino.h>
 
 #include "AppState.h"
 
-// Prosty menedżer trybów zapewniający wzajemne wykluczanie Wi-Fi i A2DP.
 namespace ModeManager {
 
-void begin(AppState *statePtr = nullptr);
+// --- Inicjalizacja managera trybów ---
+void begin(AppState* statePtr = nullptr);
 
-// Manualne sterowanie Wi-Fi (synchronizacja / uploady).
-// Wywołujący odpowiada za uprzednie wygaszenie przeciwnego stosu.
+// --- Wi-Fi ---
 void wifiOn();
 void wifiOff();
 
-// Manualne sterowanie audio Bluetooth (A2DP Sink).
+// --- Bluetooth A2DP ---
 void btOn();
 void btOff();
 
+// --- Przełączenie trybu radia ---
 void transitionRadio(RadioMode mode);
 
-// Diagnostic logging helper (bez alokacji dynamicznych)
+// --- Diagnostyka bez alokacji ---
 void logDiag(const char* msg);
 
+// --- Stan radiowy ---
 bool isWifiOn();
 bool isBtOn();
 
-} // namespace ModeManager
+}  // namespace ModeManager

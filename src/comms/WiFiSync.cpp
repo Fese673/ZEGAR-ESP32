@@ -8,60 +8,59 @@
 
 namespace WiFiSync {
 
-// wskaźniki na zmienne w main (ustawiane przez setTimeRefs)
+namespace {
+
+constexpr char kDefaultNtpServer[] = "pool.ntp.org";
+constexpr char kPolandTimezone[] = "CET-1CEST,M3.5.0,M10.5.0/3";
+constexpr unsigned long kWifiConnectTimeoutMs = 15000UL;
+constexpr unsigned long kNtpTimeoutMs = 10000UL;
+constexpr unsigned long kDefaultPeriodicSyncIntervalMs = 3600000UL;
+constexpr uint16_t kMinPeriodicSyncMinutes = 10;
+constexpr uint16_t kMaxPeriodicSyncMinutes = 360;
+constexpr uint8_t kSsidCopySize = 33;
+constexpr uint8_t kPassCopySize = 65;
+constexpr uint8_t kNtpServerCopySize = 64;
+
+}  // namespace
+
+// pointers to time variables in main (set by setTimeRefs)
 static int* pHours = nullptr;
 static int* pMinutes = nullptr;
 static int* pSeconds = nullptr;
 static unsigned long* pLastTick = nullptr;
 
-// konfiguracja i stan wewnętrzny
-static const char* ssid = nullptr;
-static const char* pass = nullptr;
-static const char* ntpServer = "pool.ntp.org";
+// Safe copies for the background task and SNTP configuration.
+static char ssidCopy[kSsidCopySize] = {0};
+static char passCopy[kPassCopySize] = {0};
+static char ntpServerCopy[kNtpServerCopySize] = {0};
 
-// Safe copies of credentials for background task (avoids pointer lifetime issues)
-static char ssidCopy[33] = {0};
-static char passCopy[65] = {0};
-
-// Flag: set by background task when WiFi connected
+// Background-task and sync tracking.
 static volatile bool wifiConnectedByTask = false;
 static volatile bool wifiFailedByTask = false;
 static volatile uint16_t wifiDisconnectReason = 0;
-
-// NTP tracking
 static unsigned long lastNtpSyncMillis = 0;
 static bool ntpSynced = false;
 
-// Poland timezone with automatic DST switching:
-// CET (UTC+1) in winter and CEST (UTC+2) in summer.
-// NOTE: Use a POSIX TZ string format that is widely supported on embedded newlib.
-static const char* TZ_POLAND = "CET-1CEST,M3.5.0,M10.5.0/3";
-
 static SyncState state = SyncState::Idle;
 static SyncError lastError = SyncError::None;
-
 static bool timeSyncRequested = false;
 static bool wifiConnectRequested = false;
-
 static unsigned long syncStartMillis = 0;
 static unsigned long backoffUntilMillis = 0;
 static unsigned long wifiConnectStartMillis = 0;
 static uint8_t wifiFailureCount = 0;
 static uint8_t ntpFailureCount = 0;
-
 static bool sntpConfigured = false;
 static wifi_event_id_t wifiEventHandler = 0;
 static bool wifiEventHandlerInstalled = false;
 
-static constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
-
 static void ensureTzSet() {
   const char* current = getenv("TZ");
-  if (current != nullptr && strcmp(current, TZ_POLAND) == 0) {
+  if (current != nullptr && strcmp(current, kPolandTimezone) == 0) {
     return;
   }
 
-  if (setenv("TZ", TZ_POLAND, 1) == 0) {
+  if (setenv("TZ", kPolandTimezone, 1) == 0) {
     tzset();
   } else {
     Serial.println("[WiFiSync] WARNING: failed to set TZ, localtime may be incorrect");
@@ -99,6 +98,52 @@ static void ensureWiFiEventHandler() {
   wifiEventHandlerInstalled = true;
 }
 
+static void resetConnectionTracking() {
+  wifiConnectedByTask = false;
+  wifiFailedByTask = false;
+  wifiDisconnectReason = 0;
+  wifiConnectStartMillis = 0;
+}
+
+static void resetRequestFlags() {
+  timeSyncRequested = false;
+  wifiConnectRequested = false;
+}
+
+static void resetBackoff() {
+  backoffUntilMillis = 0;
+}
+
+static void resetSyncState() {
+  state = SyncState::Idle;
+  lastError = SyncError::None;
+  resetRequestFlags();
+  resetBackoff();
+  resetConnectionTracking();
+  syncStartMillis = 0;
+}
+
+static void copyCredential(char* destination, uint8_t destinationSize, const char* source) {
+  if (destinationSize == 0) {
+    return;
+  }
+
+  strncpy(destination, source != nullptr ? source : "", destinationSize - 1);
+  destination[destinationSize - 1] = '\0';
+}
+
+static void copyNtpServer(const char* source) {
+  copyCredential(ntpServerCopy, kNtpServerCopySize, (source != nullptr && source[0] != '\0') ? source : kDefaultNtpServer);
+}
+
+static unsigned long computeBackoffMs(uint8_t failures);
+
+static void applyBackoff(unsigned long now, uint8_t failures) {
+  const unsigned long delayMs = computeBackoffMs(failures);
+  backoffUntilMillis = now + delayMs;
+  state = (delayMs > 0) ? SyncState::Backoff : SyncState::Idle;
+}
+
 // Task handle for WiFi.begin() offload
 static TaskHandle_t wifiBeginTaskHandle = NULL;
 
@@ -124,8 +169,35 @@ static void wifiInitTask(void* param) {
   vTaskDelete(NULL);
 }
 
-static constexpr unsigned long NTP_TIMEOUT_MS = 10000;
-static unsigned long periodicSyncIntervalMs = 3600000UL; // default 60min
+static bool startWifiConnectionTask(unsigned long now) {
+  if (wifiBeginTaskHandle != NULL) {
+    vTaskDelete(wifiBeginTaskHandle);
+    wifiBeginTaskHandle = NULL;
+  }
+
+  resetConnectionTracking();
+  state = SyncState::WifiConnecting;
+  wifiConnectStartMillis = now;
+
+  if (xTaskCreatePinnedToCore(wifiInitTask, "wifiInit", 4096, NULL, 5, &wifiBeginTaskHandle, 1) != pdPASS) {
+    Serial.println("[WiFiSync] ERROR: failed to spawn WiFi init task");
+    wifiBeginTaskHandle = NULL;
+    lastError = SyncError::Wifi;
+    wifiFailureCount++;
+    wifiConnectStartMillis = 0;
+    applyBackoff(now, wifiFailureCount);
+    return false;
+  }
+
+  if (onStartCb) {
+    onStartCb();
+  }
+
+  Serial.println("[WiFiSync] update: WiFi init task spawned to Core 1");
+  return true;
+}
+
+static unsigned long periodicSyncIntervalMs = kDefaultPeriodicSyncIntervalMs;
 
 static unsigned long lastPeriodicSync = 0;
 
@@ -153,32 +225,22 @@ void begin(const char* _ssid, const char* _pass,
            const char* _ntp_server) {
   ensureWiFiEventHandler();
 
-  ssid = _ssid;
-  pass = _pass;
-  // Safe copies for background task
-  strncpy(ssidCopy, _ssid ? _ssid : "", sizeof(ssidCopy) - 1);
-  ssidCopy[sizeof(ssidCopy) - 1] = '\0';
-  strncpy(passCopy, _pass ? _pass : "", sizeof(passCopy) - 1);
-  passCopy[sizeof(passCopy) - 1] = '\0';
-  ntpServer = _ntp_server;
+  copyCredential(ssidCopy, kSsidCopySize, _ssid);
+  copyCredential(passCopy, kPassCopySize, _pass);
+  copyNtpServer(_ntp_server);
 
   // Keep system time in UTC and convert to local time via TZ.
   // Defensive: some components may overwrite TZ at runtime.
   ensureTzSet();
 
-  state = SyncState::Idle;
-  lastError = SyncError::None;
-  timeSyncRequested = false;
-  wifiConnectRequested = false;
-  syncStartMillis = 0;
-  backoffUntilMillis = 0;
-  wifiConnectStartMillis = 0;
+  resetSyncState();
   wifiFailureCount = 0;
   ntpFailureCount = 0;
   sntpConfigured = false;
 
-  wifiConnectedByTask = false;
-  wifiFailedByTask = false;
+  resetConnectionTracking();
+  lastNtpSyncMillis = 0;
+  ntpSynced = false;
   lastPeriodicSync = millis();
 }
 
@@ -205,15 +267,9 @@ void startSync() {
 }
 
 void stop() {
-  state = SyncState::Idle;
-  wifiConnectedByTask = false;
-  wifiFailedByTask = false;
-  wifiDisconnectReason = 0;
-  wifiConnectRequested = false;
-  timeSyncRequested = false;
-  backoffUntilMillis = 0;
-  lastError = SyncError::None;
-  wifiConnectStartMillis = 0;
+  resetSyncState();
+  wifiFailureCount = 0;
+  ntpFailureCount = 0;
 
   // Kill background init task if still running
   if (wifiBeginTaskHandle != NULL) {
@@ -252,14 +308,12 @@ static void ensureSntpConfigured() {
   if (sntpConfigured) return;
   ensureTzSet();
   Serial.println("[WiFiSync] Configuring SNTP via configTzTime()");
-  configTzTime(TZ_POLAND, ntpServer);
+  configTzTime(kPolandTimezone, ntpServerCopy[0] != '\0' ? ntpServerCopy : kDefaultNtpServer);
   sntpConfigured = true;
 }
 
 static void scheduleBackoff(unsigned long now, uint8_t failures) {
-  const unsigned long delayMs = computeBackoffMs(failures);
-  backoffUntilMillis = now + delayMs;
-  state = (delayMs > 0) ? SyncState::Backoff : SyncState::Idle;
+  applyBackoff(now, failures);
 }
 
 void update() {
@@ -268,7 +322,8 @@ void update() {
   // Periodic sync: if device is in WiFi mode, connected and idle, run sync every interval
   if (ModeManager::isWifiOn() && WiFi.status() == WL_CONNECTED && state == SyncState::Idle) {
     if (now - lastPeriodicSync >= periodicSyncIntervalMs) {
-      Serial.printf("[WiFiSync] Periodic time sync requested (interval=%lumin)", periodicSyncIntervalMs/60000UL);
+      Serial.printf("[WiFiSync] Periodic time sync requested (interval=%lu min)\n",
+                    periodicSyncIntervalMs / 60000UL);
       lastPeriodicSync = now;
       requestTimeSync();
     }
@@ -302,26 +357,13 @@ void update() {
       if (!ssidCopy[0]) {
         lastError = SyncError::MissingCredentials;
         // Keep state idle; nothing to retry.
-        timeSyncRequested = false;
-        wifiConnectRequested = false;
+        resetRequestFlags();
         return;
       }
 
-      // Kill leftover task if any
-      if (wifiBeginTaskHandle != NULL) {
-        vTaskDelete(wifiBeginTaskHandle);
-        wifiBeginTaskHandle = NULL;
+      if (!startWifiConnectionTask(now)) {
+        return;
       }
-
-      wifiConnectedByTask = false;
-      wifiFailedByTask = false;
-        wifiDisconnectReason = 0;
-        wifiConnectStartMillis = now;
-
-      state = SyncState::WifiConnecting;
-      if (onStartCb) onStartCb();
-      xTaskCreatePinnedToCore(wifiInitTask, "wifiInit", 4096, NULL, 5, &wifiBeginTaskHandle, 1);
-      Serial.println("[WiFiSync] update: WiFi init task spawned to Core 1");
       return;
     }
 
@@ -339,10 +381,7 @@ void update() {
 
   if (state == SyncState::WifiConnecting) {
     if (wifiConnectedByTask || WiFi.status() == WL_CONNECTED) {
-      wifiConnectedByTask = false;
-      wifiFailedByTask = false;
-      wifiDisconnectReason = 0;
-      wifiConnectStartMillis = 0;
+      resetConnectionTracking();
       wifiConnectRequested = false;
       wifiFailureCount = 0;
       lastError = SyncError::None;
@@ -355,28 +394,28 @@ void update() {
         ensureSntpConfigured();
       } else {
         state = SyncState::Idle;
+        lastPeriodicSync = now;
         if (onDoneCb) onDoneCb();
       }
       return;
     }
 
     if (wifiFailedByTask) {
-      wifiFailedByTask = false;
+      const uint16_t reason = wifiDisconnectReason;
+      resetConnectionTracking();
       lastError = SyncError::Wifi;
       wifiFailureCount++;
       Serial.printf("[WiFiSync] update: WiFi connect failed (reason=%u, failures=%u)\n",
-                    wifiDisconnectReason, wifiFailureCount);
-      wifiDisconnectReason = 0;
-      wifiConnectStartMillis = 0;
+                    reason, wifiFailureCount);
       scheduleBackoff(now, wifiFailureCount);
       return;
     }
 
-    if (wifiConnectStartMillis != 0 && now - wifiConnectStartMillis >= WIFI_CONNECT_TIMEOUT_MS) {
+    if (wifiConnectStartMillis != 0 && now - wifiConnectStartMillis >= kWifiConnectTimeoutMs) {
       lastError = SyncError::Wifi;
       wifiFailureCount++;
       Serial.printf("[WiFiSync] update: WiFi connect timeout (failures=%u)\n", wifiFailureCount);
-      wifiConnectStartMillis = 0;
+      resetConnectionTracking();
       WiFi.disconnect(true);
       scheduleBackoff(now, wifiFailureCount);
       return;
@@ -395,11 +434,12 @@ void update() {
       if (pSeconds) *pSeconds = timeinfo.tm_sec;
       if (pLastTick) *pLastTick = millis();
 
-      lastNtpSyncMillis = millis();
+      lastNtpSyncMillis = now;
       ntpSynced = true;
       lastError = SyncError::None;
       ntpFailureCount = 0;
       timeSyncRequested = false;
+      lastPeriodicSync = now;
 
       Serial.printf("[WiFiSync] NTP synced: %02d:%02d:%02d (DST=%d)\n",
                     timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, timeinfo.tm_isdst);
@@ -409,7 +449,7 @@ void update() {
       return;
     }
 
-    if (now - syncStartMillis >= NTP_TIMEOUT_MS) {
+    if (now - syncStartMillis >= kNtpTimeoutMs) {
       lastError = SyncError::Ntp;
       ntpFailureCount++;
       Serial.printf("[WiFiSync] NTP sync timeout (failures=%u)\n", ntpFailureCount);
@@ -436,8 +476,8 @@ bool hasNtpSynced() {
 // --- API: configure periodic sync interval (minutes) ---
 namespace WiFiSync {
 void setPeriodicSyncIntervalMinutes(uint16_t minutes) {
-  if (minutes < 10) minutes = 10;
-  if (minutes > 360) minutes = 360;
+  if (minutes < kMinPeriodicSyncMinutes) minutes = kMinPeriodicSyncMinutes;
+  if (minutes > kMaxPeriodicSyncMinutes) minutes = kMaxPeriodicSyncMinutes;
   // granularity 1 minute is fine; caller ensures multiple-of-10 if desired
   periodicSyncIntervalMs = (unsigned long)minutes * 60000UL;
 }

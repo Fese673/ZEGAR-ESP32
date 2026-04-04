@@ -3,15 +3,13 @@
 // ============================================================================
 // Wykorzystuje bibliotekę PMserial (SerialPM).
 // Nieblokujący automat stanów wzorowany na przykładzie producenta:
-//   START_ATM_READ  →  WAIT_FOR_ATM_FRAME  →  WAIT_FOR_FACTORY
-//   →  WAIT_FOR_FACTORY_FRAME  →  PUSH_DATA  →  WAIT_BETWEEN_CYCLES
+//   Idle → WaitingAtmosphericFrame → WaitingFactoryDelay
+//   → WaitingFactoryFrame → CoolingDown
 // Dane trafiają do zmiennych extern zadeklarowanych w main.cpp.
 // ============================================================================
 
 #include "PMS_Czujnik.h"
-
-// Włącz dostęp do bytes_read() i waited_ms()
-#define PMS_DEBUG
+#include "BoardPins.h"
 
 // Biblioteka PMserial — nagłówek jest już w include/
 #include <PMserial.h>
@@ -26,6 +24,7 @@ extern uint16_t pms5003_errorCount_total;
 extern uint16_t pms5003_bytesReceived;
 extern uint32_t pms5003_lastFrameTime;
 extern uint32_t pms5003_latency_ms;
+extern bool pms5003Enabled;
 
 // Dane bieżące — CF=1
 extern uint16_t pms5003_PM1_0_CF1;
@@ -67,16 +66,36 @@ extern uint16_t pms5003_particleCount_10_0_MIN; extern uint16_t pms5003_particle
 // WEWNĘTRZNE ZMIENNE MODUŁU (static - widoczne tylko w tym pliku)
 // ============================================================================
 
-// Instancja SerialPM na Serial1, piny RX=34 TX=13 (ESP32)
-static SerialPM pms(PMSx003, PMS_RX, PMS_TX);
+// Instancja SerialPM na Serial1, piny z centralnej konfiguracji BoardPins.
+static SerialPM pms(PMSx003, BoardPins::kPms5003Rx, BoardPins::kPms5003Tx);
 
 namespace {
 
-constexpr unsigned long kFactoryDelayMs = 2000UL;
+constexpr unsigned long kFactoryRequestDelayMs = 2000UL;
 constexpr unsigned long kCycleDelayMs = 8000UL;
 constexpr unsigned long kFrameTimeoutMs = 650UL;
 constexpr uint8_t kFrameLength = 32;
 constexpr uint8_t kPassiveReadCommand[] = {0x42, 0x4D, 0xE2, 0x00, 0x00, 0x01, 0x71};
+
+constexpr uint8_t kFrameHeader0 = 0;
+constexpr uint8_t kFrameHeader1 = 1;
+constexpr uint8_t kFrameLengthOffset = 2;
+constexpr uint8_t kFrameChecksumOffset = 30;
+
+constexpr uint8_t kFrameFactoryPm01Offset = 4;
+constexpr uint8_t kFrameFactoryPm25Offset = 6;
+constexpr uint8_t kFrameFactoryPm10Offset = 8;
+
+constexpr uint8_t kFrameAtmosphericPm01Offset = 10;
+constexpr uint8_t kFrameAtmosphericPm25Offset = 12;
+constexpr uint8_t kFrameAtmosphericPm10Offset = 14;
+
+constexpr uint8_t kFrameParticle0p3Offset = 16;
+constexpr uint8_t kFrameParticle0p5Offset = 18;
+constexpr uint8_t kFrameParticle1p0Offset = 20;
+constexpr uint8_t kFrameParticle2p5Offset = 22;
+constexpr uint8_t kFrameParticle5p0Offset = 24;
+constexpr uint8_t kFrameParticle10p0Offset = 26;
 
 enum class FramePollResult : uint8_t {
   InProgress,
@@ -84,47 +103,45 @@ enum class FramePollResult : uint8_t {
   Failure,
 };
 
-enum LoopState {
-  START_ATM_READ,
-  WAIT_FOR_ATM_FRAME,
-  WAIT_FOR_FACTORY,
-  WAIT_FOR_FACTORY_FRAME,
-  PUSH_DATA,
-  WAIT_BETWEEN_CYCLES,
+enum class Phase : uint8_t {
+  Idle,
+  WaitingAtmosphericFrame,
+  WaitingFactoryDelay,
+  WaitingFactoryFrame,
+  CoolingDown,
 };
 
-static LoopState state = START_ATM_READ;
-static unsigned long ts = 0;
-static unsigned long requestStartedMs = 0;
-static uint8_t frameBuffer[kFrameLength];
-static uint8_t frameIndex = 0;
+struct SampleData {
+  bool valid = false;
+  uint16_t pm01 = 0;
+  uint16_t pm25 = 0;
+  uint16_t pm10 = 0;
+  uint16_t n0p3 = 0;
+  uint16_t n0p5 = 0;
+  uint16_t n1p0 = 0;
+  uint16_t n2p5 = 0;
+  uint16_t n5p0 = 0;
+  uint16_t n10p0 = 0;
+};
 
-// Lokalne bufory na jeden cykl odczytu
-static bool atm_ok = false;
-static uint16_t pm01_atm = 0;
-static uint16_t pm25_atm = 0;
-static uint16_t pm10_atm = 0;
-static uint16_t n0p3 = 0;
-static uint16_t n0p5 = 0;
-static uint16_t n1p0 = 0;
-static uint16_t n2p5 = 0;
-static uint16_t n5p0 = 0;
-static uint16_t n10p0 = 0;
+struct RuntimeState {
+  Phase phase = Phase::Idle;
+  unsigned long phaseStartedMs = 0;
+  unsigned long requestStartedMs = 0;
+  uint8_t frameBuffer[kFrameLength] = {};
+  uint8_t frameIndex = 0;
+  SampleData atmospheric;
+  SampleData factory;
+  SampleData latest;
+  uint16_t totalErrors = 0;
+  bool lastCycleOk = false;
+  uint32_t lastUpdateTime = 0;
+  uint16_t cycleBytesReceived = 0;
+  uint32_t cycleLatencyMs = 0;
+  bool cycleHasSuccess = false;
+};
 
-static bool fac_ok = false;
-static uint16_t pm01_fac = 0;
-static uint16_t pm25_fac = 0;
-static uint16_t pm10_fac = 0;
-
-// Liczniki telemetrii
-static uint16_t total_readings = 0;
-static uint16_t total_errors = 0;
-
-static bool last_cycle_ok = false;
-static uint32_t lastUpdateTime = 0;  // Timestamp ostatniej aktualizacji (ms)
-static uint16_t cycleBytesReceived = 0;
-static uint32_t cycleLatencyMs = 0;
-static bool cycleHasSuccess = false;
+static RuntimeState s;
 
 static inline void updateVal(uint16_t& cur, uint16_t& mn, uint16_t& mx, uint16_t v) {
   cur = v;
@@ -137,15 +154,15 @@ static uint16_t readWord(const uint8_t* frame, uint8_t offset) {
 }
 
 static bool isValidFrame(const uint8_t* frame) {
-  if (frame[0] != 0x42 || frame[1] != 0x4D) {
+  if (frame[kFrameHeader0] != 0x42 || frame[kFrameHeader1] != 0x4D) {
     return false;
   }
 
-  if (readWord(frame, 2) != 0x001C) {
+  if (readWord(frame, kFrameLengthOffset) != 0x001C) {
     return false;
   }
 
-  uint16_t checksum = readWord(frame, 30);
+  const uint16_t checksum = readWord(frame, kFrameChecksumOffset);
   uint16_t sum = 0;
   for (uint8_t i = 0; i < 30; ++i) {
     sum += frame[i];
@@ -154,15 +171,15 @@ static bool isValidFrame(const uint8_t* frame) {
   return sum == checksum;
 }
 
-static void resetCycleMetrics() {
-  cycleBytesReceived = 0;
-  cycleLatencyMs = 0;
-  cycleHasSuccess = false;
+static void resetRequestParser() {
+  s.requestStartedMs = 0;
+  s.frameIndex = 0;
 }
 
-static void resetRequestParser() {
-  requestStartedMs = 0;
-  frameIndex = 0;
+static void resetCycleMetrics() {
+  s.cycleBytesReceived = 0;
+  s.cycleLatencyMs = 0;
+  s.cycleHasSuccess = false;
 }
 
 static bool beginRequest(unsigned long now) {
@@ -177,21 +194,73 @@ static bool beginRequest(unsigned long now) {
   }
 
   serial->write(kPassiveReadCommand, sizeof(kPassiveReadCommand));
-  requestStartedMs = now;
-  frameIndex = 0;
+  s.requestStartedMs = now;
+  s.frameIndex = 0;
   return true;
 }
 
+static void resetCycleSamples() {
+  s.atmospheric = SampleData{};
+  s.factory = SampleData{};
+  s.latest = SampleData{};
+}
+
+static void prepareForNewCycle() {
+  resetCycleSamples();
+  resetCycleMetrics();
+  resetRequestParser();
+}
+
+static void startAtmosphericRequest(unsigned long now) {
+  prepareForNewCycle();
+
+  if (beginRequest(now)) {
+    s.phase = Phase::WaitingAtmosphericFrame;
+    s.phaseStartedMs = now;
+  } else {
+    ++s.totalErrors;
+    s.phase = Phase::WaitingFactoryDelay;
+    s.phaseStartedMs = now;
+  }
+}
+
+static void startFactoryRequest(unsigned long now) {
+  resetRequestParser();
+
+  if (beginRequest(now)) {
+    s.phase = Phase::WaitingFactoryFrame;
+    s.phaseStartedMs = now;
+  } else {
+    ++s.totalErrors;
+    s.phase = Phase::CoolingDown;
+    s.phaseStartedMs = now;
+  }
+}
+
 static void recordSuccess(bool factoryRead, unsigned long now) {
-  const uint16_t pm01 = readWord(frameBuffer, factoryRead ? 4 : 10);
-  const uint16_t pm25 = readWord(frameBuffer, factoryRead ? 6 : 12);
-  const uint16_t pm10 = readWord(frameBuffer, factoryRead ? 8 : 14);
-  const uint16_t count0p3 = readWord(frameBuffer, 16);
-  const uint16_t count0p5 = readWord(frameBuffer, 18);
-  const uint16_t count1p0 = readWord(frameBuffer, 20);
-  const uint16_t count2p5 = readWord(frameBuffer, 22);
-  const uint16_t count5p0 = readWord(frameBuffer, 24);
-  const uint16_t count10p0 = readWord(frameBuffer, 26);
+  const uint16_t pm01 = readWord(s.frameBuffer, factoryRead ? kFrameFactoryPm01Offset : kFrameAtmosphericPm01Offset);
+  const uint16_t pm25 = readWord(s.frameBuffer, factoryRead ? kFrameFactoryPm25Offset : kFrameAtmosphericPm25Offset);
+  const uint16_t pm10 = readWord(s.frameBuffer, factoryRead ? kFrameFactoryPm10Offset : kFrameAtmosphericPm10Offset);
+  const uint16_t count0p3 = readWord(s.frameBuffer, kFrameParticle0p3Offset);
+  const uint16_t count0p5 = readWord(s.frameBuffer, kFrameParticle0p5Offset);
+  const uint16_t count1p0 = readWord(s.frameBuffer, kFrameParticle1p0Offset);
+  const uint16_t count2p5 = readWord(s.frameBuffer, kFrameParticle2p5Offset);
+  const uint16_t count5p0 = readWord(s.frameBuffer, kFrameParticle5p0Offset);
+  const uint16_t count10p0 = readWord(s.frameBuffer, kFrameParticle10p0Offset);
+
+  SampleData& sample = factoryRead ? s.factory : s.atmospheric;
+  sample.valid = true;
+  sample.pm01 = pm01;
+  sample.pm25 = pm25;
+  sample.pm10 = pm10;
+  sample.n0p3 = count0p3;
+  sample.n0p5 = count0p5;
+  sample.n1p0 = count1p0;
+  sample.n2p5 = count2p5;
+  sample.n5p0 = count5p0;
+  sample.n10p0 = count10p0;
+
+  s.latest = sample;
 
   pms.status = pms.OK;
   pms.pm01 = pm01;
@@ -204,28 +273,9 @@ static void recordSuccess(bool factoryRead, unsigned long now) {
   pms.n5p0 = count5p0;
   pms.n10p0 = count10p0;
 
-  if (factoryRead) {
-    fac_ok = true;
-    pm01_fac = pm01;
-    pm25_fac = pm25;
-    pm10_fac = pm10;
-  } else {
-    atm_ok = true;
-    pm01_atm = pm01;
-    pm25_atm = pm25;
-    pm10_atm = pm10;
-  }
-
-  n0p3 = count0p3;
-  n0p5 = count0p5;
-  n1p0 = count1p0;
-  n2p5 = count2p5;
-  n5p0 = count5p0;
-  n10p0 = count10p0;
-
-  cycleHasSuccess = true;
-  cycleBytesReceived = kFrameLength;
-  cycleLatencyMs = now - requestStartedMs;
+  s.cycleHasSuccess = true;
+  s.cycleBytesReceived = kFrameLength;
+  s.cycleLatencyMs = now - s.requestStartedMs;
   pms5003_lastFrameTime = now;
 }
 
@@ -233,50 +283,51 @@ static FramePollResult pumpFrame(bool factoryRead, unsigned long now) {
   Stream* serial = pms.getSerialPort();
   if (serial == nullptr) {
     pms.status = pms.ERROR_TIMEOUT;
+    resetRequestParser();
     return FramePollResult::Failure;
   }
 
   while (serial->available() > 0) {
     const uint8_t byte = (uint8_t)serial->read();
 
-    if (frameIndex == 0) {
+    if (s.frameIndex == 0) {
       if (byte == 0x42) {
-        frameBuffer[0] = byte;
-        frameIndex = 1;
+        s.frameBuffer[0] = byte;
+        s.frameIndex = 1;
       }
       continue;
     }
 
-    if (frameIndex == 1) {
+    if (s.frameIndex == 1) {
       if (byte == 0x4D) {
-        frameBuffer[1] = byte;
-        frameIndex = 2;
+        s.frameBuffer[1] = byte;
+        s.frameIndex = 2;
       } else if (byte == 0x42) {
-        frameBuffer[0] = byte;
-        frameIndex = 1;
+        s.frameBuffer[0] = byte;
+        s.frameIndex = 1;
       } else {
-        frameIndex = 0;
+        s.frameIndex = 0;
       }
       continue;
     }
 
-    frameBuffer[frameIndex++] = byte;
-    if (frameIndex == kFrameLength) {
-      if (!isValidFrame(frameBuffer)) {
+    s.frameBuffer[s.frameIndex++] = byte;
+    if (s.frameIndex == kFrameLength) {
+      if (!isValidFrame(s.frameBuffer)) {
         pms.status = pms.ERROR_MSG_CKSUM;
-        frameIndex = 0;
+        resetRequestParser();
         return FramePollResult::Failure;
       }
 
       recordSuccess(factoryRead, now);
-      frameIndex = 0;
+      resetRequestParser();
       return FramePollResult::Success;
     }
   }
 
-  if ((now - requestStartedMs) >= kFrameTimeoutMs) {
+  if ((now - s.requestStartedMs) >= kFrameTimeoutMs) {
     pms.status = pms.ERROR_TIMEOUT;
-    frameIndex = 0;
+    resetRequestParser();
     return FramePollResult::Failure;
   }
 
@@ -284,40 +335,40 @@ static FramePollResult pumpFrame(bool factoryRead, unsigned long now) {
 }
 
 static void finalizeCycle(unsigned long now) {
-  last_cycle_ok = atm_ok || fac_ok;
-  lastUpdateTime = now;
+  s.lastCycleOk = s.atmospheric.valid || s.factory.valid;
+  s.lastUpdateTime = now;
 
-  pms5003_errorCount_current = (atm_ok ? 0 : 1) + (fac_ok ? 0 : 1);
-  pms5003_errorCount_total = total_errors;
+  pms5003_errorCount_current = (s.atmospheric.valid ? 0 : 1) + (s.factory.valid ? 0 : 1);
+  pms5003_errorCount_total = s.totalErrors;
 
-  if (cycleHasSuccess) {
-    pms5003_bytesReceived = cycleBytesReceived;
-    pms5003_latency_ms = cycleLatencyMs;
+  if (s.cycleHasSuccess) {
+    pms5003_bytesReceived = s.cycleBytesReceived;
+    pms5003_latency_ms = s.cycleLatencyMs;
     pms5003_lastFrameTime = now;
   } else {
     pms5003_bytesReceived = 0;
     pms5003_latency_ms = 0;
   }
 
-  if (fac_ok) {
-    updateVal(pms5003_PM1_0_CF1, pms5003_PM1_0_CF1_MIN, pms5003_PM1_0_CF1_MAX, pm01_fac);
-    updateVal(pms5003_PM2_5_CF1, pms5003_PM2_5_CF1_MIN, pms5003_PM2_5_CF1_MAX, pm25_fac);
-    updateVal(pms5003_PM10_CF1, pms5003_PM10_CF1_MIN, pms5003_PM10_CF1_MAX, pm10_fac);
+  if (s.factory.valid) {
+    updateVal(pms5003_PM1_0_CF1, pms5003_PM1_0_CF1_MIN, pms5003_PM1_0_CF1_MAX, s.factory.pm01);
+    updateVal(pms5003_PM2_5_CF1, pms5003_PM2_5_CF1_MIN, pms5003_PM2_5_CF1_MAX, s.factory.pm25);
+    updateVal(pms5003_PM10_CF1, pms5003_PM10_CF1_MIN, pms5003_PM10_CF1_MAX, s.factory.pm10);
   }
 
-  if (atm_ok) {
-    updateVal(pms5003_PM1_0_ATM, pms5003_PM1_0_ATM_MIN, pms5003_PM1_0_ATM_MAX, pm01_atm);
-    updateVal(pms5003_PM2_5_ATM, pms5003_PM2_5_ATM_MIN, pms5003_PM2_5_ATM_MAX, pm25_atm);
-    updateVal(pms5003_PM10_ATM, pms5003_PM10_ATM_MIN, pms5003_PM10_ATM_MAX, pm10_atm);
+  if (s.atmospheric.valid) {
+    updateVal(pms5003_PM1_0_ATM, pms5003_PM1_0_ATM_MIN, pms5003_PM1_0_ATM_MAX, s.atmospheric.pm01);
+    updateVal(pms5003_PM2_5_ATM, pms5003_PM2_5_ATM_MIN, pms5003_PM2_5_ATM_MAX, s.atmospheric.pm25);
+    updateVal(pms5003_PM10_ATM, pms5003_PM10_ATM_MIN, pms5003_PM10_ATM_MAX, s.atmospheric.pm10);
   }
 
-  if (atm_ok || fac_ok) {
-    updateVal(pms5003_particleCount_0_3, pms5003_particleCount_0_3_MIN, pms5003_particleCount_0_3_MAX, n0p3);
-    updateVal(pms5003_particleCount_0_5, pms5003_particleCount_0_5_MIN, pms5003_particleCount_0_5_MAX, n0p5);
-    updateVal(pms5003_particleCount_1_0, pms5003_particleCount_1_0_MIN, pms5003_particleCount_1_0_MAX, n1p0);
-    updateVal(pms5003_particleCount_2_5, pms5003_particleCount_2_5_MIN, pms5003_particleCount_2_5_MAX, n2p5);
-    updateVal(pms5003_particleCount_5_0, pms5003_particleCount_5_0_MIN, pms5003_particleCount_5_0_MAX, n5p0);
-    updateVal(pms5003_particleCount_10_0, pms5003_particleCount_10_0_MIN, pms5003_particleCount_10_0_MAX, n10p0);
+  if (s.latest.valid) {
+    updateVal(pms5003_particleCount_0_3, pms5003_particleCount_0_3_MIN, pms5003_particleCount_0_3_MAX, s.latest.n0p3);
+    updateVal(pms5003_particleCount_0_5, pms5003_particleCount_0_5_MIN, pms5003_particleCount_0_5_MAX, s.latest.n0p5);
+    updateVal(pms5003_particleCount_1_0, pms5003_particleCount_1_0_MIN, pms5003_particleCount_1_0_MAX, s.latest.n1p0);
+    updateVal(pms5003_particleCount_2_5, pms5003_particleCount_2_5_MIN, pms5003_particleCount_2_5_MAX, s.latest.n2p5);
+    updateVal(pms5003_particleCount_5_0, pms5003_particleCount_5_0_MIN, pms5003_particleCount_5_0_MAX, s.latest.n5p0);
+    updateVal(pms5003_particleCount_10_0, pms5003_particleCount_10_0_MIN, pms5003_particleCount_10_0_MAX, s.latest.n10p0);
   }
 }
 
@@ -328,15 +379,17 @@ static void finalizeCycle(unsigned long now) {
 // ============================================================================
 
 uint32_t PMS5003Sensor::getLastUpdateTime() {
-  return lastUpdateTime;
+  return s.lastUpdateTime;
 }
 
-// Wymuś natychmiastowy cykl odczytu. Ustawiamy stan na START_ATM_READ
-// i wywołujemy update(), aby rozpocząć odczyt bez czekania na kolejny loop().
+// Wymuś natychmiastowy cykl odczytu. Zaczynamy od ATM i dajemy update()
+// szansę od razu odebrać dane, jeśli frame już czeka w buforze.
 void PMS5003Sensor::requestImmediateRead() {
-  state = START_ATM_READ;
-  ts = 0;
-  resetRequestParser();
+  if (!pms5003Enabled) {
+    return;
+  }
+
+  startAtmosphericRequest(millis());
   PMS5003Sensor::update();
 }
 
@@ -345,17 +398,17 @@ void PMS5003Sensor::requestImmediateRead() {
 // ============================================================================
 
 void PMS5003Sensor::begin() {
-  Serial.println(F("[PMS5003] Initializing on Serial1 (RX=34, TX=13)..."));
+  Serial.print(F("[PMS5003] Initializing on Serial1 (RX="));
+  Serial.print(BoardPins::kPms5003Rx);
+  Serial.print(F(", TX="));
+  Serial.print(BoardPins::kPms5003Tx);
+  Serial.println(F(")..."));
   pms.init();
   Serial.println(F("[PMS5003] Initialized!"));
 
-  state = START_ATM_READ;
-  ts = millis();
-  requestStartedMs = 0;
-  total_readings = 0;
-  total_errors = 0;
-  resetCycleMetrics();
-  resetRequestParser();
+  s = RuntimeState{};
+  s.phase = Phase::Idle;
+  s.phaseStartedMs = millis();
 
   resetMinMax();
 }
@@ -387,7 +440,7 @@ void PMS5003Sensor::resetMinMax() {
 // ============================================================================
 
 bool PMS5003Sensor::isOk() {
-  return last_cycle_ok;
+  return pms5003Enabled && s.lastCycleOk;
 }
 
 // ============================================================================
@@ -397,69 +450,57 @@ bool PMS5003Sensor::isOk() {
 void PMS5003Sensor::update() {
   const unsigned long now = millis();
 
-  switch (state) {
-    case START_ATM_READ:
-      resetCycleMetrics();
-      atm_ok = false;
-      fac_ok = false;
-      ++total_readings;
-      if (beginRequest(now)) {
-        state = WAIT_FOR_ATM_FRAME;
-      } else {
-        ++total_errors;
-        state = WAIT_FOR_FACTORY;
-        ts = now;
-      }
+  if (!pms5003Enabled) {
+    if (s.phase != Phase::Idle) {
+      s.phase = Phase::Idle;
+      s.phaseStartedMs = now;
+      resetRequestParser();
+    }
+    return;
+  }
+
+  switch (s.phase) {
+    case Phase::Idle:
+      startAtmosphericRequest(now);
       break;
 
-    case WAIT_FOR_ATM_FRAME: {
+    case Phase::WaitingAtmosphericFrame: {
       const FramePollResult result = pumpFrame(false, now);
       if (result == FramePollResult::Success) {
-        state = WAIT_FOR_FACTORY;
-        ts = now;
+        s.phase = Phase::WaitingFactoryDelay;
+        s.phaseStartedMs = now;
       } else if (result == FramePollResult::Failure) {
-        ++total_errors;
-        atm_ok = false;
-        state = WAIT_FOR_FACTORY;
-        ts = now;
+        ++s.totalErrors;
+        s.phase = Phase::WaitingFactoryDelay;
+        s.phaseStartedMs = now;
       }
       break;
     }
 
-    case WAIT_FOR_FACTORY:
-      if (now - ts >= kFactoryDelayMs) {
-        ++total_readings;
-        if (beginRequest(now)) {
-          state = WAIT_FOR_FACTORY_FRAME;
-        } else {
-          ++total_errors;
-          fac_ok = false;
-          state = PUSH_DATA;
-        }
+    case Phase::WaitingFactoryDelay:
+      if (now - s.phaseStartedMs >= kFactoryRequestDelayMs) {
+        startFactoryRequest(now);
       }
       break;
 
-    case WAIT_FOR_FACTORY_FRAME: {
+    case Phase::WaitingFactoryFrame: {
       const FramePollResult result = pumpFrame(true, now);
       if (result == FramePollResult::Success) {
-        state = PUSH_DATA;
+        finalizeCycle(now);
+        s.phase = Phase::CoolingDown;
+        s.phaseStartedMs = now;
       } else if (result == FramePollResult::Failure) {
-        ++total_errors;
-        fac_ok = false;
-        state = PUSH_DATA;
+        ++s.totalErrors;
+        finalizeCycle(now);
+        s.phase = Phase::CoolingDown;
+        s.phaseStartedMs = now;
       }
       break;
     }
 
-    case PUSH_DATA:
-      finalizeCycle(now);
-      ts = now;
-      state = WAIT_BETWEEN_CYCLES;
-      break;
-
-    case WAIT_BETWEEN_CYCLES:
-      if (now - ts >= kCycleDelayMs) {
-        state = START_ATM_READ;
+    case Phase::CoolingDown:
+      if (now - s.phaseStartedMs >= kCycleDelayMs) {
+        s.phase = Phase::Idle;
       }
       break;
   }

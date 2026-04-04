@@ -1,305 +1,252 @@
 #include "RadioModeSwitch.h"
+
 #include <Arduino.h>
-#include <Esp.h>
-#include <esp_attr.h>  // Oficjalne makro RTC_NOINIT_ATTR
+#include <esp_attr.h>
+#include <esp_system.h>
+
 #include "NetworkOrchestrator.h"
 #include "StatsManager.h"
 
-// ============================================================================
-// RTC MEMORY - FLAGA PRZEJŚCIA (tymczasowa, ginie po power-off)
-// ============================================================================
-// RTC_NOINIT_ATTR: zmienna w RTC slow memory, przetrwa soft reset (esp_restart)
-// ale zginie po power cycle (wyłączeniu zasilania)
+extern int hours;
+extern int minutes;
+extern int seconds;
 
-// Wartości flagi
-#define RTC_FLAG_WIFI 0x1234  // Magiczne słowo do WiFi
-#define RTC_FLAG_BT   0x5678  // Magiczne słowo do BT
-#define RTC_FLAG_NONE 0x0000  // Neutralne (brak przejścia)
+namespace {
 
-// Struktura RTC state - przechowuje tryb + czas
-struct RTC_State {
-  uint32_t mode_flag;  // WiFi/BT flaga
-  uint8_t hours;       // Godzina (0-23)
-  uint8_t minutes;     // Minuta (0-59)
-  uint8_t seconds;     // Sekunda (0-59)
+constexpr uint32_t kRtcFlagWifi = 0x1234UL;
+constexpr uint32_t kRtcFlagBt = 0x5678UL;
+constexpr uint32_t kRtcFlagNone = 0x0000UL;
+constexpr unsigned long kRestartDelayMs = 100UL;
+constexpr unsigned long kStartupDelayMs = 200UL;
+
+struct RtcState {
+  uint32_t mode_flag;
+  uint8_t hours;
+  uint8_t minutes;
+  uint8_t seconds;
 };
 
-// POPRAWNE użycie RTC_NOINIT_ATTR - struktura w RTC RAM (0x50000000+)
-RTC_NOINIT_ATTR static RTC_State rtc_state;
+RTC_NOINIT_ATTR static RtcState rtc_state;
 
-// External time variables from main.cpp
-extern int hours, minutes, seconds;
+RadioModeSwitchState s_current_state = RADIO_STATE_WIFI;
+RadioModeSwitchNextMode s_next_mode = RADIO_NEXT_NONE;
+bool s_initialized = false;
+bool s_start_mode_ready = false;
+unsigned long s_start_time_ms = 0;
+bool s_restart_pending = false;
+unsigned long s_restart_deadline_ms = 0;
+
+const char* stateToText(RadioModeSwitchState state) {
+  switch (state) {
+    case RADIO_STATE_WIFI: return "WiFi";
+    case RADIO_STATE_BT: return "Bluetooth";
+    case RADIO_STATE_TRANSITIONING: return "Transitioning";
+    default: return "Unknown";
+  }
+}
+
+const char* nextModeToText(RadioModeSwitchNextMode mode) {
+  switch (mode) {
+    case RADIO_NEXT_WIFI: return "WiFi";
+    case RADIO_NEXT_BT: return "Bluetooth";
+    case RADIO_NEXT_NONE: return "Neutral";
+    default: return "Unknown";
+  }
+}
+
+RadioModeSwitchNextMode modeFromRtcFlag(uint32_t rtcFlag) {
+  if (rtcFlag == kRtcFlagBt) {
+    return RADIO_NEXT_BT;
+  }
+
+  return RADIO_NEXT_WIFI;
+}
+
+void storeRtcSnapshot(uint32_t modeFlag) {
+  rtc_state.hours = (uint8_t)hours;
+  rtc_state.minutes = (uint8_t)minutes;
+  rtc_state.seconds = (uint8_t)seconds;
+  rtc_state.mode_flag = modeFlag;
+}
+
+void scheduleRestart() {
+  s_current_state = RADIO_STATE_TRANSITIONING;
+  s_restart_pending = true;
+  s_restart_deadline_ms = millis() + kRestartDelayMs;
+}
+
+void loadBootModeFromRtc() {
+  const uint32_t rtcFlag = rtc_state.mode_flag;
+
+  Serial.printf("[RadioModeSwitch] RTC flag: 0x%04lX | time: %02u:%02u:%02u\n",
+                (unsigned long)rtcFlag,
+                (unsigned int)rtc_state.hours,
+                (unsigned int)rtc_state.minutes,
+                (unsigned int)rtc_state.seconds);
+
+  s_next_mode = modeFromRtcFlag(rtcFlag);
+  s_current_state = (s_next_mode == RADIO_NEXT_BT) ? RADIO_STATE_BT : RADIO_STATE_WIFI;
+  rtc_state.mode_flag = kRtcFlagNone;
+}
+
+void requestModeSwitch(uint32_t modeFlag,
+                       RadioModeSwitchNextMode nextMode,
+                       const char* logLabel) {
+  storeRtcSnapshot(modeFlag);
+
+  Serial.printf("[RadioModeSwitch] %s scheduled at %02u:%02u:%02u, restarting...\n",
+                logLabel,
+                (unsigned int)rtc_state.hours,
+                (unsigned int)rtc_state.minutes,
+                (unsigned int)rtc_state.seconds);
+
+  statsManager.saveStats();
+  NetworkOrchestrator::quiesceForModeSwitch(nextMode);
+  Serial.flush();
+
+  scheduleRestart();
+}
+
+}  // namespace
 
 namespace RadioModeSwitch {
 
-  // Stan wewnętrzny
-  static RadioModeSwitchState s_current_state = RADIO_STATE_WIFI;
-  static RadioModeSwitchNextMode s_next_mode = RADIO_NEXT_NONE;
-  static bool s_initialized = false;
-  static bool s_mode_initialized = false;       // Flaga czy tryb (WiFi/BT) był już zainicjalizowany
-  static unsigned long s_init_start_time = 0;   // Czas startu systemu - opóźniamy inicjalizację
-  static bool s_restartPending = false;
-  static unsigned long s_restartAtMs = 0;
-
-  constexpr unsigned long kRestartDelayMs = 100UL;
-
-  static void scheduleRestart() {
-    s_current_state = RADIO_STATE_TRANSITIONING;
-    s_restartPending = true;
-    s_restartAtMs = millis() + kRestartDelayMs;
+void begin() {
+  if (s_initialized) {
+    return;
   }
 
-  // ========================================================================
-  // INICJALIZACJA
-  // ========================================================================
+  loadBootModeFromRtc();
 
-  void begin() {
-    if (s_initialized) return;
+  s_initialized = true;
+  s_start_mode_ready = false;
+  s_start_time_ms = millis();
+  s_restart_pending = false;
+  s_restart_deadline_ms = 0;
 
-    // Przeczytaj flagę z RTC memory
-    // Po power cycle wartość może być losowa - sprawdzamy tylko znane wartości
-    uint32_t rtc_val = rtc_state.mode_flag;
-    
-    Serial.printf("[RadioModeSwitch] Odczytana flaga RTC: 0x%04X | Czas: %02d:%02d:%02d\n", 
-                  rtc_val, rtc_state.hours, rtc_state.minutes, rtc_state.seconds);
+  Serial.println("[RadioModeSwitch] init complete");
+  printDiagnostics();
+}
 
-    if (rtc_val == RTC_FLAG_BT) {
-      // Zaplanowany Bluetooth (po soft reset z menu)
-      s_next_mode = RADIO_NEXT_BT;
-      s_current_state = RADIO_STATE_BT;
-      // Wyczyść flagę po odczytaniu - jednorazowe użycie
-      rtc_state.mode_flag = RTC_FLAG_NONE;
-    } else if (rtc_val == RTC_FLAG_WIFI) {
-      // Zaplanowany WiFi (po soft reset z menu)
-      s_next_mode = RADIO_NEXT_WIFI;
-      s_current_state = RADIO_STATE_WIFI;
-      // Wyczyść flagę po odczytaniu
-      rtc_state.mode_flag = RTC_FLAG_NONE;
-    } else {
-      // Nieznana wartość (power cycle lub pierwsza inicjalizacja) -> WiFi domyślnie
-      s_next_mode = RADIO_NEXT_WIFI;
-      s_current_state = RADIO_STATE_WIFI;
-      rtc_state.mode_flag = RTC_FLAG_NONE;
+RadioModeSwitchState getCurrentState() {
+  return s_current_state;
+}
+
+RadioModeSwitchNextMode getNextMode() {
+  return s_next_mode;
+}
+
+bool isInitializing() {
+  return s_initialized && !s_start_mode_ready;
+}
+
+void requestModeSwitch_WiFi() {
+  requestModeSwitch(kRtcFlagWifi, RADIO_NEXT_WIFI, "WiFi");
+}
+
+void requestModeSwitch_BT() {
+  requestModeSwitch(kRtcFlagBt, RADIO_NEXT_BT, "BT");
+}
+
+void cancelModeSwitch() {
+  rtc_state.mode_flag = kRtcFlagNone;
+  s_next_mode = RADIO_NEXT_NONE;
+  s_restart_pending = false;
+  s_restart_deadline_ms = 0;
+
+  Serial.println("[RadioModeSwitch] switch canceled");
+}
+
+void update() {
+  const unsigned long nowMs = millis();
+
+  if (s_restart_pending) {
+    if ((long)(nowMs - s_restart_deadline_ms) >= 0) {
+      esp_restart();
     }
-
-    s_initialized = true;
-    s_init_start_time = millis();  // Zanotuj czas startu
-    s_restartPending = false;
-    s_restartAtMs = 0;
-
-    Serial.println("[RadioModeSwitch] Inicjalizacja zakończona");
-    printDiagnostics();
+    return;
   }
 
-  RadioModeSwitchState getCurrentState() {
-    return s_current_state;
-  }
-
-  RadioModeSwitchNextMode getNextMode() {
-    return s_next_mode;
-  }
-
-  bool isInitializing() {
-    // Zwróć true jeśli system inicjalizuje WiFi/BT
-    // true od kiedy s_mode_initialized == false aż do końca setup() i delay'u
-    return s_initialized && !s_mode_initialized;
-  }
-
-  // ========================================================================
-  // ŻĄDANIE PRZEŁĄCZENIA
-  // ========================================================================
-
-  void requestModeSwitch_WiFi() {
-    // KROK 1: Zapisz czas
-    rtc_state.hours = hours;
-    rtc_state.minutes = minutes;
-    rtc_state.seconds = seconds;
-    
-    // KROK 2: Ustaw flagę w RTC memory
-    rtc_state.mode_flag = RTC_FLAG_WIFI;
-    
-    // KROK 3: Log
-    Serial.printf("[RadioModeSwitch] Flaga WiFi ustawiona. Czas zapisany: %02d:%02d:%02d, restart...\n",
-                  rtc_state.hours, rtc_state.minutes, rtc_state.seconds);
-    // Ensure any pending stats are flushed to NVS before restarting
-    statsManager.saveStats();
-    NetworkOrchestrator::quiesceForModeSwitch(RADIO_NEXT_WIFI);
-    Serial.flush();
-
-    // KROK 4: Zaplanuj restart bez blokowania
-    scheduleRestart();
-  }
-
-  void requestModeSwitch_BT() {
-    // KROK 1: Zapisz czas
-    rtc_state.hours = hours;
-    rtc_state.minutes = minutes;
-    rtc_state.seconds = seconds;
-    
-    // KROK 2: Ustaw flagę w RTC memory
-    rtc_state.mode_flag = RTC_FLAG_BT;
-    
-    // KROK 3: Log
-    Serial.printf("[RadioModeSwitch] Flaga BT ustawiona. Czas zapisany: %02d:%02d:%02d, restart...\n",
-                  rtc_state.hours, rtc_state.minutes, rtc_state.seconds);
-    // Ensure any pending stats are flushed to NVS before restarting
-    statsManager.saveStats();
-    NetworkOrchestrator::quiesceForModeSwitch(RADIO_NEXT_BT);
-    Serial.flush();
-
-    // KROK 4: Zaplanuj restart bez blokowania
-    scheduleRestart();
-  }
-
-  void cancelModeSwitch() {
-    // Wyczyść flagę - następny reset będzie WiFi
-    rtc_state.mode_flag = RTC_FLAG_NONE;
-    s_next_mode = RADIO_NEXT_WIFI;
-
-    Serial.println("[RadioModeSwitch] Przełączenie anulowane");
-  }
-
-  // ========================================================================
-  // UPDATE - POWINNO BYĆ WYWOŁYWANE Z loop()
-  // ========================================================================
-  
-  void update() {
-    if (s_restartPending) {
-      const unsigned long nowMs = millis();
-      if ((long)(nowMs - s_restartAtMs) >= 0) {
-        esp_restart();
-      }
-      return;
-    }
-
-    // Opóźniona inicjalizacja trybu WiFi/BT
-    // Czekamy aż system będzie w pełni gotowy (LCD, UI, itd.)
-    const unsigned long INIT_DELAY_MS = 200;   // min delay for LCD readiness
-    
-    if (!s_mode_initialized && s_initialized && (millis() - s_init_start_time >= INIT_DELAY_MS)) {
-      s_mode_initialized = true;
-      if (s_next_mode == RADIO_NEXT_BT) {
-        s_current_state = RADIO_STATE_BT;
-        Serial.println("[RadioModeSwitch] update() - Bluetooth armed, orchestration will start stack after reboot");
-      } else {
-        s_current_state = RADIO_STATE_WIFI;
-        Serial.println("[RadioModeSwitch] update() - WiFi armed, orchestration will start stack after reboot");
-      }
-    }
-  }
-
-  // ========================================================================
-  // INICJALIZACJA TRYBU PO STARCIE
-  // ========================================================================
-
-  void initializeStartMode() {
-    // Ta funkcja powinna być wywołana w setup() lub bardzo wcześnie w main.cpp
-
-    if (!s_initialized) {
-      begin();
-    }
-
-    // === LOGIKA: Faktycznie uruchom odpowiedni tryb na podstawie flagi ===
-    // *** WAŻNE: NIE wywoływaj ModeManager::wifiOn()/btOn() TUTAJ ***
-    // To robi LoadStoreError na adresie 0x3f43c06c gdy callback LCD się jeszcze inicjalizuje!
-    // Zamiast tego: ustaw flagę i pozwól callbackom na obsługę
-
+  if (!s_start_mode_ready && s_initialized && (nowMs - s_start_time_ms >= kStartupDelayMs)) {
+    s_start_mode_ready = true;
     if (s_next_mode == RADIO_NEXT_BT) {
-      // Bluetooth był zaplanowany - inicjalizuj BT
-      Serial.println("[RadioModeSwitch] Inicjalizacja: Bluetooth");
-      // ModeManager::btOn() - NIE TUTAJ! Będzie w update() po delay
+      s_current_state = RADIO_STATE_BT;
+      Serial.println("[RadioModeSwitch] startup armed: Bluetooth");
     } else {
-      // WiFi (domyślnie)
-      Serial.println("[RadioModeSwitch] Inicjalizacja: WiFi (domyślnie)");
-      rtc_state.mode_flag = RTC_FLAG_NONE;
-      s_next_mode = RADIO_NEXT_NONE;
+      s_current_state = RADIO_STATE_WIFI;
+      Serial.println("[RadioModeSwitch] startup armed: WiFi");
     }
   }
+}
 
-  bool isDefaultStartupWiFi() {
-    return (s_next_mode == RADIO_NEXT_WIFI || s_next_mode == RADIO_NEXT_NONE);
+void initializeStartMode() {
+  if (!s_initialized) {
+    begin();
   }
 
-  void forceMode(RadioModeSwitchState state, RadioModeSwitchNextMode nextMode) {
-    s_current_state = state;
-    s_next_mode = nextMode;
-    s_mode_initialized = true;
-    s_restartPending = false;
-    s_restartAtMs = 0;
+  if (s_next_mode == RADIO_NEXT_BT) {
+    Serial.println("[RadioModeSwitch] startup mode: Bluetooth");
+  } else {
+    Serial.println("[RadioModeSwitch] startup mode: WiFi (default)");
+    rtc_state.mode_flag = kRtcFlagNone;
+    s_next_mode = RADIO_NEXT_NONE;
+  }
+}
 
-    if (state == RADIO_STATE_WIFI) {
-      rtc_state.mode_flag = RTC_FLAG_NONE;
-    }
+bool isDefaultStartupWiFi() {
+  return s_next_mode != RADIO_NEXT_BT;
+}
 
-    Serial.printf("[RadioModeSwitch] Force mode: %s\n",
-                  (state == RADIO_STATE_BT) ? "Bluetooth" : "WiFi");
+void forceMode(RadioModeSwitchState state, RadioModeSwitchNextMode nextMode) {
+  s_current_state = state;
+  s_next_mode = nextMode;
+  s_start_mode_ready = true;
+  s_restart_pending = false;
+  s_restart_deadline_ms = 0;
+
+  if (state == RADIO_STATE_WIFI) {
+    rtc_state.mode_flag = kRtcFlagNone;
   }
 
-  // ========================================================================
-  // DIAGNOSTYKA
-  // ========================================================================
+  Serial.printf("[RadioModeSwitch] force mode: %s\n", stateToText(state));
+}
 
-  void printDiagnostics() {
-    Serial.println("\n=== RadioModeSwitch Diagnostyka ===");
-    Serial.print("RTC Flag Value: 0x");
-    Serial.println(rtc_state.mode_flag, HEX);
-    Serial.printf("RTC Time: %02d:%02d:%02d\n", rtc_state.hours, rtc_state.minutes, rtc_state.seconds);
+void printDiagnostics() {
+  Serial.println("\n=== RadioModeSwitch Diagnostics ===");
+  Serial.print("RTC flag: 0x");
+  Serial.println((unsigned long)rtc_state.mode_flag, HEX);
+  Serial.printf("RTC time: %02u:%02u:%02u\n",
+                (unsigned int)rtc_state.hours,
+                (unsigned int)rtc_state.minutes,
+                (unsigned int)rtc_state.seconds);
 
-    Serial.print("Bieżący stan: ");
-    switch (s_current_state) {
-      case RADIO_STATE_WIFI:
-        Serial.println("WiFi");
-        break;
-      case RADIO_STATE_BT:
-        Serial.println("Bluetooth");
-        break;
-      case RADIO_STATE_TRANSITIONING:
-        Serial.println("Przejście (reset)");
-        break;
-      default:
-        Serial.println("NIEZNANY");
-    }
+  Serial.print("Current state: ");
+  Serial.println(stateToText(s_current_state));
 
-    Serial.print("Następny tryb: ");
-    switch (s_next_mode) {
-      case RADIO_NEXT_WIFI:
-        Serial.println("WiFi");
-        break;
-      case RADIO_NEXT_BT:
-        Serial.println("Bluetooth");
-        break;
-      case RADIO_NEXT_NONE:
-        Serial.println("Neutralny (WiFi default)");
-        break;
-      default:
-        Serial.println("NIEZNANY");
-    }
+  Serial.print("Next mode: ");
+  Serial.println(nextModeToText(s_next_mode));
 
-    Serial.print("Inicjalizacja: ");
-    Serial.println(s_initialized ? "TAK" : "NIE");
-    Serial.println("=====================================\n");
-  }
+  Serial.print("Initialized: ");
+  Serial.println(s_initialized ? "yes" : "no");
+  Serial.println("===================================\n");
+}
 
-  // ========================================================================
-  // POBIERANIE CZASU Z RTC (do przywrócenia po soft reset)
-  // ========================================================================
+uint8_t getRTCHours() {
+  return rtc_state.hours;
+}
 
-  uint8_t getRTCHours() {
-    return rtc_state.hours;
-  }
+uint8_t getRTCMinutes() {
+  return rtc_state.minutes;
+}
 
-  uint8_t getRTCMinutes() {
-    return rtc_state.minutes;
-  }
+uint8_t getRTCSeconds() {
+  return rtc_state.seconds;
+}
 
-  uint8_t getRTCSeconds() {
-    return rtc_state.seconds;
-  }
+void clearRTCTime() {
+  rtc_state.hours = 0;
+  rtc_state.minutes = 0;
+  rtc_state.seconds = 0;
+}
 
-  void clearRTCTime() {
-    rtc_state.hours = 0;
-    rtc_state.minutes = 0;
-    rtc_state.seconds = 0;
-  }
-
-} // namespace RadioModeSwitch
+}  // namespace RadioModeSwitch

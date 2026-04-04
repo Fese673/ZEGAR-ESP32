@@ -1,150 +1,170 @@
 #include "ModeManager.h"
 
-#include <Esp.h>
 #include <Arduino.h>
+#include <Esp.h>
 
-#include "RadioModeSwitch.h"
-#include "WiFiSync.h"
-#include "RamTelemetry.h"
-#include "bluetooth/AudioBT.h"
 #include "Encoder.h"
+#include "RadioModeSwitch.h"
+#include "RamTelemetry.h"
+#include "WiFiSync.h"
+#include "bluetooth/AudioBT.h"
 
 namespace ModeManager {
+namespace {
 
-// ============================================================================
-// ZMIENNE STANU
-// ============================================================================
-static bool      wifiActive = false;
-static bool      btActive   = false;
-static AppState* pState     = nullptr;
+constexpr char kLogPrefix[] = "[ModeManager]";
 
-// ============================================================================
-// INICJALIZACJA
-// ============================================================================
+bool s_wifiActive = false;
+bool s_btActive = false;
+AppState* s_appState = nullptr;
+
+void keepHomeScreen() {
+  if (s_appState != nullptr && *s_appState != STATE_HOME) {
+    *s_appState = STATE_HOME;
+  }
+}
+
+void setRadioMode(RadioMode mode) {
+  radioMode = mode;
+}
+
+void resetRuntimeState() {
+  s_wifiActive = false;
+  s_btActive = false;
+  setRadioMode(WIFI_ONLY);
+}
+
+void stopBluetoothStack() {
+  if (!s_btActive) {
+    return;
+  }
+
+  audioBT_deinit();
+  s_btActive = false;
+  RAM_CHECKPOINT("BT_OFF");
+}
+
+bool startBluetoothStack() {
+  if (!audioBT_init()) {
+    Serial.println("[ModeManager] BT init failed (BT mode retained, no WiFi fallback)");
+    s_btActive = false;
+    setRadioMode(BT_ONLY);
+    RadioModeSwitch::forceMode(RADIO_STATE_BT, RADIO_NEXT_BT);
+    keepHomeScreen();
+    return false;
+  }
+
+  s_btActive = true;
+  setRadioMode(BT_ONLY);
+  RadioModeSwitch::forceMode(RADIO_STATE_BT, RADIO_NEXT_BT);
+  encoder_reinit_pins();
+  RAM_CHECKPOINT("BT_ON");
+  return true;
+}
+
+void logHeapSnapshot(const char* label) {
+  if (label == nullptr) {
+    return;
+  }
+
+  Serial.printf("%s %s heap=%lu wifi=%s bt=%s mode=%u\n",
+                kLogPrefix,
+                label,
+                (unsigned long)ESP.getFreeHeap(),
+                s_wifiActive ? "ON" : "OFF",
+                s_btActive ? "ON" : "OFF",
+                (unsigned int)radioMode);
+}
+
+}  // namespace
+
 void begin(AppState* statePtr) {
-  pState = statePtr;
+  s_appState = statePtr;
+  resetRuntimeState();
 }
 
-// ============================================================================
-// FUNKCJE POMOCNICZE
-// ============================================================================
-static void ensureHome() {
-  if (pState && *pState != STATE_HOME) {
-    *pState = STATE_HOME;
-  }
-}
-
-// ============================================================================
-// ZARZĄDZANIE WiFi
-// ============================================================================
 void wifiOn() {
-  if (btActive) {
-    Serial.println("[ModeManager] wifiOn() refused: BT is still active");
+  if (s_btActive) {
+    stopBluetoothStack();
+  }
+
+  if (s_wifiActive) {
+    keepHomeScreen();
     return;
   }
 
-  if (wifiActive) {
-    ensureHome();
-    return;
-  }
-
-  // ALL WiFi hardware init is now in WiFiSync background task (Core 1)
-  // No WiFi.mode/begin/disconnect here — prevents blocking main loop
-  wifiActive = true;
-  radioMode = WIFI_ONLY;
-  ensureHome();
+  s_wifiActive = true;
+  setRadioMode(WIFI_ONLY);
+  keepHomeScreen();
   WiFiSync::startSync();
   RAM_CHECKPOINT("WIFI_ON");
 }
 
 void wifiOff() {
-  const bool wasActive = wifiActive;
+  const bool wasActive = s_wifiActive;
+
   WiFiSync::stop();
-  wifiActive = false;
-  ensureHome();
+  s_wifiActive = false;
+  keepHomeScreen();
+
   if (wasActive) {
     RAM_CHECKPOINT("WIFI_OFF");
   }
 }
 
-// ============================================================================
-// ZARZĄDZANIE BLUETOOTH
-// ============================================================================
 void btOn() {
-  if (wifiActive) {
-    Serial.println("[ModeManager] btOn() refused: Wi-Fi is still active");
+  if (s_wifiActive) {
+    wifiOff();
+  }
+
+  if (s_btActive) {
+    keepHomeScreen();
     return;
   }
 
-  if (btActive) {
-    ensureHome();
+  if (!startBluetoothStack()) {
     return;
   }
 
-  if (!btActive) {
-    if (!audioBT_init()) {
-      Serial.println("[ModeManager] BT init failed (BT mode retained, no WiFi fallback)");
-      btActive = false;
-      radioMode = BT_ONLY;
-      RadioModeSwitch::forceMode(RADIO_STATE_BT, RADIO_NEXT_BT);
-      ensureHome();
-      return;
-    }
-    btActive = true;
-    radioMode = BT_ONLY;
-    RadioModeSwitch::forceMode(RADIO_STATE_BT, RADIO_NEXT_BT);
-    // BEZPIECZEŃSTWO: Przywróć piny enkodera (GPIO 25, 26) do INPUT_PULLUP
-    // I2S teraz używa GPIO 33/32 zamiast 25/26 - konflikt ROZWIĄZANY
-    // encoder_reinit_pins() zapewnia stabilną reinicjalizację po I2S init
-    encoder_reinit_pins();
-    RAM_CHECKPOINT("BT_ON");
-  }
-  ensureHome();
+  keepHomeScreen();
 }
 
 void btOff() {
-  const bool wasActive = btActive;
-  if (btActive) {
-    audioBT_deinit();
-    btActive = false;
-  }
-  ensureHome();
-  if (wasActive) {
-    RAM_CHECKPOINT("BT_OFF");
+  const bool wasActive = s_btActive;
+
+  stopBluetoothStack();
+  keepHomeScreen();
+
+  if (!wasActive) {
+    return;
   }
 }
 
-// ============================================================================
-// PRZEŁĄCZANIE TRYBU RADIA
-// ============================================================================
 void transitionRadio(RadioMode mode) {
-  if (mode == WIFI_ONLY) {
-    btOff();
-    wifiOn();
-  } else {
-    wifiOff();
-    btOn();
+  switch (mode) {
+    case WIFI_ONLY:
+      wifiOn();
+      break;
+    case BT_ONLY:
+      btOn();
+      break;
+    default:
+      wifiOn();
+      break;
   }
   RAM_CHECKPOINT("MODE_SWITCH_DONE");
 }
 
-// ============================================================================
-// DIAGNOSTYKA
-// ============================================================================
 void logDiag(const char* msg) {
-  // Minimalny diagnostyczny helper bez alokacji; używany w setup()
-  if (msg) {
-    Serial.print("[ModeManager] ");
-    Serial.print(msg);
-    Serial.print(" heap=");
-    Serial.println(ESP.getFreeHeap());
-  }
+  logHeapSnapshot(msg);
 }
 
-// ============================================================================
-// GETTERY STANU
-// ============================================================================
-bool isWifiOn() { return wifiActive; }
-bool isBtOn()   { return btActive; }
+bool isWifiOn() {
+  return s_wifiActive;
+}
 
-} // namespace ModeManager
+bool isBtOn() {
+  return s_btActive;
+}
+
+}  // namespace ModeManager

@@ -1,7 +1,12 @@
+/*
+  * ClockAlarmService.h
+  * Usługa zarządzania alarmami zegara
+*/
 #pragma once
 
 #include <Arduino.h>
 
+// --- Zależności ---
 namespace ClockAlarmService {
 
 void tickClock(unsigned long clockTickMs, uint8_t buzzerPin);

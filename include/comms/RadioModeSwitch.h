@@ -35,6 +35,7 @@ void cancelModeSwitch();
 // Boot mode handling
 void initializeStartMode();
 bool isDefaultStartupWiFi();
+bool wasBootHandoffDetected();
 void forceMode(RadioModeSwitchState state, RadioModeSwitchNextMode nextMode = RADIO_NEXT_NONE);
 
 // RTC snapshot

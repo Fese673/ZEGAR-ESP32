@@ -992,8 +992,11 @@ static void initUiAndInput() {
   lcdFrame.syncToCurrentFrame();
   LCDIcons::loadPalette(lcd, LCDIcons::Palette::Home);
 
-  if (showEpicIntro) {
+  const bool skipIntroAfterModeHandoff = RadioModeSwitch::wasBootHandoffDetected();
+  if (showEpicIntro && !skipIntroAfterModeHandoff) {
     introBegin();
+  } else if (showEpicIntro && skipIntroAfterModeHandoff) {
+    Serial.println("[main] Boot intro skipped after radio mode handoff restart");
   }
 
   encoder_begin(ENC_CLK, ENC_DT, ENC_SW);

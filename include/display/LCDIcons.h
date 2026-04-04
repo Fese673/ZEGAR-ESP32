@@ -9,6 +9,7 @@ constexpr uint8_t kCgramSlots = 8;
 constexpr uint8_t NtpSlot = 0;
 constexpr uint8_t BellSlot = 1;
 constexpr uint8_t AlarmSlot = NtpSlot;
+constexpr uint8_t WifiSlot = 7;
 
 enum class IconId : uint8_t {
   Ntp = 0,

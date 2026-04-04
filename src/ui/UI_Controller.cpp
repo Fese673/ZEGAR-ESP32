@@ -230,6 +230,185 @@ static void removeAlarmAt(int index) {
   persistAllAlarms();
 }
 
+struct ToggleSettingBinding {
+  AppState state;
+  int* menuIndex;
+  int* menuCount;
+  bool* value;
+  const char* prefKey;
+};
+
+static int clampMenuIndexSafe(int index, int count) {
+  if (count <= 0) {
+    return 0;
+  }
+  return constrain(index, 0, count - 1);
+}
+
+static ToggleSettingBinding* findToggleSettingBinding(AppState state) {
+  static ToggleSettingBinding kBindings[] = {
+      {STATE_SETTINGS_PMS5003, &settingsPmsMenuIndex, &settingsPmsMenuCount, &pms5003Enabled, nullptr},
+      {STATE_SETTINGS_BUZZER, &settingsBuzzerMenuIndex, &settingsBuzzerMenuCount, &buzzerEnabled, nullptr},
+      {STATE_SETTINGS_MQTT, &settingsMqttMenuIndex, &settingsMqttMenuCount, &mqttEnabled, "mqttEnabled"},
+      {STATE_SETTINGS_BOOT_INTRO, &settingsEpicIntroIndex, &settingsEpicIntroMenuCount, &showEpicIntro, "epicIntro"},
+  };
+
+  for (size_t i = 0; i < (sizeof(kBindings) / sizeof(kBindings[0])); ++i) {
+    if (kBindings[i].state == state) {
+      return &kBindings[i];
+    }
+  }
+
+  return nullptr;
+}
+
+static void returnToSettingsMenu() {
+  appState = STATE_SETTINGS;
+  drawStatsSafe();
+}
+
+static bool ensureSelectedAlarmIndexValid() {
+  if (selectedAlarmIndex >= 0 && selectedAlarmIndex < alarmsCount) {
+    return true;
+  }
+
+  if (alarmsCount <= 0) {
+    selectedAlarmIndex = 0;
+    alarmsMenuIndex = 0;
+  } else {
+    selectedAlarmIndex = constrain(selectedAlarmIndex, 0, alarmsCount - 1);
+    alarmsMenuIndex = constrain(alarmsMenuIndex, 0, alarmsCount);
+  }
+
+  appState = STATE_ALARMS_LIST;
+  drawStatsSafe();
+  return false;
+}
+
+static bool handleSettingsRotate(int dir) {
+  if (appState == STATE_SETTINGS_ROTATION) {
+    settingsRotationSec = constrain(settingsRotationSec + dir, 1, 10);
+    HomeRuntime::setOverlayIntervalSeconds((uint8_t)settingsRotationSec);
+    drawStatsSafe();
+    return true;
+  }
+
+  if (appState == STATE_SETTINGS_UI_SCREEN) {
+    settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenIndex + dir, settingsUiScreenCount);
+    if (settingsUiScreenCount > 0) {
+      setHomeUiProfileSafe((uint8_t)settingsUiScreenIndex);
+    }
+    drawStatsSafe();
+    return true;
+  }
+
+  if (appState == STATE_SETTINGS_SYNC) {
+    settingsSyncMinutes = constrain(settingsSyncMinutes + dir * 10, 10, 360);
+    WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
+    drawStatsSafe();
+    return true;
+  }
+
+  if (appState == STATE_SETTINGS_ALARM_MELODY) {
+    settingsAlarmMelodyIndex = clampMenuIndexSafe(settingsAlarmMelodyIndex + dir, AlarmMelodies::kCount);
+    drawStatsSafe();
+    return true;
+  }
+
+  ToggleSettingBinding* toggle = findToggleSettingBinding(appState);
+  if (toggle != nullptr) {
+    const int count = (toggle->menuCount != nullptr) ? *toggle->menuCount : 0;
+    *toggle->menuIndex = clampMenuIndexSafe(*toggle->menuIndex + dir, count);
+    drawStatsSafe();
+    return true;
+  }
+
+  return false;
+}
+
+static bool handleSettingsConfirmClick() {
+  if (appState == STATE_SETTINGS_ALARM_MELODY) {
+    settingsAlarmMelodyIndex = clampMenuIndexSafe(settingsAlarmMelodyIndex, AlarmMelodies::kCount);
+    AlarmMelodyPrefs::saveSelection(s_prefs, settingsAlarmMelodyIndex);
+    drawStatsSafe();
+    if (AlarmMelodies::kCount > 0) {
+      startAlarmMelodyDemo((uint8_t)settingsAlarmMelodyIndex);
+    }
+    return true;
+  }
+
+  if (appState == STATE_SETTINGS_ROTATION) {
+    s_prefs.putUShort("homeOverlaySec", (uint16_t)settingsRotationSec);
+    returnToSettingsMenu();
+    return true;
+  }
+
+  if (appState == STATE_SETTINGS_SYNC) {
+    s_prefs.putUShort("ntpSyncMin", (uint16_t)settingsSyncMinutes);
+    WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
+    returnToSettingsMenu();
+    return true;
+  }
+
+  if (appState == STATE_SETTINGS_UI_SCREEN) {
+    settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenIndex, settingsUiScreenCount);
+    s_prefs.putUShort("uiScreenMode", (uint16_t)settingsUiScreenIndex);
+    returnToSettingsMenu();
+    return true;
+  }
+
+  ToggleSettingBinding* toggle = findToggleSettingBinding(appState);
+  if (toggle != nullptr) {
+    *toggle->value = (*toggle->menuIndex == 0);
+    if (toggle->prefKey != nullptr) {
+      s_prefs.putBool(toggle->prefKey, *toggle->value);
+    }
+    returnToSettingsMenu();
+    return true;
+  }
+
+  return false;
+}
+
+static bool handleSettingsLongCancel() {
+  if (appState == STATE_SETTINGS_ROTATION) {
+    settingsRotationSec = s_prevSettingsRotationSec;
+    HomeRuntime::setOverlayIntervalSeconds((uint8_t)settingsRotationSec);
+    returnToSettingsMenu();
+    return true;
+  }
+
+  if (appState == STATE_SETTINGS_SYNC) {
+    settingsSyncMinutes = s_prevSettingsSyncMin;
+    WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
+    returnToSettingsMenu();
+    return true;
+  }
+
+  if (appState == STATE_SETTINGS_UI_SCREEN) {
+    settingsUiScreenIndex = clampMenuIndexSafe(s_prevSettingsUiScreenIndex, settingsUiScreenCount);
+    if (settingsUiScreenCount > 0) {
+      setHomeUiProfileSafe((uint8_t)settingsUiScreenIndex);
+    }
+    returnToSettingsMenu();
+    return true;
+  }
+
+  if (appState == STATE_SETTINGS_ALARM_MELODY) {
+    settingsAlarmMelodyIndex = clampMenuIndexSafe(s_prevSettingsAlarmMelodyIndex, AlarmMelodies::kCount);
+    stopAlarmMelodyDemo();
+    returnToSettingsMenu();
+    return true;
+  }
+
+  if (findToggleSettingBinding(appState) != nullptr) {
+    returnToSettingsMenu();
+    return true;
+  }
+
+  return false;
+}
+
 void ui_begin(const UI_Callbacks& callbacks) {
   s_callbacks = callbacks;
   drawHomeSafe();
@@ -318,49 +497,14 @@ void ui_handleEvent(EncoderEvent e) {
         break;
 
       case STATE_SETTINGS_ROTATION:
-        // adjust rotation seconds (1..10)
-        settingsRotationSec = constrain(settingsRotationSec + dir, 1, 10);
-        HomeRuntime::setOverlayIntervalSeconds((uint8_t)settingsRotationSec);
-        drawStatsSafe();
-        break;
-
       case STATE_SETTINGS_UI_SCREEN:
-        settingsUiScreenIndex = constrain(settingsUiScreenIndex + dir, 0, settingsUiScreenCount - 1);
-        setHomeUiProfileSafe((uint8_t)settingsUiScreenIndex);
-        drawStatsSafe();
-        break;
-
       case STATE_SETTINGS_BOOT_INTRO:
-        settingsEpicIntroIndex = constrain(settingsEpicIntroIndex + dir, 0, settingsEpicIntroMenuCount - 1);
-        drawStatsSafe();
-        break;
-
       case STATE_SETTINGS_SYNC:
-        // adjust sync interval in 10-minute steps (10..360)
-        settingsSyncMinutes = constrain(settingsSyncMinutes + dir * 10, 10, 360);
-        // apply immediately to WiFiSync runtime
-        WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
-        drawStatsSafe();
-        break;
-
       case STATE_SETTINGS_PMS5003:
-        settingsPmsMenuIndex = constrain(settingsPmsMenuIndex + dir, 0, settingsPmsMenuCount - 1);
-        drawStatsSafe();
-        break;
-
       case STATE_SETTINGS_MQTT:
-        settingsMqttMenuIndex = constrain(settingsMqttMenuIndex + dir, 0, settingsMqttMenuCount - 1);
-        drawStatsSafe();
-        break;
-
       case STATE_SETTINGS_BUZZER:
-        settingsBuzzerMenuIndex = constrain(settingsBuzzerMenuIndex + dir, 0, settingsBuzzerMenuCount - 1);
-        drawStatsSafe();
-        break;
-
       case STATE_SETTINGS_ALARM_MELODY:
-        settingsAlarmMelodyIndex = constrain(settingsAlarmMelodyIndex + dir, 0, AlarmMelodies::kCount - 1);
-        drawStatsSafe();
+        handleSettingsRotate(dir);
         break;
 
       case STATE_SET_TIME:
@@ -383,6 +527,9 @@ void ui_handleEvent(EncoderEvent e) {
         break;
 
       case STATE_ALARM_EDIT:
+        if (!ensureSelectedAlarmIndexValid()) {
+          return;
+        }
         // If actively editing time fields, apply changes; otherwise move the cursor
         if (editState == EDIT_HOURS) {
           alarms[selectedAlarmIndex].hour = (alarms[selectedAlarmIndex].hour + dir + 24) % 24;
@@ -792,7 +939,7 @@ void ui_handleEvent(EncoderEvent e) {
           drawStatsSafe();
           break;
         case 3:  // ALARMY
-          settingsAlarmMelodyIndex = AlarmMelodyPrefs::loadIndex(s_prefs);
+          settingsAlarmMelodyIndex = clampMenuIndexSafe(AlarmMelodyPrefs::loadIndex(s_prefs), AlarmMelodies::kCount);
           s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
           appState = STATE_SETTINGS_ALARM_MELODY;
           drawStatsSafe();
@@ -810,6 +957,7 @@ void ui_handleEvent(EncoderEvent e) {
           drawStatsSafe();
           break;
         case 6:  // UI Ekran
+          settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenIndex, settingsUiScreenCount);
           appState = STATE_SETTINGS_UI_SCREEN;
           s_prevSettingsUiScreenIndex = settingsUiScreenIndex;
           drawStatsSafe();
@@ -829,72 +977,7 @@ void ui_handleEvent(EncoderEvent e) {
       return;
     }
 
-    // --- LOGIKA MENU USTAWIEŃ PMS5003 (włącz/wyłącz) ---
-    if (appState == STATE_SETTINGS_PMS5003) {
-      pms5003Enabled = (settingsPmsMenuIndex == 0);
-      appState = STATE_SETTINGS;
-      drawStatsSafe();
-      return;
-    }
-
-    // --- LOGIKA MENU USTAWIEŃ BUZERA (włącz/wyłącz) ---
-    if (appState == STATE_SETTINGS_BUZZER) {
-      buzzerEnabled = (settingsBuzzerMenuIndex == 0);
-      appState = STATE_SETTINGS;
-      drawStatsSafe();
-      return;
-    }
-
-    // --- LOGIKA MENU USTAWIEŃ MELODII ALARMU ---
-    if (appState == STATE_SETTINGS_ALARM_MELODY) {
-      AlarmMelodyPrefs::saveSelection(s_prefs, settingsAlarmMelodyIndex);
-      drawStatsSafe();
-      startAlarmMelodyDemo((uint8_t)settingsAlarmMelodyIndex);
-      return;
-    }
-
-    // --- LOGIKA MENU USTAWIEŃ MQTT (włącz/wyłącz) ---
-    if (appState == STATE_SETTINGS_MQTT) {
-      mqttEnabled = (settingsMqttMenuIndex == 0);
-      s_prefs.putBool("mqttEnabled", mqttEnabled);
-      appState = STATE_SETTINGS;
-      drawStatsSafe();
-      return;
-    }
-
-    // --- LOGIKA: Rotacja Ekranu (zapisz na klik) ---
-    if (appState == STATE_SETTINGS_ROTATION) {
-      // persist new value and return to settings menu
-      s_prefs.putUShort("homeOverlaySec", (uint16_t)settingsRotationSec);
-      appState = STATE_SETTINGS;
-      drawStatsSafe();
-      return;
-    }
-
-    // --- LOGIKA: Synchronizacja NTP (zapisz na klik) ---
-    if (appState == STATE_SETTINGS_SYNC) {
-      // persist new value and apply
-      s_prefs.putUShort("ntpSyncMin", (uint16_t)settingsSyncMinutes);
-      WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
-      appState = STATE_SETTINGS;
-      drawStatsSafe();
-      return;
-    }
-
-    // --- LOGIKA: UI EKRAN (wizualny wybór profilu, bez zapisu) ---
-    if (appState == STATE_SETTINGS_UI_SCREEN) {
-      s_prefs.putUShort("uiScreenMode", (uint16_t)settingsUiScreenIndex);
-      appState = STATE_SETTINGS;
-      drawStatsSafe();
-      return;
-    }
-
-    // --- LOGIKA MENU USTAWIEŃ BOOT INTRO (włącz/wyłącz) ---
-    if (appState == STATE_SETTINGS_BOOT_INTRO) {
-      showEpicIntro = (settingsEpicIntroIndex == 0);
-      s_prefs.putBool("epicIntro", showEpicIntro);
-      appState = STATE_SETTINGS;
-      drawStatsSafe();
+    if (handleSettingsConfirmClick()) {
       return;
     }
 
@@ -1016,6 +1099,10 @@ void ui_handleEvent(EncoderEvent e) {
     }
 
     if (appState == STATE_ALARM_EDIT) {
+      if (!ensureSelectedAlarmIndexValid()) {
+        return;
+      }
+
       if (editState == EDIT_DONE) {
         // interpret click based on cursor selection
         if (alarmEditCursor == 0) {
@@ -1072,6 +1159,10 @@ void ui_handleEvent(EncoderEvent e) {
       statsMenuIndex = menuIdx;
       drawStatsSafe();
     };
+
+    if (handleSettingsLongCancel()) {
+      return;
+    }
 
     // Statystyki: ekrany szczegółowe -> powrót do menu statystyk
     switch (appState) {
@@ -1187,43 +1278,6 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_BMP280:
         appState = STATE_MENU;
         drawMenuSafe();
-        return;
-
-      // --- Ustawienia (Settings) -> powrót do menu głównego ---
-      case STATE_SETTINGS_PMS5003:
-      case STATE_SETTINGS_BUZZER:
-      case STATE_SETTINGS_MQTT:
-      case STATE_SETTINGS_BOOT_INTRO:
-        appState = STATE_SETTINGS;
-        drawStatsSafe();
-        return;
-      case STATE_SETTINGS_ROTATION:
-        // cancel: restore previous value and go back
-        settingsRotationSec = s_prevSettingsRotationSec;
-        HomeRuntime::setOverlayIntervalSeconds((uint8_t)settingsRotationSec);
-        appState = STATE_SETTINGS;
-        drawStatsSafe();
-        return;
-      case STATE_SETTINGS_SYNC:
-        // cancel: restore previous value and go back
-        settingsSyncMinutes = s_prevSettingsSyncMin;
-        WiFiSync::setPeriodicSyncIntervalMinutes((uint16_t)settingsSyncMinutes);
-        appState = STATE_SETTINGS;
-        drawStatsSafe();
-        return;
-
-      case STATE_SETTINGS_UI_SCREEN:
-        settingsUiScreenIndex = s_prevSettingsUiScreenIndex;
-        setHomeUiProfileSafe((uint8_t)settingsUiScreenIndex);
-        appState = STATE_SETTINGS;
-        drawStatsSafe();
-        return;
-
-      case STATE_SETTINGS_ALARM_MELODY:
-        settingsAlarmMelodyIndex = s_prevSettingsAlarmMelodyIndex;
-        stopAlarmMelodyDemo();
-        appState = STATE_SETTINGS;
-        drawStatsSafe();
         return;
 
       case STATE_TIMER:

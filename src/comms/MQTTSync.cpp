@@ -65,6 +65,11 @@ emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 
 namespace MQTTSync {
 
+static constexpr size_t MQTT_JSON_BUFFER_SIZE = 192;
+static constexpr size_t MQTT_PACKET_BUFFER_SIZE = 256;
+static constexpr size_t MQTT_JSON_DOC_CAPACITY = 384;
+static constexpr size_t MQTT_PACKET_MARGIN_BYTES = 8;
+
 // ============================================================================
 // Static Variables
 // ============================================================================
@@ -75,6 +80,10 @@ static unsigned long publishInterval = 5000; // 5 seconds
 static volatile bool mqttConnected = false;
 static TaskHandle_t mqtt_task_handle = NULL;
 static Config s_config;
+static char s_pendingPayload[MQTT_PACKET_BUFFER_SIZE] = {0};
+static size_t s_pendingPayloadLength = 0;
+static bool s_pendingPayloadReady = false;
+static bool s_serviceStarted = false;
 
 enum class MqttConnectionState : uint8_t {
     WaitingForWifi,
@@ -90,28 +99,24 @@ static unsigned long s_connectStartMs = 0;
 static uint8_t s_connectFailureCount = 0;
 static volatile bool s_stopRequested = false;
 
-static constexpr unsigned long MQTT_TASK_LOOP_DELAY_MS = 50;
 static constexpr unsigned long MQTT_WIFI_RECOVERY_DELAY_MS = 250;
 static constexpr unsigned long MQTT_CONNECT_BUDGET_MS = 4500;
 static constexpr unsigned long MQTT_TCP_CONNECT_TIMEOUT_MS = 3000;
 static constexpr unsigned long MQTT_TLS_HANDSHAKE_TIMEOUT_SEC = 2;
 static constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 3;
 static constexpr uint16_t MQTT_KEEPALIVE_SEC = 15;
-static constexpr size_t MQTT_JSON_BUFFER_SIZE = 192;
-static constexpr size_t MQTT_PACKET_BUFFER_SIZE = 256;
-static constexpr size_t MQTT_JSON_DOC_CAPACITY = 384;
-static constexpr size_t MQTT_PACKET_MARGIN_BYTES = 8;
 
 // ============================================================================
 // Forward declarations
 // ============================================================================
 static void mqtt_callback(char* topic, byte* payload, unsigned int length);
 static bool mqtt_reconnect(unsigned long nowMs);
-static void mqtt_task(void *parameter);
 static void applyConfigToClient();
 static void applyConnectionBudget();
 static unsigned long computeBackoffMs(uint8_t failures);
 static bool mqttPayloadFits(size_t payloadLength);
+static bool queuePendingPublish(const char* payload, size_t payloadLength);
+static void flushPendingPublish();
 
 // ============================================================================
 // Callback for incoming MQTT messages
@@ -174,6 +179,61 @@ static bool mqttPayloadFits(size_t payloadLength) {
     const size_t topicLength = s_config.topic.length();
     const size_t requiredBytes = payloadLength + topicLength + MQTT_PACKET_MARGIN_BYTES;
     return requiredBytes <= MQTT_PACKET_BUFFER_SIZE;
+}
+
+static bool queuePendingPublish(const char* payload, size_t payloadLength) {
+    if (payload == nullptr) {
+        Serial.println("[MQTT] Empty payload, cannot queue");
+        return false;
+    }
+
+    if (payloadLength >= sizeof(s_pendingPayload)) {
+        Serial.print("[MQTT] Payload too large for staging buffer (payload=");
+        Serial.print(payloadLength);
+        Serial.print(", buffer=");
+        Serial.print(sizeof(s_pendingPayload));
+        Serial.println(")");
+        return false;
+    }
+
+    if (!mqttPayloadFits(payloadLength)) {
+        Serial.print("[MQTT] Payload too large for packet buffer (payload=");
+        Serial.print(payloadLength);
+        Serial.print(", topic=");
+        Serial.print(s_config.topic.length());
+        Serial.print(", buffer=");
+        Serial.print(MQTT_PACKET_BUFFER_SIZE);
+        Serial.println(")");
+        return false;
+    }
+
+    memcpy(s_pendingPayload, payload, payloadLength);
+    s_pendingPayload[payloadLength] = '\0';
+    s_pendingPayloadLength = payloadLength;
+    s_pendingPayloadReady = true;
+    return true;
+}
+
+static void flushPendingPublish() {
+    if (!s_pendingPayloadReady) {
+        return;
+    }
+
+    if (!mqttClient.connected()) {
+        return;
+    }
+
+    if (mqttClient.publish(s_config.topic.c_str(), s_pendingPayload)) {
+        Serial.print("[MQTT] Published (");
+        Serial.print(s_pendingPayloadLength);
+        Serial.print(" B): ");
+        Serial.println(s_pendingPayload);
+        lastPublishTime = millis();
+        s_pendingPayloadReady = false;
+        s_pendingPayloadLength = 0;
+    } else {
+        Serial.println("[MQTT] Publish failed!");
+    }
 }
 
 void configure(const Config& config) {
@@ -258,90 +318,6 @@ static bool mqtt_reconnect(unsigned long nowMs) {
 }
 
 // ============================================================================
-// MQTT Task (runs on Core 1)
-// ============================================================================
-static void mqtt_task(void *parameter) {
-    Serial.println("[MQTT] Task started on Core 1");
-    
-    // Small delay to let WiFi stabilize after the handoff from NetworkOrchestrator.
-    vTaskDelay(pdMS_TO_TICKS(250));
-
-    s_state = (WiFi.status() == WL_CONNECTED)
-      ? MqttConnectionState::Idle
-      : MqttConnectionState::WaitingForWifi;
-    
-    while (!s_stopRequested) {
-        const unsigned long now = millis();
-
-        if (WiFi.status() != WL_CONNECTED) {
-            if (mqttClient.connected()) {
-                mqttClient.disconnect();
-            }
-
-            mqttConnected = false;
-            if (s_state != MqttConnectionState::WaitingForWifi) {
-                Serial.println("[MQTT] WiFi lost, waiting for link recovery");
-            }
-
-            s_state = MqttConnectionState::WaitingForWifi;
-            s_nextStateCheckMs = now + MQTT_WIFI_RECOVERY_DELAY_MS;
-            vTaskDelay(pdMS_TO_TICKS(MQTT_TASK_LOOP_DELAY_MS));
-            continue;
-        }
-
-        if (s_state == MqttConnectionState::WaitingForWifi || s_state == MqttConnectionState::Backoff) {
-            if (now < s_nextStateCheckMs) {
-                vTaskDelay(pdMS_TO_TICKS(MQTT_TASK_LOOP_DELAY_MS));
-                continue;
-            }
-            s_state = MqttConnectionState::Idle;
-        }
-
-        if (s_state == MqttConnectionState::Idle) {
-            if (!mqttClient.connected()) {
-                mqtt_reconnect(now);
-                vTaskDelay(pdMS_TO_TICKS(MQTT_TASK_LOOP_DELAY_MS));
-                continue;
-            }
-
-            mqttConnected = true;
-            s_state = MqttConnectionState::Online;
-        }
-
-        if (s_state == MqttConnectionState::Online) {
-            mqttConnected = true;
-            mqttClient.loop();
-
-            if (!mqttClient.connected()) {
-                mqttConnected = false;
-                if (s_connectFailureCount < 255) {
-                    ++s_connectFailureCount;
-                }
-
-                const unsigned long backoffMs = computeBackoffMs(s_connectFailureCount);
-                s_nextStateCheckMs = now + backoffMs;
-                s_state = MqttConnectionState::Backoff;
-
-                Serial.print("[MQTT] Connection lost, retry in ");
-                Serial.print(backoffMs);
-                Serial.print(" ms (failures=");
-                Serial.print(s_connectFailureCount);
-                Serial.println(")");
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(MQTT_TASK_LOOP_DELAY_MS));
-    }
-
-    mqttConnected = false;
-    mqttClient.disconnect();
-    mqtt_task_handle = NULL;
-    s_state = MqttConnectionState::WaitingForWifi;
-    Serial.println("[MQTT] Task stopped");
-    vTaskDelete(NULL);
-}
-
-// ============================================================================
 // Public API Implementation
 // ============================================================================
 
@@ -361,14 +337,18 @@ void begin(const char* ssid, const char* password) {
     // Right-size the MQTT packet buffer for the current sensor payloads.
     mqttClient.setBufferSize(MQTT_PACKET_BUFFER_SIZE);
 
-        s_stopRequested = false;
-        s_connectFailureCount = 0;
-        s_nextStateCheckMs = 0;
-        s_connectStartMs = 0;
-        s_state = (WiFi.status() == WL_CONNECTED)
-            ? MqttConnectionState::Idle
-            : MqttConnectionState::WaitingForWifi;
-        mqttConnected = false;
+    s_serviceStarted = false;
+    s_stopRequested = false;
+    s_connectFailureCount = 0;
+    s_nextStateCheckMs = 0;
+    s_connectStartMs = 0;
+    s_state = (WiFi.status() == WL_CONNECTED)
+        ? MqttConnectionState::Idle
+        : MqttConnectionState::WaitingForWifi;
+    mqttConnected = false;
+    s_pendingPayloadReady = false;
+    s_pendingPayloadLength = 0;
+    s_pendingPayload[0] = '\0';
     
     Serial.println("[MQTT] Client configured");
     Serial.print("[MQTT] Broker: ");
@@ -378,56 +358,50 @@ void begin(const char* ssid, const char* password) {
 }
 
 void startCore1Task() {
-    if (mqtt_task_handle == NULL) {
-        s_stopRequested = false;
-        s_state = (WiFi.status() == WL_CONNECTED)
-          ? MqttConnectionState::Idle
-          : MqttConnectionState::WaitingForWifi;
-        s_nextStateCheckMs = 0;
-        s_connectStartMs = 0;
-        xTaskCreatePinnedToCore(
-            mqtt_task,                    // Function to implement the task
-            "mqtt_task",                  // Name of the task
-            8192,                         // Stack size in bytes
-            NULL,                         // Task input parameter
-            2,                            // Priority of the task (higher = more important)
-            &mqtt_task_handle,            // Task handle
-            1                             // Core ID (0 or 1)
-        );
-        Serial.println("[MQTT] Task created on Core 1");
-        RAM_CHECKPOINT("MQTT_ON");
+    if (s_serviceStarted) {
+        return;
     }
+
+    s_stopRequested = false;
+    s_serviceStarted = true;
+    s_state = MqttConnectionState::WaitingForWifi;
+    s_nextStateCheckMs = millis() + MQTT_WIFI_RECOVERY_DELAY_MS;
+    s_connectStartMs = 0;
+    mqttConnected = false;
+    Serial.println("[MQTT] Service started on main loop");
+    RAM_CHECKPOINT("MQTT_ON");
 }
 
 void stopCore1Task() {
-    if (mqtt_task_handle != NULL) {
-        s_stopRequested = true;
-        s_state = MqttConnectionState::WaitingForWifi;
-        s_nextStateCheckMs = 0;
-        s_connectStartMs = 0;
-        // Disconnect MQTT first
-        mqttClient.disconnect();
-        mqttConnected = false;
-        
-        // Delete the task
-        vTaskDelete(mqtt_task_handle);
-        mqtt_task_handle = NULL;
-        
-        Serial.println("[MQTT] Task stopped and deleted");
-        RAM_CHECKPOINT("MQTT_OFF");
+    if (!s_serviceStarted && mqtt_task_handle == NULL) {
+        return;
     }
+
+    s_stopRequested = true;
+    s_serviceStarted = false;
+    s_state = MqttConnectionState::WaitingForWifi;
+    s_nextStateCheckMs = 0;
+    s_connectStartMs = 0;
+    s_pendingPayloadReady = false;
+    s_pendingPayloadLength = 0;
+    s_pendingPayload[0] = '\0';
+    mqttClient.disconnect();
+    mqttConnected = false;
+    mqtt_task_handle = NULL;
+
+    Serial.println("[MQTT] Service stopped");
+    RAM_CHECKPOINT("MQTT_OFF");
 }
 
 void publishSensorData(float temp, int humidity, int pressure,
                        uint8_t aqi, uint16_t tvoc, uint16_t eco2) {
-    // NOTE: scheduling is handled by the caller (`main.cpp`).
-    // Do not duplicate rate-limiting here to avoid missing every-other publish.
-    // Check if connected
-    if (!mqttClient.connected()) {
-        Serial.println("[MQTT] Not connected, cannot publish");
+    if (!s_serviceStarted || s_stopRequested) {
+        Serial.println("[MQTT] Service not active, cannot publish");
         return;
     }
 
+    // NOTE: scheduling is handled by the caller (`main.cpp`).
+    // Do not duplicate rate-limiting here to avoid missing every-other publish.
     // Compact JSON payload as an array to save bytes:
     // [ t, h, p, aqi, tvoc, eco2, ts, [A_pm1,A_pm25,A_pm10], [n0.3,n0.5,1.0,2.5,5.0,10.0] ]
     StaticJsonDocument<MQTT_JSON_DOC_CAPACITY> doc;
@@ -465,6 +439,14 @@ void publishSensorData(float temp, int humidity, int pressure,
     }
 
     const size_t payloadLength = measureJson(doc);
+    if (payloadLength >= MQTT_JSON_BUFFER_SIZE) {
+        Serial.print("[MQTT] JSON payload exceeds staging buffer (payload=");
+        Serial.print(payloadLength);
+        Serial.print(", buffer=");
+        Serial.print(MQTT_JSON_BUFFER_SIZE);
+        Serial.println(")");
+        return;
+    }
     if (!mqttPayloadFits(payloadLength)) {
         Serial.print("[MQTT] Payload too large for packet buffer (payload=");
         Serial.print(payloadLength);
@@ -490,19 +472,20 @@ void publishSensorData(float temp, int humidity, int pressure,
     size_t n = serializeJson(doc, buffer, sizeof(buffer));
     Serial.print("[MQTT] Payload size: "); Serial.println(n);
 
-    // Publish
-    if (mqttClient.publish(s_config.topic.c_str(), buffer)) {
-        Serial.print("[MQTT] Published: ");
-        Serial.println(buffer);
-        lastPublishTime = millis();
+    if (!queuePendingPublish(buffer, n)) {
+        return;
+    }
+
+    if (mqttClient.connected()) {
+        flushPendingPublish();
     } else {
-        Serial.println("[MQTT] Publish failed!");
+        Serial.println("[MQTT] Not connected yet, queued publish");
     }
 }
 
 void publishRawJSON(const char* jsonString) {
-    if (!mqttClient.connected()) {
-        Serial.println("[MQTT] Not connected, cannot publish");
+    if (!s_serviceStarted || s_stopRequested) {
+        Serial.println("[MQTT] Service not active, cannot publish");
         return;
     }
 
@@ -512,23 +495,14 @@ void publishRawJSON(const char* jsonString) {
     }
 
     const size_t payloadLength = strlen(jsonString);
-    if (!mqttPayloadFits(payloadLength)) {
-        Serial.print("[MQTT] Raw JSON too large for packet buffer (payload=");
-        Serial.print(payloadLength);
-        Serial.print(", topic=");
-        Serial.print(s_config.topic.length());
-        Serial.print(", buffer=");
-        Serial.print(MQTT_PACKET_BUFFER_SIZE);
-        Serial.println(")");
+    if (!queuePendingPublish(jsonString, payloadLength)) {
         return;
     }
-    
-    if (mqttClient.publish(s_config.topic.c_str(), jsonString)) {
-        Serial.print("[MQTT] Published: ");
-        Serial.println(jsonString);
-        lastPublishTime = millis();
+
+    if (mqttClient.connected()) {
+        flushPendingPublish();
     } else {
-        Serial.println("[MQTT] Publish failed!");
+        Serial.println("[MQTT] Not connected yet, queued publish");
     }
 }
 
@@ -537,8 +511,67 @@ bool isConnected() {
 }
 
 void update() {
-    // Trigger publish from main loop (optional)
-    // The mqtt_task handles the connection automatically
+    if (!s_serviceStarted || s_stopRequested) {
+        return;
+    }
+
+    const unsigned long now = millis();
+
+    if (WiFi.status() != WL_CONNECTED) {
+        if (mqttClient.connected()) {
+            mqttClient.disconnect();
+        }
+
+        mqttConnected = false;
+        if (s_state != MqttConnectionState::WaitingForWifi) {
+            Serial.println("[MQTT] WiFi lost, waiting for link recovery");
+        }
+
+        s_state = MqttConnectionState::WaitingForWifi;
+        s_nextStateCheckMs = now + MQTT_WIFI_RECOVERY_DELAY_MS;
+        return;
+    }
+
+    if (s_state == MqttConnectionState::WaitingForWifi || s_state == MqttConnectionState::Backoff) {
+        if (now < s_nextStateCheckMs) {
+            return;
+        }
+
+        s_state = MqttConnectionState::Idle;
+    }
+
+    if (s_state == MqttConnectionState::Idle) {
+        if (!mqttClient.connected()) {
+            mqtt_reconnect(now);
+            return;
+        }
+
+        mqttConnected = true;
+        s_state = MqttConnectionState::Online;
+    }
+
+    if (s_state == MqttConnectionState::Online) {
+        mqttConnected = true;
+        flushPendingPublish();
+        mqttClient.loop();
+
+        if (!mqttClient.connected()) {
+            mqttConnected = false;
+            if (s_connectFailureCount < 255) {
+                ++s_connectFailureCount;
+            }
+
+            const unsigned long backoffMs = computeBackoffMs(s_connectFailureCount);
+            s_nextStateCheckMs = now + backoffMs;
+            s_state = MqttConnectionState::Backoff;
+
+            Serial.print("[MQTT] Connection lost, retry in ");
+            Serial.print(backoffMs);
+            Serial.print(" ms (failures=");
+            Serial.print(s_connectFailureCount);
+            Serial.println(")");
+        }
+    }
 }
 
 unsigned long getLastPublishTime() {

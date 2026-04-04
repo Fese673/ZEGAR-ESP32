@@ -131,7 +131,7 @@ void update() {
 
   if (!s_mqttEnabled) {
     if (s_mqttInitialized) {
-      Serial.println("[NetworkOrchestrator] MQTT disabled in settings -> stopping task");
+      Serial.println("[NetworkOrchestrator] MQTT disabled in settings -> stopping service");
       MQTTSync::stopCore1Task();
       s_mqttInitialized = false;
     }
@@ -143,12 +143,16 @@ void update() {
     if (s_lastWifiCheckMs == 0 || nowMs - s_lastWifiCheckMs >= s_config.wifiStatusCheckMs) {
       s_lastWifiCheckMs = nowMs;
       if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[NetworkOrchestrator] WiFi connected -> starting MQTT task");
+        Serial.println("[NetworkOrchestrator] WiFi connected -> starting MQTT service");
         MQTTSync::begin(s_config.wifiSsid, s_config.wifiPass);
         MQTTSync::startCore1Task();
         s_mqttInitialized = true;
       }
     }
+  }
+
+  if (s_mqttInitialized) {
+    MQTTSync::update();
   }
 }
 

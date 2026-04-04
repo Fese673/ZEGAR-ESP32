@@ -32,6 +32,7 @@ RadioModeSwitchState s_current_state = RADIO_STATE_WIFI;
 RadioModeSwitchNextMode s_next_mode = RADIO_NEXT_NONE;
 bool s_initialized = false;
 bool s_start_mode_ready = false;
+bool s_boot_handoff_detected = false;
 unsigned long s_start_time_ms = 0;
 bool s_restart_pending = false;
 unsigned long s_restart_deadline_ms = 0;
@@ -62,6 +63,10 @@ RadioModeSwitchNextMode modeFromRtcFlag(uint32_t rtcFlag) {
   return RADIO_NEXT_WIFI;
 }
 
+bool isValidRtcModeFlag(uint32_t rtcFlag) {
+  return rtcFlag == kRtcFlagWifi || rtcFlag == kRtcFlagBt;
+}
+
 void storeRtcSnapshot(uint32_t modeFlag) {
   rtc_state.hours = (uint8_t)hours;
   rtc_state.minutes = (uint8_t)minutes;
@@ -84,8 +89,15 @@ void loadBootModeFromRtc() {
                 (unsigned int)rtc_state.minutes,
                 (unsigned int)rtc_state.seconds);
 
-  s_next_mode = modeFromRtcFlag(rtcFlag);
-  s_current_state = (s_next_mode == RADIO_NEXT_BT) ? RADIO_STATE_BT : RADIO_STATE_WIFI;
+  s_boot_handoff_detected = isValidRtcModeFlag(rtcFlag);
+  if (s_boot_handoff_detected) {
+    s_next_mode = modeFromRtcFlag(rtcFlag);
+    s_current_state = (s_next_mode == RADIO_NEXT_BT) ? RADIO_STATE_BT : RADIO_STATE_WIFI;
+  } else {
+    s_next_mode = RADIO_NEXT_NONE;
+    s_current_state = RADIO_STATE_WIFI;
+  }
+
   rtc_state.mode_flag = kRtcFlagNone;
 }
 
@@ -197,6 +209,10 @@ bool isDefaultStartupWiFi() {
   return s_next_mode != RADIO_NEXT_BT;
 }
 
+bool wasBootHandoffDetected() {
+  return s_boot_handoff_detected;
+}
+
 void forceMode(RadioModeSwitchState state, RadioModeSwitchNextMode nextMode) {
   s_current_state = state;
   s_next_mode = nextMode;
@@ -225,6 +241,9 @@ void printDiagnostics() {
 
   Serial.print("Next mode: ");
   Serial.println(nextModeToText(s_next_mode));
+
+  Serial.print("Boot handoff: ");
+  Serial.println(s_boot_handoff_detected ? "yes" : "no");
 
   Serial.print("Initialized: ");
   Serial.println(s_initialized ? "yes" : "no");

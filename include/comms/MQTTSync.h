@@ -48,13 +48,13 @@ Config currentConfig();
 void begin(const char* ssid, const char* password);
 
 /**
- * Start MQTT task on Core 1
+ * Start the MQTT service on the main application loop.
  * Call this from setup() after begin()
  */
 void startCore1Task();
 
 /**
- * Stop MQTT task (disconnect and kill task)
+ * Stop the MQTT service and disconnect the client.
  */
 void stopCore1Task();
 

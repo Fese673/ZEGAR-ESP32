@@ -315,6 +315,22 @@ static void lcdPrintCenteredWithIcons(uint8_t row, const char* text, const uint8
   LCD_PRINT(text);
 }
 
+static void lcdPrintCenteredWithIconsAndSuffix(uint8_t row, const char* text, const uint8_t* prefixIcons, uint8_t prefixIconCount, int suffixIcon) {
+  const int textLen = (int)strlen(text);
+  const int totalLen = textLen + (int)prefixIconCount + (suffixIcon >= 0 ? 1 : 0);
+  const int pad = (SCREEN_WIDTH - min(totalLen, (int)SCREEN_WIDTH)) / 2;
+
+  clearRow(row);
+  LCD_SET((uint8_t)pad, row);
+  for (uint8_t i = 0; i < prefixIconCount; ++i) {
+    LCD_WRITE((uint8_t)prefixIcons[i]);
+  }
+  LCD_PRINT(text);
+  if (suffixIcon >= 0) {
+    LCD_WRITE((uint8_t)suffixIcon);
+  }
+}
+
 static bool isAnyAlarmArmed() {
   if (alarmEnabled || alarmRinging) {
     return true;
@@ -353,8 +369,13 @@ void drawHome() {
     icons[iconCount++] = LCDIcons::BellSlot;
   }
 
-  if (iconCount > 0) {
-    lcdPrintCenteredWithIcons(0, titleBuf, icons, iconCount);
+  const bool showWifiIcon = ModeManager::isBtOn();
+  if (showWifiIcon) {
+    LCDIcons::loadIcon(lcd, LCDIcons::WifiSlot, LCDIcons::IconId::Wifi);
+  }
+
+  if (iconCount > 0 || showWifiIcon) {
+    lcdPrintCenteredWithIconsAndSuffix(0, titleBuf, icons, iconCount, showWifiIcon ? LCDIcons::WifiSlot : -1);
   } else {
     lcdPrintCentered(0, titleBuf);
   }

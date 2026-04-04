@@ -26,13 +26,18 @@ ESP32 firmware for a custom clock platform with integrated Bluetooth A2DP audio,
 
 ### Build command
 ```powershell
-C:\Users\PC\.platformio\penv\Scripts\platformio.exe run --environment esp32dev
+pio run -e esp32dev
 ```
 
 ### Optional upload command
 ```powershell
-C:\Users\PC\.platformio\penv\Scripts\platformio.exe run --target upload --environment esp32dev
+pio run -t upload -e esp32dev
 ```
+
+### Recommended workflow
+1. Build with `pio run -e esp32dev`
+2. Upload with `pio run -t upload -e esp32dev`
+3. Monitor serial output with `pio device monitor -e esp32dev`
 
 ## PlatformIO configuration
 The project uses `platformio.ini` to configure:
@@ -52,6 +57,7 @@ The project uses `platformio.ini` to configure:
 Private credentials should be injected via build flags rather than committed in source.
 Example:
 ```ini
+# NEVER commit these lines
 -DPROJECT_WIFI_SSID=\"your-ssid\"
 -DPROJECT_WIFI_PASS=\"your-password\"
 -DPROJECT_MQTT_BROKER=\"your-broker\"
@@ -67,7 +73,7 @@ Telemetry is intentionally lightweight and designed for debug sessions without s
 - `RamTelemetry` — stage-based heap snapshots and fragmentation metrics
 
 ### Where to find docs
-- `docs/telemetry/README.md` describes the telemetry design, build flags, and interpretation of output
+- `docs/telemetry/index.md` describes the telemetry design, build flags, and interpretation of output
 
 ## Architecture overview
 ### Bluetooth / audio
@@ -80,6 +86,18 @@ Telemetry is intentionally lightweight and designed for debug sessions without s
 - `src/comms/WiFiSync.cpp` handles WiFi setup and optional NTP sync
 - `src/comms/MQTTSync.cpp` manages MQTT connection state, TLS setup, and publish buffering
 - `NetworkOrchestrator` selects between BT and WiFi modes and coordinates radio lifecycle
+
+### Radio lifecycle
+The radio transition path is a critical area. The orchestrator must safely hand off from Bluetooth to WiFi without silently masking an active mode.
+
+```text
+BT active
+   |
+   v
+NetworkOrchestrator
+   |
+   +--> [switch] --> WiFi active
+```
 
 ### Input and UI
 - `src/input/Encoder.cpp` handles rotary encoder scanning and button debouncing in a small FreeRTOS task
@@ -97,20 +115,20 @@ Telemetry is intentionally lightweight and designed for debug sessions without s
 
 ## Development workflow
 1. Set build flags in `platformio.ini` as needed for telemetry or production mode
-2. Build with `platformio run --environment esp32dev`
+2. Build with `pio run -e esp32dev`
 3. Use the Serial Monitor to validate startup, connectivity, and telemetry output
 4. If working on Bluetooth audio, trace `AUDIO_ON` and `AUDIO_OFF` checkpoints together with `prefetch wait timed out` logs
 5. If debugging memory, enable `TEST_RAM=1` and inspect the heap snapshot lines from `RamTelemetry`
 
 ## Notes and conventions
 - Keep generated or ephemeral files within their owning module folder
-- Prefer lowercase folder names in source and include paths for cross-platform consistency
+- All new source files MUST use lowercase paths
 - Use `docs/` for architecture reports and long-form analysis rather than adding technical essays to `README.md`
 
 ## Useful paths
 - `src/` — firmware source
 - `include/` — public interfaces
 - `platformio.ini` — build configuration
-- `docs/telemetry/README.md` — telemetry design and usage
+- `docs/telemetry/index.md` — telemetry design and usage
 - `hardware/` — PCB and schematic references
 - `scripts/` — code generation and build helper scripts

@@ -1,5 +1,7 @@
 #include "BluetoothA2DPOutput.h"
 
+#include "RuntimeTelemetry.h"
+
 #if IS_VALID_PLATFORM
 
 BluetoothA2DPOutputLegacy::BluetoothA2DPOutputLegacy() {
@@ -106,6 +108,7 @@ bool BluetoothA2DPOutputLegacy::begin() {
 
 size_t BluetoothA2DPOutputLegacy::write(const uint8_t *data, size_t item_size) {
   size_t i2s_bytes_written = 0;
+  const TickType_t write_timeout = pdMS_TO_TICKS(A2DP_I2S_WRITE_TIMEOUT_MS);
 
 #if A2DP_LEGACY_I2S_SUPPORT
   if (this->i2s_config.mode & I2S_MODE_DAC_BUILT_IN) {
@@ -127,26 +130,38 @@ size_t BluetoothA2DPOutputLegacy::write(const uint8_t *data, size_t item_size) {
 
   if (i2s_config.bits_per_sample == I2S_BITS_PER_SAMPLE_16BIT) {
     // standard logic with 16 bits
-    if (i2s_write(i2s_port, (void *)data, item_size, &i2s_bytes_written,
-                  portMAX_DELAY) != ESP_OK) {
-      ESP_LOGE(BT_AV_TAG, "i2s_write has failed");
+    const esp_err_t err = i2s_write(i2s_port, (void *)data, item_size,
+                                    &i2s_bytes_written, write_timeout);
+    if (err != ESP_OK) {
+      TELEMETRY_INC(audio_drops);
+      ESP_LOGW(BT_AV_TAG, "i2s_write timed out or failed (%d), wrote %u/%u bytes",
+               (int)err, (unsigned)i2s_bytes_written, (unsigned)item_size);
+    } else if (i2s_bytes_written < item_size) {
+      TELEMETRY_INC(audio_drops);
+      ESP_LOGW(BT_AV_TAG, "i2s_write short write, wrote %u/%u bytes",
+               (unsigned)i2s_bytes_written, (unsigned)item_size);
     }
   } else {
     if (i2s_config.bits_per_sample > 16) {
       // expand e.g to 32 bit for dacs which do not support 16 bits
-      if (i2s_write_expand(i2s_port, (void *)data, item_size,
+      const esp_err_t err = i2s_write_expand(i2s_port, (void *)data, item_size,
                            I2S_BITS_PER_SAMPLE_16BIT,
                            i2s_config.bits_per_sample, &i2s_bytes_written,
-                           portMAX_DELAY) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "i2s_write has failed");
+                           write_timeout);
+      if (err != ESP_OK) {
+        TELEMETRY_INC(audio_drops);
+        ESP_LOGW(BT_AV_TAG, "i2s_write_expand timed out or failed (%d), wrote %u/%u bytes",
+                 (int)err, (unsigned)i2s_bytes_written, (unsigned)item_size);
+      } else if (i2s_bytes_written < item_size) {
+        TELEMETRY_INC(audio_drops);
+        ESP_LOGW(BT_AV_TAG, "i2s_write_expand short write, wrote %u/%u bytes",
+                 (unsigned)i2s_bytes_written, (unsigned)item_size);
       }
     } else {
       ESP_LOGE(BT_AV_TAG, "invalid bits_per_sample: %d",
                i2s_config.bits_per_sample);
     }
   }
-
-  i2s_bytes_written = item_size;
 #endif
   return i2s_bytes_written;
 }
@@ -211,6 +226,11 @@ size_t BluetoothA2DPOutputAudioTools::write(const uint8_t *data, size_t item_siz
 #if A2DP_I2S_AUDIOTOOLS || defined(ARDUINO)
   if (p_print != nullptr) {
     i2s_bytes_written = p_print->write(data, item_size);
+    if (i2s_bytes_written < item_size) {
+      TELEMETRY_INC(audio_drops);
+    }
+  } else {
+    TELEMETRY_INC(audio_drops);
   }
 #endif
   return i2s_bytes_written;

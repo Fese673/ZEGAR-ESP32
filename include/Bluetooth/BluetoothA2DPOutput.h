@@ -1,5 +1,6 @@
 #pragma once
 #include "BluetoothA2DPCommon.h"
+#include "RuntimeTelemetry.h"
 
 #ifdef ARDUINO
 #include "Print.h"
@@ -128,8 +129,16 @@ class BluetoothA2DPOutputPrint : public BluetoothA2DPOutput {
   BluetoothA2DPOutputPrint() = default;
   bool begin() { return true;};
   size_t write(const uint8_t *data, size_t len) override { 
-    if (p_print==nullptr) return 0;
-    return p_print->write(data, len);
+    if (p_print == nullptr) {
+      TELEMETRY_INC(audio_drops);
+      return 0;
+    }
+
+    const size_t written = p_print->write(data, len);
+    if (written < len) {
+      TELEMETRY_INC(audio_drops);
+    }
+    return written;
   }
   void end() override {}
   void set_sample_rate(int rate) override {};

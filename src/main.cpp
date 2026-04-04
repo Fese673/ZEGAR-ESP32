@@ -7,6 +7,7 @@
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <esp_heap_caps.h>
 #endif
 
 #include "STM32_Data.h"
@@ -34,6 +35,8 @@
 #include "ClockAlarmService.h"
 #include "RtcSyncService.h"
 #include "TelemetryComposer.h"
+#include "RuntimeTelemetry.h"
+#include "RamTelemetry.h"
 #include "HomeRuntime.h"
 #include "AlarmTypes.h"
 #include <cstring>
@@ -620,6 +623,10 @@ static unsigned long lastCpuReadTime = 0;
 
 // --- System Resources Tracking ---
 uint32_t ramFreeBytes = 0;
+uint32_t ramTotalBytes = 0;
+uint32_t ramLargestBlockBytes = 0;
+uint32_t ramMinFreeBytes = 0;
+uint32_t ramDmaFreeBytes = 0;
 uint32_t flashFreeBytes = 0;
 
 // --- Ustawienia (Configuration settings) ---
@@ -717,8 +724,19 @@ void updateSystemResources() {
   if (cpuCore1Percent > 100) cpuCore1Percent = 100;
   
   // --- RAM Free ---
-  ramFreeBytes = ESP.getFreeHeap();
+  ramFreeBytes = freeHeap;
+  ramTotalBytes = totalHeap;
   
+#ifdef ARDUINO_ARCH_ESP32
+  ramLargestBlockBytes = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  ramMinFreeBytes = ESP.getMinFreeHeap();
+  ramDmaFreeBytes = heap_caps_get_free_size(MALLOC_CAP_DMA);
+#else
+  ramLargestBlockBytes = 0;
+  ramMinFreeBytes = ramFreeBytes;
+  ramDmaFreeBytes = 0;
+#endif
+
   // --- Flash Free ---
   flashFreeBytes = ESP.getFreeSketchSpace();
 }
@@ -743,9 +761,11 @@ void setup() {
   heapBaseline = ESP.getFreeHeap();
   Serial.printf("[diag] baseline_heap=%u\n", heapBaseline);
   ModeManager::logDiag("boot");
+  RamTelemetry::begin();
 
   // ===== Menedżer trybów (Wi-Fi/BT) - inicjalizuj WCZEŚNIE =====
   ModeManager::begin(&appState);
+  RAM_CHECKPOINT("BOOT");
 
   // --- 7-Segment setup ---
   // Inicjalizuj przed wczesnym przywróceniem czasu, żeby nie pisać na GPIO przed pinMode().
@@ -792,6 +812,7 @@ void setup() {
   Serial.printf("[main] I2C clock readback: %lu Hz (%s)\n",
                 (unsigned long)Wire.getClock(),
                 i2cClockApplied ? "applied" : "fallback/mismatch");
+  RAM_CHECKPOINT("I2C_READY");
 
   // ===== DS3231: restore system time early (before heavy UI/I2C traffic) =====
   RtcSyncService::tryRestoreSystemTimeFromDs3231(hours, minutes, seconds, lastTick);
@@ -826,6 +847,7 @@ void setup() {
   ENS160AHT21Sensor::begin();
   BMP280Sensor::begin();
   bmp280MenuCount = BMP280Sensor::menuItemCount();
+  RAM_CHECKPOINT("SENSORS_INIT");
 
   HomeRuntime::DrawCallbacks homeDrawCallbacks;
   homeDrawCallbacks.drawHome = drawHome;
@@ -835,6 +857,7 @@ void setup() {
   homeDrawCallbacks.drawSystemResources = drawSystemResources;
   homeDrawCallbacks.drawExtremeAlgorithms = drawExtremeAlgorithmScreen;
   HomeRuntime::begin(homeDrawCallbacks, (uint8_t)settingsUiScreenIndex, (uint8_t)settingsRotationSec);
+  RAM_CHECKPOINT("UI_READY");
 
   // ===== UI CONTROLLER =====
   UI_Callbacks callbacks;
@@ -912,6 +935,7 @@ void setup() {
   NetworkOrchestrator::begin(netCfg);
   NetworkOrchestrator::setMqttEnabled(mqttEnabled);
   Serial.println("[main] Network orchestrator armed (WiFi/Radio/MQTT)");
+  RAM_CHECKPOINT("NETWORK_INIT");
 
   // ===== RadioModeSwitch inicjalizuje się, ale faktyczna inicjalizacja WiFi/BT =====
   // będzie opóźniona w loop() aby zagwarantować że LCD jest w pełni gotowe
@@ -924,6 +948,7 @@ void setup() {
   }
 
   ModeManager::logDiag("after-setup-radio-ready");
+  RAM_CHECKPOINT("SETUP_DONE");
 }
 
 // ============================================================================
@@ -1035,6 +1060,12 @@ void loop() {
       (NetworkOrchestrator::getCurrentRadioState() == RADIO_STATE_BT) ? "BT" : "WiFi");
   }
 
+#if ENABLE_RUNTIME_TELEMETRY
+  RuntimeTelemetry::service(Serial, millis());
+#endif
+
+  RamTelemetry::service(Serial, millis());
+
 #if CORE_DEBUG_LEVEL > 0
   // Report LCD timing in 30-second windows so each print reflects the last
   // full measurement interval, not the startup path.
@@ -1055,6 +1086,9 @@ void loop() {
 
   // --- Clock tick ---
   ClockAlarmService::tickClock(CLOCK_TICK_MS, BUZZER_PIN);
+
+  // --- Alarm Ringing (fast path before heavier work) ---
+  ClockAlarmService::serviceAlarmPlayback(BUZZER_PIN, ALARM_DURATION_MS);
 
   // --- Central comms orchestration (WiFi + RadioModeSwitch + MQTT) ---
   NetworkOrchestrator::setMqttEnabled(mqttEnabled);

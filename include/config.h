@@ -30,6 +30,17 @@
 #  define A2DP_I2S_MAX_WRITE_DELAY_MS 0
 #endif
 
+// Maximum time the legacy I2S backend waits for a single write call.
+#ifndef A2DP_I2S_WRITE_TIMEOUT_MS
+#  define A2DP_I2S_WRITE_TIMEOUT_MS 20
+#endif
+
+// Maximum time the queued sink waits for the prefetch semaphore before it
+// rechecks the buffer state.
+#ifndef A2DP_I2S_STARTUP_WAIT_MS
+#  define A2DP_I2S_STARTUP_WAIT_MS 1000
+#endif
+
 // Maximum wait time for status change in 100 ms when calling end()
 #ifndef A2DP_DISCONNECT_LIMIT 
 #  define A2DP_DISCONNECT_LIMIT 20

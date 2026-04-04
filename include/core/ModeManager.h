@@ -10,12 +10,13 @@ namespace ModeManager {
 void begin(AppState *statePtr = nullptr);
 
 // Manualne sterowanie Wi-Fi (synchronizacja / uploady).
-void wifiOn();   // włączy Wi-Fi, zatrzyma BT jeśli działa
-void wifiOff();  // rozłączy Wi-Fi i wyłączy radio
+// Wywołujący odpowiada za uprzednie wygaszenie przeciwnego stosu.
+void wifiOn();
+void wifiOff();
 
 // Manualne sterowanie audio Bluetooth (A2DP Sink).
-void btOn();     // włączy BT, wyłączy Wi-Fi jeśli aktywne
-void btOff();    // rozłączy BT i zwolni pamięć stosu
+void btOn();
+void btOff();
 
 void transitionRadio(RadioMode mode);
 

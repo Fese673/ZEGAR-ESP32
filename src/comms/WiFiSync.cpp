@@ -1,8 +1,10 @@
 #include "WiFiSync.h"
 #include <WiFi.h>
+#include <esp_system.h>
 #include <stdlib.h>
 #include <string.h>
 #include "ModeManager.h"
+#include "RamTelemetry.h"
 
 namespace WiFiSync {
 
@@ -24,6 +26,7 @@ static char passCopy[65] = {0};
 // Flag: set by background task when WiFi connected
 static volatile bool wifiConnectedByTask = false;
 static volatile bool wifiFailedByTask = false;
+static volatile uint16_t wifiDisconnectReason = 0;
 
 // NTP tracking
 static unsigned long lastNtpSyncMillis = 0;
@@ -42,10 +45,15 @@ static bool wifiConnectRequested = false;
 
 static unsigned long syncStartMillis = 0;
 static unsigned long backoffUntilMillis = 0;
+static unsigned long wifiConnectStartMillis = 0;
 static uint8_t wifiFailureCount = 0;
 static uint8_t ntpFailureCount = 0;
 
 static bool sntpConfigured = false;
+static wifi_event_id_t wifiEventHandler = 0;
+static bool wifiEventHandlerInstalled = false;
+
+static constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
 
 static void ensureTzSet() {
   const char* current = getenv("TZ");
@@ -63,6 +71,34 @@ static void ensureTzSet() {
 static void (*onStartCb)() = nullptr;
 static void (*onDoneCb)() = nullptr;
 
+static void handleWiFiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      wifiConnectedByTask = true;
+      wifiFailedByTask = false;
+      wifiDisconnectReason = 0;
+      break;
+
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      wifiDisconnectReason = info.wifi_sta_disconnected.reason;
+      wifiConnectedByTask = false;
+      wifiFailedByTask = true;
+      break;
+
+    default:
+      break;
+  }
+}
+
+static void ensureWiFiEventHandler() {
+  if (wifiEventHandlerInstalled) {
+    return;
+  }
+
+  wifiEventHandler = WiFi.onEvent(handleWiFiEvent);
+  wifiEventHandlerInstalled = true;
+}
+
 // Task handle for WiFi.begin() offload
 static TaskHandle_t wifiBeginTaskHandle = NULL;
 
@@ -76,31 +112,13 @@ static void wifiInitTask(void* param) {
   WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
   Serial.println("[WiFiSync] wifiInitTask: WiFi.mode(STA) done");
+  RAM_CHECKPOINT("WIFI_DRIVER_ON");
 
   vTaskDelay(50 / portTICK_PERIOD_MS);
 
   // Step 2: Start connection
   WiFi.begin(ssidCopy, passCopy);
-  Serial.println("[WiFiSync] wifiInitTask: WiFi.begin() called");
-
-  // Step 3: Wait for connection with timeout. Runs on Core 1 so it won't block UI.
-  constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
-  unsigned long start = millis();
-  while (millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
-    if (WiFi.status() == WL_CONNECTED) {
-      wifiConnectedByTask = true;
-      wifiFailedByTask = false;
-      Serial.printf("[WiFiSync] wifiInitTask: connected! IP=%s\n",
-                    WiFi.localIP().toString().c_str());
-      break;
-    }
-    vTaskDelay(250 / portTICK_PERIOD_MS);
-  }
-
-  if (!wifiConnectedByTask) {
-    wifiFailedByTask = true;
-    Serial.printf("[WiFiSync] wifiInitTask: connection timeout (status=%d)\n", WiFi.status());
-  }
+  Serial.println("[WiFiSync] wifiInitTask: WiFi.begin() called, waiting for WiFi events");
 
   wifiBeginTaskHandle = NULL;
   vTaskDelete(NULL);
@@ -133,6 +151,8 @@ void setTimeRefs(int &hoursRef, int &minutesRef, int &secondsRef, unsigned long 
 
 void begin(const char* _ssid, const char* _pass,
            const char* _ntp_server) {
+  ensureWiFiEventHandler();
+
   ssid = _ssid;
   pass = _pass;
   // Safe copies for background task
@@ -152,6 +172,7 @@ void begin(const char* _ssid, const char* _pass,
   wifiConnectRequested = false;
   syncStartMillis = 0;
   backoffUntilMillis = 0;
+  wifiConnectStartMillis = 0;
   wifiFailureCount = 0;
   ntpFailureCount = 0;
   sntpConfigured = false;
@@ -163,6 +184,10 @@ void begin(const char* _ssid, const char* _pass,
 
 void setOnStart(void (*cb)()) { onStartCb = cb; }
 void setOnDone(void (*cb)())  { onDoneCb  = cb; }
+
+TaskHandle_t getInitTaskHandle() {
+  return wifiBeginTaskHandle;
+}
 
 void requestTimeSync() {
   timeSyncRequested = true;
@@ -183,15 +208,23 @@ void stop() {
   state = SyncState::Idle;
   wifiConnectedByTask = false;
   wifiFailedByTask = false;
+  wifiDisconnectReason = 0;
   wifiConnectRequested = false;
   timeSyncRequested = false;
   backoffUntilMillis = 0;
   lastError = SyncError::None;
+  wifiConnectStartMillis = 0;
 
   // Kill background init task if still running
   if (wifiBeginTaskHandle != NULL) {
     vTaskDelete(wifiBeginTaskHandle);
     wifiBeginTaskHandle = NULL;
+  }
+
+  if (wifiEventHandlerInstalled) {
+    WiFi.removeEvent(wifiEventHandler);
+    wifiEventHandlerInstalled = false;
+    wifiEventHandler = 0;
   }
 
   // Avoid disconnect noise when WiFi driver is already off/uninitialized.
@@ -200,6 +233,7 @@ void stop() {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
   }
+  RAM_CHECKPOINT("WIFI_SHUTDOWN");
 }
 
 bool isBusy() {
@@ -281,6 +315,8 @@ void update() {
 
       wifiConnectedByTask = false;
       wifiFailedByTask = false;
+        wifiDisconnectReason = 0;
+        wifiConnectStartMillis = now;
 
       state = SyncState::WifiConnecting;
       if (onStartCb) onStartCb();
@@ -305,6 +341,8 @@ void update() {
     if (wifiConnectedByTask || WiFi.status() == WL_CONNECTED) {
       wifiConnectedByTask = false;
       wifiFailedByTask = false;
+      wifiDisconnectReason = 0;
+      wifiConnectStartMillis = 0;
       wifiConnectRequested = false;
       wifiFailureCount = 0;
       lastError = SyncError::None;
@@ -326,7 +364,20 @@ void update() {
       wifiFailedByTask = false;
       lastError = SyncError::Wifi;
       wifiFailureCount++;
-      Serial.printf("[WiFiSync] update: WiFi connect failed (failures=%u)\n", wifiFailureCount);
+      Serial.printf("[WiFiSync] update: WiFi connect failed (reason=%u, failures=%u)\n",
+                    wifiDisconnectReason, wifiFailureCount);
+      wifiDisconnectReason = 0;
+      wifiConnectStartMillis = 0;
+      scheduleBackoff(now, wifiFailureCount);
+      return;
+    }
+
+    if (wifiConnectStartMillis != 0 && now - wifiConnectStartMillis >= WIFI_CONNECT_TIMEOUT_MS) {
+      lastError = SyncError::Wifi;
+      wifiFailureCount++;
+      Serial.printf("[WiFiSync] update: WiFi connect timeout (failures=%u)\n", wifiFailureCount);
+      wifiConnectStartMillis = 0;
+      WiFi.disconnect(true);
       scheduleBackoff(now, wifiFailureCount);
       return;
     }

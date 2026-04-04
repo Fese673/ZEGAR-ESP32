@@ -1,19 +1,116 @@
 # ZEGAR-ESP32
 
-Embedded firmware project for an ESP32-based clock platform.
+ESP32 firmware for a custom clock platform with integrated Bluetooth A2DP audio, WiFi/MQTT connectivity, sensor fusion, and LCD/user interface.
 
-## Repository Layout
-- `src/` - firmware source code grouped by domain
-- `include/` - public headers grouped by domain
-- `hardware/` - PCB, schematics, and hardware reference material
-- `third_party/` - external/vendor code and historical snapshots
-- `docs/reports/` - project reports and technical writeups
-- `scripts/` - build-time helper scripts
+## What this repository contains
+- `src/` - application code organized by domain: audio, bluetooth, comms, core, display, drivers, input, sensors, ui
+- `include/` - public module headers for cross-module integration
+- `hardware/` - PCB design, schematics, component references, and datasheets
+- `docs/` - technical reports, architecture notes, and telemetry documentation
+- `scripts/` - helper scripts used during build and test preparation
+- `test/` - log artifacts and supporting test documentation
+- `third_party/` - external vendor code and archived sources
 
-## Build
-- Environment: `esp32dev`
-- Command: `C:\Users\PC\.platformio\penv\Scripts\platformio.exe run --environment esp32dev`
+## Core capabilities
+- Bluetooth A2DP sink for audio playback via external I2S output
+- WiFi connectivity with MQTT publishing and secure TLS support
+- Sensor acquisition and display management for clock/ambient monitoring
+- Runtime telemetry counters and RAM snapshot diagnostics
+- FreeRTOS task isolation and heap fragmentation tracing
 
-## Notes
-- Keep generated files under their dedicated module folders.
-- Prefer lowercase folder names for cross-platform consistency.
+## Build and run
+### Recommended environment
+- PlatformIO environment: `esp32dev`
+- Board: `espressif32` / `esp32dev`
+- Framework: `arduino`
+
+### Build command
+```powershell
+C:\Users\PC\.platformio\penv\Scripts\platformio.exe run --environment esp32dev
+```
+
+### Optional upload command
+```powershell
+C:\Users\PC\.platformio\penv\Scripts\platformio.exe run --target upload --environment esp32dev
+```
+
+## PlatformIO configuration
+The project uses `platformio.ini` to configure:
+- `lib_deps` for required libraries
+- `build_flags` to enable telemetry and Bluetooth support
+- `board_build.partitions = huge_app.csv`
+- `extra_scripts = pre:scripts/generate_alarm_melodies.py`
+
+### Important build flags
+- `-DENABLE_RUNTIME_TELEMETRY=1` enables runtime event counters
+- `-DTEST_RAM=1` enables RAM snapshot instrumentation
+- `-DRAM_TELEMETRY_PRINT_INTERVAL_MS=5000UL` prints periodic RAM heartbeat lines
+- `-DTEST_RAM_HEAP_INFO=0` keeps heap info output off by default
+- `-DCONFIG_BT_ENABLED=1` enables Bluetooth support
+
+### Secret injection
+Private credentials should be injected via build flags rather than committed in source.
+Example:
+```ini
+-DPROJECT_WIFI_SSID=\"your-ssid\"
+-DPROJECT_WIFI_PASS=\"your-password\"
+-DPROJECT_MQTT_BROKER=\"your-broker\"
+-DPROJECT_MQTT_USERNAME=\"your-user\"
+-DPROJECT_MQTT_PASSWORD=\"your-pass\"
+```
+
+## Runtime telemetry
+Telemetry is intentionally lightweight and designed for debug sessions without scattering `Serial.print()` across the codebase.
+
+### Layers
+- `RuntimeTelemetry` — cumulative counters for runtime events such as I2C failures and audio underruns
+- `RamTelemetry` — stage-based heap snapshots and fragmentation metrics
+
+### Where to find docs
+- `docs/telemetry/README.md` describes the telemetry design, build flags, and interpretation of output
+
+## Architecture overview
+### Bluetooth / audio
+- `src/bluetooth/AudioBT.cpp` configures the A2DP queued sink and I2S output
+- `BluetoothA2DPSinkQueued` provides a ringbuffer + dedicated I2S task for audio stability
+- The implementation uses a prefetch threshold and task isolation to reduce underruns under mixed load
+- `audioBT_deinit()` intentionally retains classic BT memory via `a2dp->end(false)` so BT can restart without reboot
+
+### Network stack
+- `src/comms/WiFiSync.cpp` handles WiFi setup and optional NTP sync
+- `src/comms/MQTTSync.cpp` manages MQTT connection state, TLS setup, and publish buffering
+- `NetworkOrchestrator` selects between BT and WiFi modes and coordinates radio lifecycle
+
+### Input and UI
+- `src/input/Encoder.cpp` handles rotary encoder scanning and button debouncing in a small FreeRTOS task
+- `src/ui/` contains display output, menu rendering, and state-driven user interfaces
+
+### Sensors and drivers
+- `src/sensors/` includes collection and calibration code for connected sensors
+- `src/drivers/` contains low-level hardware drivers and bus abstractions
+- `include/config/` stores board pin assignments, secrets, and temperature configuration
+
+## Memory and performance notes
+- The platform is heap-constrained, so the project emphasizes heap-friendly buffer sizing and early telemetry
+- `RamTelemetry` reports free heap, largest free block, DMA free heap, fragmentation ratio, and stack high-water marks for key tasks
+- The Bluetooth audio path allocates a 24 KB I2S ringbuffer and is tuned for stable playback under mixed system load
+
+## Development workflow
+1. Set build flags in `platformio.ini` as needed for telemetry or production mode
+2. Build with `platformio run --environment esp32dev`
+3. Use the Serial Monitor to validate startup, connectivity, and telemetry output
+4. If working on Bluetooth audio, trace `AUDIO_ON` and `AUDIO_OFF` checkpoints together with `prefetch wait timed out` logs
+5. If debugging memory, enable `TEST_RAM=1` and inspect the heap snapshot lines from `RamTelemetry`
+
+## Notes and conventions
+- Keep generated or ephemeral files within their owning module folder
+- Prefer lowercase folder names in source and include paths for cross-platform consistency
+- Use `docs/` for architecture reports and long-form analysis rather than adding technical essays to `README.md`
+
+## Useful paths
+- `src/` — firmware source
+- `include/` — public interfaces
+- `platformio.ini` — build configuration
+- `docs/telemetry/README.md` — telemetry design and usage
+- `hardware/` — PCB and schematic references
+- `scripts/` — code generation and build helper scripts

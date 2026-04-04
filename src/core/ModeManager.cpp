@@ -5,6 +5,7 @@
 
 #include "RadioModeSwitch.h"
 #include "WiFiSync.h"
+#include "RamTelemetry.h"
 #include "bluetooth/AudioBT.h"
 #include "Encoder.h"
 
@@ -38,7 +39,13 @@ static void ensureHome() {
 // ============================================================================
 void wifiOn() {
   if (btActive) {
-    btOff();
+    Serial.println("[ModeManager] wifiOn() refused: BT is still active");
+    return;
+  }
+
+  if (wifiActive) {
+    ensureHome();
+    return;
   }
 
   // ALL WiFi hardware init is now in WiFiSync background task (Core 1)
@@ -47,21 +54,31 @@ void wifiOn() {
   radioMode = WIFI_ONLY;
   ensureHome();
   WiFiSync::startSync();
+  RAM_CHECKPOINT("WIFI_ON");
 }
 
 void wifiOff() {
+  const bool wasActive = wifiActive;
   WiFiSync::stop();
   wifiActive = false;
   ensureHome();
+  if (wasActive) {
+    RAM_CHECKPOINT("WIFI_OFF");
+  }
 }
 
 // ============================================================================
 // ZARZĄDZANIE BLUETOOTH
 // ============================================================================
 void btOn() {
-  // BT tylko gdy Wi-Fi jest wyłączone
   if (wifiActive) {
-    wifiOff();
+    Serial.println("[ModeManager] btOn() refused: Wi-Fi is still active");
+    return;
+  }
+
+  if (btActive) {
+    ensureHome();
+    return;
   }
 
   if (!btActive) {
@@ -80,16 +97,21 @@ void btOn() {
     // I2S teraz używa GPIO 33/32 zamiast 25/26 - konflikt ROZWIĄZANY
     // encoder_reinit_pins() zapewnia stabilną reinicjalizację po I2S init
     encoder_reinit_pins();
+    RAM_CHECKPOINT("BT_ON");
   }
   ensureHome();
 }
 
 void btOff() {
+  const bool wasActive = btActive;
   if (btActive) {
     audioBT_deinit();
     btActive = false;
   }
   ensureHome();
+  if (wasActive) {
+    RAM_CHECKPOINT("BT_OFF");
+  }
 }
 
 // ============================================================================
@@ -97,10 +119,13 @@ void btOff() {
 // ============================================================================
 void transitionRadio(RadioMode mode) {
   if (mode == WIFI_ONLY) {
+    btOff();
     wifiOn();
   } else {
+    wifiOff();
     btOn();
   }
+  RAM_CHECKPOINT("MODE_SWITCH_DONE");
 }
 
 // ============================================================================

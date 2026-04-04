@@ -95,6 +95,11 @@ unsigned long getLastPublishTime();
  */
 void setPublishInterval(unsigned long intervalMs);
 
+/**
+ * Get MQTT background task handle for telemetry.
+ */
+TaskHandle_t getTaskHandle();
+
 } // namespace MQTTSync
 
 #endif // MQTTSYNC_H

@@ -348,17 +348,19 @@ bool AHTxx::softReset()
 float AHTxx::readTemperature(bool readAHT)
 {
     if (readAHT == AHTXX_FORCE_READ_DATA) {
-        if (_state != AHT_STATE_READY) {
-            unsigned long timeout = millis() + 500;
-            while (_state != AHT_STATE_READY && _state != AHT_STATE_ERROR && millis() < timeout) {
-                update();
-                yield();
-            }
-            if (_state != AHT_STATE_READY) return AHTXX_ERROR;
+        ESP_LOGW("AHTxx", "readTemperature(FORCE_READ): blocking path, avoid in callbacks/UI tasks");
+
+        const unsigned long readyDeadline = millis() + 500;
+        while (_state != AHT_STATE_READY && _state != AHT_STATE_ERROR && millis() < readyDeadline) {
+            update();
+            yield();
         }
+        if (_state != AHT_STATE_READY) return AHTXX_ERROR;
+
         _lastMeasMs = 0;
-        unsigned long timeout = millis() + 300;
-        while (millis() < timeout) {
+
+        const unsigned long measureDeadline = millis() + 300;
+        while (millis() < measureDeadline) {
             if (update()) break;
             yield();
         }

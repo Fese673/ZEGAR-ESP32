@@ -141,6 +141,10 @@ extern uint8_t cpuCore1Percent;
 
 // --- System Resources ---
 extern uint32_t ramFreeBytes;
+extern uint32_t ramTotalBytes;
+extern uint32_t ramLargestBlockBytes;
+extern uint32_t ramMinFreeBytes;
+extern uint32_t ramDmaFreeBytes;
 extern uint32_t flashFreeBytes;
 
 // --- Settings (z main.cpp / UI_Controller.cpp) ---
@@ -1842,25 +1846,27 @@ void drawStats() {
   }
   // === 5c. WIDOK PAMIĘCI RAM ===
   case STATE_STATS_RESOURCES_RAM: {
-    uint32_t ramMB = ramFreeBytes / (1024 * 1024);
-    uint32_t ramKB = (ramFreeBytes % (1024 * 1024)) / 1024;
+    uint32_t ramKB = ramFreeBytes / 1024;
+    uint32_t largestKB = ramLargestBlockBytes / 1024;
+    uint32_t dmaKB = ramDmaFreeBytes / 1024;
 
     LCD_SET(0, 0);
     LCD_PRINT(F("PAMIEC RAM"));
 
     LCD_SET(0, 1);
     LCD_PRINT(F("Free: "));
-    LCD_PRINT(ramMB);
-    LCD_PRINT(F("."));
     LCD_PRINT(ramKB);
-    LCD_PRINT(F(" MB"));
+    LCD_PRINT(F(" KB"));
 
     LCD_SET(0, 2);
-    LCD_PRINT(F("Bytes: "));
-    LCD_PRINT(ramFreeBytes);
+    LCD_PRINT(F("Largest: "));
+    LCD_PRINT(largestKB);
+    LCD_PRINT(F(" KB"));
 
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    LCD_PRINT(F("DMA: "));
+    LCD_PRINT(dmaKB);
+    LCD_PRINT(F(" KB"));
     break;
   }
   // === 5d. WIDOK OBCIĄŻENIA CPU ===

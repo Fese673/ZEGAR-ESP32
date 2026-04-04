@@ -15,6 +15,8 @@
 
 #include "BluetoothA2DPSink.h"
 
+#include "RuntimeTelemetry.h"
+
 #if IS_VALID_PLATFORM
 
 // to support static callback functions
@@ -1312,15 +1314,40 @@ size_t BluetoothA2DPSink::i2s_write_data(const uint8_t *data,
     return 0;
   }
 
+  if (max_write_size <= 0) {
+    ESP_LOGE(BT_AV_TAG, "%s invalid max_write_size=%d", __func__,
+             max_write_size);
+    TELEMETRY_INC(audio_drops);
+    return 0;
+  }
+
   // split up outout to max size
-  int open = item_size;
-  int processed = 0;
+  size_t open = item_size;
+  size_t processed = 0;
   while (open > 0) {
-    int written = out->write(data + processed, std::min(open, max_write_size));
+    const size_t current_chunk = std::min(open, static_cast<size_t>(max_write_size));
+    size_t written = out->write(data + processed, current_chunk);
+    if (written > current_chunk) {
+      written = current_chunk;
+    }
+
+    if (written == 0) {
+      ESP_LOGW(BT_AV_TAG, "%s write stalled after %u/%u bytes", __func__,
+               (unsigned)processed, (unsigned)item_size);
+      break;
+    }
+
+    if (written < current_chunk) {
+      ESP_LOGW(BT_AV_TAG, "%s short write %u/%u bytes", __func__,
+               (unsigned)written, (unsigned)current_chunk);
+    }
+
     open -= written;
     processed += written;
-    // add some delay between the writes
-    delay_ms(max_write_delay_ms);
+
+    if (max_write_delay_ms > 0) {
+      delay_ms(max_write_delay_ms);
+    }
   }
   return processed;
 }

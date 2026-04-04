@@ -14,6 +14,7 @@ struct Config {
 
 void begin(const Config& config);
 void setMqttEnabled(bool enabled);
+void quiesceForModeSwitch(RadioModeSwitchNextMode nextMode);
 void update();
 
 bool isMqttInitialized();

@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <Esp.h>
 #include <esp_attr.h>  // Oficjalne makro RTC_NOINIT_ATTR
-#include "ModeManager.h"
+#include "NetworkOrchestrator.h"
 #include "StatsManager.h"
 
 // ============================================================================
@@ -40,12 +40,11 @@ namespace RadioModeSwitch {
   static unsigned long s_init_start_time = 0;   // Czas startu systemu - opóźniamy inicjalizację
   static bool s_restartPending = false;
   static unsigned long s_restartAtMs = 0;
-  static unsigned long s_next_bt_retry_ms = 0;
 
   constexpr unsigned long kRestartDelayMs = 100UL;
-  constexpr unsigned long kBtRetryIntervalMs = 3000UL;
 
   static void scheduleRestart() {
+    s_current_state = RADIO_STATE_TRANSITIONING;
     s_restartPending = true;
     s_restartAtMs = millis() + kRestartDelayMs;
   }
@@ -87,7 +86,6 @@ namespace RadioModeSwitch {
     s_init_start_time = millis();  // Zanotuj czas startu
     s_restartPending = false;
     s_restartAtMs = 0;
-    s_next_bt_retry_ms = 0;
 
     Serial.println("[RadioModeSwitch] Inicjalizacja zakończona");
     printDiagnostics();
@@ -125,6 +123,7 @@ namespace RadioModeSwitch {
                   rtc_state.hours, rtc_state.minutes, rtc_state.seconds);
     // Ensure any pending stats are flushed to NVS before restarting
     statsManager.saveStats();
+    NetworkOrchestrator::quiesceForModeSwitch(RADIO_NEXT_WIFI);
     Serial.flush();
 
     // KROK 4: Zaplanuj restart bez blokowania
@@ -145,6 +144,7 @@ namespace RadioModeSwitch {
                   rtc_state.hours, rtc_state.minutes, rtc_state.seconds);
     // Ensure any pending stats are flushed to NVS before restarting
     statsManager.saveStats();
+    NetworkOrchestrator::quiesceForModeSwitch(RADIO_NEXT_BT);
     Serial.flush();
 
     // KROK 4: Zaplanuj restart bez blokowania
@@ -178,27 +178,12 @@ namespace RadioModeSwitch {
     
     if (!s_mode_initialized && s_initialized && (millis() - s_init_start_time >= INIT_DELAY_MS)) {
       s_mode_initialized = true;
-      
-      // Teraz faktycznie inicjalizuj WiFi/BT
       if (s_next_mode == RADIO_NEXT_BT) {
         s_current_state = RADIO_STATE_BT;
-        s_next_bt_retry_ms = millis() + kBtRetryIntervalMs;
-        Serial.println("[RadioModeSwitch] update() - Inicjalizacja Bluetooth (po delay)");
-        ModeManager::btOn();
+        Serial.println("[RadioModeSwitch] update() - Bluetooth armed, orchestration will start stack after reboot");
       } else {
         s_current_state = RADIO_STATE_WIFI;
-        s_next_bt_retry_ms = 0;
-        Serial.println("[RadioModeSwitch] update() - Inicjalizacja WiFi (po delay)");
-        ModeManager::wifiOn();
-      }
-    }
-
-    if (s_mode_initialized && s_current_state == RADIO_STATE_BT && !ModeManager::isBtOn()) {
-      const unsigned long nowMs = millis();
-      if ((long)(nowMs - s_next_bt_retry_ms) >= 0) {
-        Serial.println("[RadioModeSwitch] BT inactive in BT mode, retrying init");
-        ModeManager::btOn();
-        s_next_bt_retry_ms = nowMs + kBtRetryIntervalMs;
+        Serial.println("[RadioModeSwitch] update() - WiFi armed, orchestration will start stack after reboot");
       }
     }
   }
@@ -243,10 +228,7 @@ namespace RadioModeSwitch {
     s_restartAtMs = 0;
 
     if (state == RADIO_STATE_WIFI) {
-      s_next_bt_retry_ms = 0;
       rtc_state.mode_flag = RTC_FLAG_NONE;
-    } else if (state == RADIO_STATE_BT) {
-      s_next_bt_retry_ms = millis() + kBtRetryIntervalMs;
     }
 
     Serial.printf("[RadioModeSwitch] Force mode: %s\n",

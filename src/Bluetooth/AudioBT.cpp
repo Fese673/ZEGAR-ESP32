@@ -4,6 +4,7 @@
 #include "esp_bt_main.h"
 #include "esp_log.h"
 #include "BoardPins.h"
+#include "RamTelemetry.h"
 
 #if A2DP_I2S_AUDIOTOOLS
 static audio_tools::I2SStream s_audioStream;
@@ -109,6 +110,7 @@ bool audioBT_init() {
         return false;
     }
 
+    RAM_CHECKPOINT("AUDIO_ON");
     return true;
 }
 
@@ -132,8 +134,13 @@ void audioBT_deinit() {
     s_audioStream.end();
 #endif
     connected = false;
+    RAM_CHECKPOINT("AUDIO_OFF");
 }
 
 bool audioBT_isConnected() {
     return connected;
+}
+
+TaskHandle_t audioBT_getI2STaskHandle() {
+    return (a2dp != nullptr) ? a2dp->getI2STaskHandle() : nullptr;
 }

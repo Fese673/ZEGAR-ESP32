@@ -18,11 +18,11 @@ static const SongTrack& currentTrack() {
   return kTracks[s_state.songIndex % kCount];
 }
 
-static void scheduleNextStep(uint8_t buzzerPin, unsigned long nowMs) {
+static void scheduleNextStep(uint8_t buzzerPin, unsigned long scheduledMs) {
   const SongTrack& track = currentTrack();
   if (track.length == 0) {
     noTone(buzzerPin);
-    s_state.nextStepMs = nowMs + 100;
+    s_state.nextStepMs = scheduledMs + 100;
     return;
   }
 
@@ -50,7 +50,7 @@ static void scheduleNextStep(uint8_t buzzerPin, unsigned long nowMs) {
     tone(buzzerPin, freq, toneMs);
   }
 
-  s_state.nextStepMs = nowMs + noteDurationMs;
+  s_state.nextStepMs = scheduledMs + noteDurationMs;
   s_state.noteIndex = (s_state.noteIndex + 1) % track.length;
 }
 
@@ -89,11 +89,17 @@ void service(uint8_t buzzerPin, unsigned long nowMs) {
     return;
   }
 
-  if (s_state.nextStepMs != 0 && nowMs < s_state.nextStepMs) {
+  if (s_state.nextStepMs == 0) {
+    scheduleNextStep(buzzerPin, nowMs);
     return;
   }
 
-  scheduleNextStep(buzzerPin, nowMs);
+  constexpr uint8_t kMaxCatchUpSteps = 6;
+  uint8_t catchUpSteps = 0;
+  while (s_state.active && (long)(nowMs - s_state.nextStepMs) >= 0 && catchUpSteps < kMaxCatchUpSteps) {
+    scheduleNextStep(buzzerPin, s_state.nextStepMs);
+    ++catchUpSteps;
+  }
 }
 
 void stop(uint8_t buzzerPin) {

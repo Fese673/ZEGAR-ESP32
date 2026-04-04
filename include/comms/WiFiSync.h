@@ -41,6 +41,9 @@ SyncError getLastError();
 void setOnStart(void (*cb)());
 void setOnDone(void (*cb)());
 
+// Get WiFi initialization task handle for telemetry.
+TaskHandle_t getInitTaskHandle();
+
 // Configure periodic sync interval (minutes). Valid range: 10..360.
 void setPeriodicSyncIntervalMinutes(uint16_t minutes);
 uint16_t getPeriodicSyncIntervalMinutes();

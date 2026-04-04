@@ -409,6 +409,450 @@ static bool handleSettingsLongCancel() {
   return false;
 }
 
+static void rotateMenuIndexByDir(int& index, int count, int dir) {
+  index = clampMenuIndexSafe(index + dir, count);
+}
+
+static void requestPmsReadAndDraw() {
+  PMS5003Sensor::requestImmediateRead();
+  markPmsDirtyAndDrawStats();
+}
+
+static bool handleMainMenuClick() {
+  if (appState != STATE_MENU) {
+    return false;
+  }
+
+  switch (menuIndex) {
+    case 0:  // Ustaw czas
+      appState  = STATE_SET_TIME;
+      editState = EDIT_HOURS;
+      drawSetTimeSafe();
+      return true;
+
+    case 1:  // Minutnik
+      appState  = STATE_TIMER;
+      editState = EDIT_DONE;
+      timerUiCursor = 0;
+      timerPresetIndex = 1;
+      drawTimerSafe();
+      return true;
+
+    case 2:  // Stoper
+      appState      = STATE_STOPER;
+      stoperRunning = false;
+      stoperElapsed = 0;
+      drawStoperSafe();
+      return true;
+
+    case 3:  // Budzik (lista budzików)
+      s_alarmReturnState = STATE_MENU;
+      appState = STATE_ALARMS_LIST;
+      if (alarmsMenuIndex < 0) alarmsMenuIndex = 0;
+      if (alarmsMenuIndex > alarmsCount) alarmsMenuIndex = alarmsCount;
+      drawStatsSafe();
+      return true;
+
+    case 4:  // Statystyki
+      appState       = STATE_STATS;
+      statsMenuIndex = 0;
+      drawStatsSafe();
+      return true;
+
+    case 5:  // Debug STM32
+      appState = STATE_DEBUG_STM32;
+      updateSevenSegSafe();
+      drawDebugSTM32Safe();
+      return true;
+
+    case 6:  // PMS5003
+      appState       = STATE_PMS5003;
+      pms5003MenuIndex = 0;
+      requestPmsReadAndDraw();
+      return true;
+
+    case 7:  // AHT21 + ENS160
+      appState = STATE_ENS160_AHT21;
+      ens160MenuIndex = 0;
+      ENS160AHT21Screen::markScreenDirty();
+      drawStatsSafe();
+      return true;
+
+    case 8:  // BMP280
+      appState = STATE_BMP280;
+      bmp280MenuIndex = 0;
+      BMP280Screen::markScreenDirty();
+      drawStatsSafe();
+      return true;
+
+    case 9:  // Ustawienia
+      appState        = STATE_SETTINGS;
+      settingsMenuIndex = 0;
+      drawStatsSafe();
+      return true;
+
+    case 10:  // Wyjście
+      appState = STATE_HOME;
+      updateSevenSegSafe();
+      drawHomeSafe();
+      return true;
+
+    case 11:  // Radio Mode (WiFi/Bluetooth)
+      if (RadioModeSwitch::getCurrentState() == RADIO_STATE_TRANSITIONING) {
+        return true;
+      }
+
+      if (RadioModeSwitch::getCurrentState() == RADIO_STATE_WIFI) {
+        radioMode = BT_ONLY;
+        RadioModeSwitch::requestModeSwitch_BT();
+      } else {
+        radioMode = WIFI_ONLY;
+        RadioModeSwitch::requestModeSwitch_WiFi();
+      }
+      return true;
+
+    default:
+      return true;
+  }
+}
+
+static bool handleStatsMenuClick() {
+  if (appState != STATE_STATS) {
+    return false;
+  }
+
+  switch (statsMenuIndex) {
+    case 0:
+      appState = STATE_STATS_CLICKS;
+      drawStatsSafe();
+      break;
+    case 1:
+      appState = STATE_STATS_STEPS;
+      drawStatsSafe();
+      break;
+    case 2:
+      appState = STATE_STATS_TEMP;
+      drawStatsSafe();
+      break;
+    case 3:
+      appState = STATE_STATS_HUM;
+      drawStatsSafe();
+      break;
+    case 4:
+      appState = STATE_STATS_RESOURCES_MENU;
+      resourcesMenuIndex = 0;
+      drawStatsSafe();
+      break;
+    case 5:
+      appState = STATE_MENU;
+      drawMenuSafe();
+      break;
+    default:
+      break;
+  }
+
+  return true;
+}
+
+static bool handleResourcesMenuClick() {
+  if (appState != STATE_STATS_RESOURCES_MENU) {
+    return false;
+  }
+
+  switch (resourcesMenuIndex) {
+    case 0:
+      appState = STATE_STATS_RESOURCES_RAM;
+      drawStatsSafe();
+      break;
+    case 1:
+      appState = STATE_STATS_RESOURCES_CPU;
+      drawStatsSafe();
+      break;
+    case 2:
+      appState = STATE_STATS_RESOURCES_FLASH;
+      drawStatsSafe();
+      break;
+    default:
+      break;
+  }
+
+  return true;
+}
+
+static bool handlePmsMenuClick() {
+  if (appState != STATE_PMS5003) {
+    return false;
+  }
+
+  switch (pms5003MenuIndex) {
+    case 0:
+      appState = STATE_PMS5003_CF1;
+      pms5003CF1MenuIndex = 0;
+      requestPmsReadAndDraw();
+      break;
+    case 1:
+      appState = STATE_PMS5003_ATM;
+      pms5003ATMMenuIndex = 0;
+      requestPmsReadAndDraw();
+      break;
+    case 2:
+      appState = STATE_PMS5003_PARTICLES;
+      pms5003ParticlesMenuIndex = 0;
+      requestPmsReadAndDraw();
+      break;
+    case 3:
+      appState = STATE_PMS5003_TELEMETRY;
+      requestPmsReadAndDraw();
+      break;
+    case 5:
+      appState = STATE_MENU;
+      drawMenuSafe();
+      break;
+    default:
+      break;
+  }
+
+  return true;
+}
+
+static bool handlePmsCf1MenuClick() {
+  if (appState != STATE_PMS5003_CF1) {
+    return false;
+  }
+
+  bool changed = false;
+
+  switch (pms5003CF1MenuIndex) {
+    case 0:
+      appState = STATE_PMS5003_CF1_PM1;
+      changed = true;
+      break;
+    case 1:
+      appState = STATE_PMS5003_CF1_PM25;
+      changed = true;
+      break;
+    case 2:
+      appState = STATE_PMS5003_CF1_PM10;
+      changed = true;
+      break;
+    default:
+      break;
+  }
+
+  if (changed) {
+    markPmsDirtyAndDrawStats();
+  }
+  return true;
+}
+
+static bool handlePmsAtmMenuClick() {
+  if (appState != STATE_PMS5003_ATM) {
+    return false;
+  }
+
+  bool changed = false;
+
+  switch (pms5003ATMMenuIndex) {
+    case 0:
+      appState = STATE_PMS5003_ATM_PM1;
+      changed = true;
+      break;
+    case 1:
+      appState = STATE_PMS5003_ATM_PM25;
+      changed = true;
+      break;
+    case 2:
+      appState = STATE_PMS5003_ATM_PM10;
+      changed = true;
+      break;
+    default:
+      break;
+  }
+
+  if (changed) {
+    markPmsDirtyAndDrawStats();
+  }
+  return true;
+}
+
+static bool handlePmsParticlesMenuClick() {
+  if (appState != STATE_PMS5003_PARTICLES) {
+    return false;
+  }
+
+  bool changed = false;
+
+  switch (pms5003ParticlesMenuIndex) {
+    case 0:
+      appState = STATE_PMS5003_PARTICLES_0_3;
+      changed = true;
+      break;
+    case 1:
+      appState = STATE_PMS5003_PARTICLES_0_5;
+      changed = true;
+      break;
+    case 2:
+      appState = STATE_PMS5003_PARTICLES_1_0;
+      changed = true;
+      break;
+    case 3:
+      appState = STATE_PMS5003_PARTICLES_2_5;
+      changed = true;
+      break;
+    case 4:
+      appState = STATE_PMS5003_PARTICLES_5_0;
+      changed = true;
+      break;
+    case 5:
+      appState = STATE_PMS5003_PARTICLES_10_0;
+      changed = true;
+      break;
+    default:
+      break;
+  }
+
+  if (changed) {
+    markPmsDirtyAndDrawStats();
+  }
+  return true;
+}
+
+static bool handleEnsMenuClick() {
+  if (appState != STATE_ENS160_AHT21) {
+    return false;
+  }
+
+  bool changed = false;
+
+  switch (ens160MenuIndex) {
+    case 0:
+      appState = STATE_ENS160_AHT21_GAS_AQI;
+      changed = true;
+      break;
+    case 1:
+      appState = STATE_ENS160_AHT21_GAS_TVOC;
+      changed = true;
+      break;
+    case 2:
+      appState = STATE_ENS160_AHT21_GAS_ECO2;
+      changed = true;
+      break;
+    case 3:
+      appState = STATE_ENS160_AHT21_CLIMATE_TEMP;
+      changed = true;
+      break;
+    case 4:
+      appState = STATE_ENS160_AHT21_CLIMATE_HUM;
+      changed = true;
+      break;
+    case 5:
+      appState = STATE_ENS160_AHT21_STATUS;
+      changed = true;
+      break;
+    default:
+      break;
+  }
+
+  if (changed) {
+    ENS160AHT21Screen::markScreenDirty();
+    drawStatsSafe();
+  }
+  return true;
+}
+
+static bool handleBmp280MenuClick() {
+  if (appState != STATE_BMP280) {
+    return false;
+  }
+
+  bool changed = false;
+
+  switch (bmp280MenuIndex) {
+    case 0:
+      appState = STATE_BMP280_TEMP;
+      changed = true;
+      break;
+    case 1:
+      appState = STATE_BMP280_PRESSURE;
+      changed = true;
+      break;
+    case 2:
+      appState = STATE_BMP280_STATUS;
+      changed = true;
+      break;
+    case 3:
+      appState = STATE_BMP280_ALTITUDE;
+      changed = true;
+      break;
+    default:
+      break;
+  }
+
+  if (changed) {
+    markBmp280DirtyAndDrawStats();
+  }
+  return true;
+}
+
+static bool handleSettingsMenuClick() {
+  if (appState != STATE_SETTINGS) {
+    return false;
+  }
+
+  switch (settingsMenuIndex) {
+    case 0:
+      appState = STATE_SETTINGS_PMS5003;
+      settingsPmsMenuIndex = pms5003Enabled ? 0 : 1;
+      drawStatsSafe();
+      break;
+    case 1:
+      appState = STATE_SETTINGS_BUZZER;
+      settingsBuzzerMenuIndex = buzzerEnabled ? 0 : 1;
+      drawStatsSafe();
+      break;
+    case 2:
+      appState = STATE_SETTINGS_MQTT;
+      settingsMqttMenuIndex = mqttEnabled ? 0 : 1;
+      drawStatsSafe();
+      break;
+    case 3:
+      settingsAlarmMelodyIndex = clampMenuIndexSafe(AlarmMelodyPrefs::loadIndex(s_prefs), AlarmMelodies::kCount);
+      s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
+      appState = STATE_SETTINGS_ALARM_MELODY;
+      drawStatsSafe();
+      break;
+    case 4:
+      appState = STATE_SETTINGS_SYNC;
+      s_prevSettingsSyncMin = settingsSyncMinutes;
+      drawStatsSafe();
+      break;
+    case 5:
+      appState = STATE_SETTINGS_ROTATION;
+      s_prevSettingsRotationSec = settingsRotationSec;
+      drawStatsSafe();
+      break;
+    case 6:
+      settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenIndex, settingsUiScreenCount);
+      appState = STATE_SETTINGS_UI_SCREEN;
+      s_prevSettingsUiScreenIndex = settingsUiScreenIndex;
+      drawStatsSafe();
+      break;
+    case 7:
+      settingsEpicIntroIndex = showEpicIntro ? 0 : 1;
+      appState = STATE_SETTINGS_BOOT_INTRO;
+      drawStatsSafe();
+      break;
+    case 8:
+      appState = STATE_MENU;
+      drawMenuSafe();
+      break;
+    default:
+      break;
+  }
+
+  return true;
+}
+
 void ui_begin(const UI_Callbacks& callbacks) {
   s_callbacks = callbacks;
   drawHomeSafe();
@@ -445,54 +889,54 @@ void ui_handleEvent(EncoderEvent e) {
 
     switch (appState) {
       case STATE_MENU:
-        menuIndex = constrain(menuIndex + dir, 0, menuCount - 1);
+        rotateMenuIndexByDir(menuIndex, menuCount, dir);
         drawMenuSafe();
         break;
 
       case STATE_STATS:
-        statsMenuIndex = constrain(statsMenuIndex + dir, 0, statsMenuCount - 1);
+        rotateMenuIndexByDir(statsMenuIndex, statsMenuCount, dir);
         drawStatsSafe();
         break;
 
       case STATE_STATS_RESOURCES_MENU:
-        resourcesMenuIndex = constrain(resourcesMenuIndex + dir, 0, resourcesMenuCount - 1);
+        rotateMenuIndexByDir(resourcesMenuIndex, resourcesMenuCount, dir);
         drawStatsSafe();
         break;
 
       case STATE_PMS5003:
-        pms5003MenuIndex = constrain(pms5003MenuIndex + dir, 0, pms5003MenuCount - 1);
+        rotateMenuIndexByDir(pms5003MenuIndex, pms5003MenuCount, dir);
         markPmsDirtyAndDrawStats();
         break;
 
       case STATE_PMS5003_CF1:
-        pms5003CF1MenuIndex = constrain(pms5003CF1MenuIndex + dir, 0, pms5003CF1MenuCount - 1);
+        rotateMenuIndexByDir(pms5003CF1MenuIndex, pms5003CF1MenuCount, dir);
         markPmsDirtyAndDrawStats();
         break;
 
       case STATE_PMS5003_ATM:
-        pms5003ATMMenuIndex = constrain(pms5003ATMMenuIndex + dir, 0, pms5003ATMMenuCount - 1);
+        rotateMenuIndexByDir(pms5003ATMMenuIndex, pms5003ATMMenuCount, dir);
         markPmsDirtyAndDrawStats();
         break;
 
       case STATE_PMS5003_PARTICLES:
-        pms5003ParticlesMenuIndex = constrain(pms5003ParticlesMenuIndex + dir, 0, pms5003ParticlesMenuCount - 1);
+        rotateMenuIndexByDir(pms5003ParticlesMenuIndex, pms5003ParticlesMenuCount, dir);
         markPmsDirtyAndDrawStats();
         break;
 
       case STATE_ENS160_AHT21:
-        ens160MenuIndex = constrain(ens160MenuIndex + dir, 0, ens160MenuCount - 1);
+        rotateMenuIndexByDir(ens160MenuIndex, ens160MenuCount, dir);
         ENS160AHT21Screen::markScreenDirty();
         drawStatsSafe();
         break;
 
       case STATE_BMP280:
-        bmp280MenuIndex = constrain(bmp280MenuIndex + dir, 0, bmp280MenuCount - 1);
+        rotateMenuIndexByDir(bmp280MenuIndex, bmp280MenuCount, dir);
         BMP280Screen::markScreenDirty();
         drawStatsSafe();
         break;
 
       case STATE_SETTINGS:
-        settingsMenuIndex = constrain(settingsMenuIndex + dir, 0, settingsMenuCount - 1);
+        rotateMenuIndexByDir(settingsMenuIndex, settingsMenuCount, dir);
         drawStatsSafe();
         break;
 
@@ -522,7 +966,7 @@ void ui_handleEvent(EncoderEvent e) {
 
       case STATE_ALARMS_LIST:
         // Move selection up/down; last entry is [+] add new
-        alarmsMenuIndex = constrain(alarmsMenuIndex + dir, 0, (alarmsCount > 0 ? alarmsCount : 0));
+        alarmsMenuIndex = constrain(alarmsMenuIndex + dir, 0, max(alarmsCount, 0));
         drawStatsSafe();
         break;
 
@@ -591,391 +1035,16 @@ void ui_handleEvent(EncoderEvent e) {
       return;
     }
 
-    // --- GŁÓWNE MENU (Wybór opcji) ---
-    if (appState == STATE_MENU) {
-      switch (menuIndex) {
-        case 0:  // Ustaw czas
-          appState  = STATE_SET_TIME;
-          editState = EDIT_HOURS;
-          drawSetTimeSafe();
-          return;
-
-        case 1:  // Minutnik
-          appState  = STATE_TIMER;
-          editState = EDIT_DONE;
-          timerUiCursor = 0;
-          timerPresetIndex = 1;
-          drawTimerSafe();
-          return;
-
-        case 2:  // Stoper
-          appState      = STATE_STOPER;
-          stoperRunning = false;
-          stoperElapsed = 0;
-          drawStoperSafe();
-          return;
-
-        case 3:  // Budzik (lista budzików)
-          s_alarmReturnState = STATE_MENU;
-          appState = STATE_ALARMS_LIST;
-          // ensure selection in range
-          if (alarmsMenuIndex < 0) alarmsMenuIndex = 0;
-          if (alarmsMenuIndex > alarmsCount) alarmsMenuIndex = alarmsCount;
-          drawStatsSafe();
-          return;
-
-        case 4:  // Statystyki
-          appState       = STATE_STATS;
-          statsMenuIndex = 0;
-          drawStatsSafe();
-          return;
-
-        case 5:  // Debug STM32
-          appState = STATE_DEBUG_STM32;
-          updateSevenSegSafe();
-          drawDebugSTM32Safe();
-          return;
-
-        case 6:  // PMS5003
-          appState       = STATE_PMS5003;
-          pms5003MenuIndex = 0;
-          // Przy wejściu do menu PMS – wymuś odczyt i pozwól na natychmiastowe rysowanie
-          PMS5003Sensor::requestImmediateRead();
-          markPmsDirtyAndDrawStats();
-          return;
-
-        case 7:  // AHT21 + ENS160
-          appState = STATE_ENS160_AHT21;
-          ens160MenuIndex = 0;
-          ENS160AHT21Screen::markScreenDirty();
-          drawStatsSafe();
-          return;
-
-        case 8:  // BMP280
-          appState = STATE_BMP280;
-          bmp280MenuIndex = 0;
-          BMP280Screen::markScreenDirty();
-          drawStatsSafe();
-          return;
-
-        case 9:  // Ustawienia
-          appState        = STATE_SETTINGS;
-          settingsMenuIndex = 0;
-          drawStatsSafe();
-          return;
-
-        case 10:  // Wyjście
-          appState = STATE_HOME;
-          updateSevenSegSafe();
-          drawHomeSafe();
-          return;
-
-        case 11:  // Radio Mode (WiFi/Bluetooth)
-          // Nie przełączaj jeśli już w trybie przejścia
-          if (RadioModeSwitch::getCurrentState() == RADIO_STATE_TRANSITIONING) {
-            return;
-          }
-
-          if (RadioModeSwitch::getCurrentState() == RADIO_STATE_WIFI) {
-            radioMode = BT_ONLY;
-            RadioModeSwitch::requestModeSwitch_BT();
-          } else {
-            radioMode = WIFI_ONLY;
-            RadioModeSwitch::requestModeSwitch_WiFi();
-          }
-          return;
-
-        default:
-          break;
-      }
-    }
-
-    // --- LOGIKA MENU STATYSTYK ---
-    if (appState == STATE_STATS) {
-      switch (statsMenuIndex) {
-        case 0:
-          appState = STATE_STATS_CLICKS;
-          drawStatsSafe();
-          break;
-        case 1:
-          appState = STATE_STATS_STEPS;
-          drawStatsSafe();
-          break;
-        case 2:
-          appState = STATE_STATS_TEMP;
-          drawStatsSafe();
-          break;
-        case 3:
-          appState = STATE_STATS_HUM;
-          drawStatsSafe();
-          break;
-        case 4:  // Zasoby
-          appState = STATE_STATS_RESOURCES_MENU;
-          resourcesMenuIndex = 0;
-          drawStatsSafe();
-          break;
-        case 5:  // Wyjście
-          appState = STATE_MENU;
-          drawMenuSafe();
-          break;
-        default:
-          break;
-      }
-      return;
-    }
-
-    // --- LOGIKA MENU ZASOBÓW ---
-    if (appState == STATE_STATS_RESOURCES_MENU) {
-      switch (resourcesMenuIndex) {
-        case 0:  // RAM Free
-          appState = STATE_STATS_RESOURCES_RAM;
-          drawStatsSafe();
-          break;
-        case 1:  // CPU
-          appState = STATE_STATS_RESOURCES_CPU;
-          drawStatsSafe();
-          break;
-        case 2:  // Flash Free
-          appState = STATE_STATS_RESOURCES_FLASH;
-          drawStatsSafe();
-          break;
-        default:
-          break;
-      }
-      return;
-    }
-
-    // --- LOGIKA MENU PMS5003 ---
-    if (appState == STATE_PMS5003) {
-      switch (pms5003MenuIndex) {
-        case 0:
-          appState = STATE_PMS5003_CF1;
-          pms5003CF1MenuIndex = 0;
-          PMS5003Sensor::requestImmediateRead();
-          markPmsDirtyAndDrawStats();
-          break;
-        case 1:
-          appState = STATE_PMS5003_ATM;
-          pms5003ATMMenuIndex = 0;
-          PMS5003Sensor::requestImmediateRead();
-          markPmsDirtyAndDrawStats();
-          break;
-        case 2:  // L.Czastek
-          appState = STATE_PMS5003_PARTICLES;
-          pms5003ParticlesMenuIndex = 0;
-          PMS5003Sensor::requestImmediateRead();
-          markPmsDirtyAndDrawStats();
-          break;
-        case 3:  // Telemetria
-          appState = STATE_PMS5003_TELEMETRY;
-          PMS5003Sensor::requestImmediateRead();
-          markPmsDirtyAndDrawStats();
-          break;
-        case 5:  // Wyjście
-          appState = STATE_MENU;
-          drawMenuSafe();
-          break;
-        default:
-          break;
-      }
-      return;
-    }
-
-    // --- LOGIKA MENU PMS5003 CF=1 (Widok danych z wyborem szczegółów) ---
-    if (appState == STATE_PMS5003_CF1) {
-      switch (pms5003CF1MenuIndex) {
-        case 0:  // PM1.0 - wejdź w szczegóły
-          appState = STATE_PMS5003_CF1_PM1;
-          markPmsDirtyAndDrawStats();
-          break;
-        case 1:  // PM2.5 - wejdź w szczegóły
-          appState = STATE_PMS5003_CF1_PM25;
-          markPmsDirtyAndDrawStats();
-          break;
-        case 2:  // PM10 - wejdź w szczegóły
-          appState = STATE_PMS5003_CF1_PM10;
-          markPmsDirtyAndDrawStats();
-          break;
-        default:
-          break;
-      }
-      return;
-    }
-
-    // --- LOGIKA MENU PMS5003 ATM (Widok danych z wyborem szczegółów) ---
-    if (appState == STATE_PMS5003_ATM) {
-      switch (pms5003ATMMenuIndex) {
-        case 0:  // PM1.0 - wejdź w szczegóły
-          appState = STATE_PMS5003_ATM_PM1;
-          markPmsDirtyAndDrawStats();
-          break;
-        case 1:  // PM2.5 - wejdź w szczegóły
-          appState = STATE_PMS5003_ATM_PM25;
-          markPmsDirtyAndDrawStats();
-          break;
-        case 2:  // PM10 - wejdź w szczegóły
-          appState = STATE_PMS5003_ATM_PM10;
-          markPmsDirtyAndDrawStats();
-          break;
-        default:
-          break;
-      }
-      return;
-    }
-
-    // --- LOGIKA MENU PMS5003 PARTICLES (Widok danych z wyborem szczegółów) ---
-    if (appState == STATE_PMS5003_PARTICLES) {
-      switch (pms5003ParticlesMenuIndex) {
-        case 0:  // 0.3um - wejdź w szczegóły
-          appState = STATE_PMS5003_PARTICLES_0_3;
-          markPmsDirtyAndDrawStats();
-          break;
-        case 1:  // 0.5um - wejdź w szczegóły
-          appState = STATE_PMS5003_PARTICLES_0_5;
-          markPmsDirtyAndDrawStats();
-          break;
-        case 2:  // 1.0um - wejdź w szczegóły
-          appState = STATE_PMS5003_PARTICLES_1_0;
-          markPmsDirtyAndDrawStats();
-          break;
-        case 3:  // 2.5um - wejdź w szczegóły
-          appState = STATE_PMS5003_PARTICLES_2_5;
-          markPmsDirtyAndDrawStats();
-          break;
-        case 4:  // 5.0um - wejdź w szczegóły
-          appState = STATE_PMS5003_PARTICLES_5_0;
-          markPmsDirtyAndDrawStats();
-          break;
-        case 5:  // 10um - wejdź w szczegóły
-          appState = STATE_PMS5003_PARTICLES_10_0;
-          markPmsDirtyAndDrawStats();
-          break;
-        default:
-          break;
-      }
-      return;
-    }
-
-    // --- LOGIKA MENU ENS160 + AHT21 ---
-    if (appState == STATE_ENS160_AHT21) {
-      switch (ens160MenuIndex) {
-        case 0:
-          appState = STATE_ENS160_AHT21_GAS_AQI;
-          ENS160AHT21Screen::markScreenDirty();
-          drawStatsSafe();
-          break;
-        case 1:
-          appState = STATE_ENS160_AHT21_GAS_TVOC;
-          ENS160AHT21Screen::markScreenDirty();
-          drawStatsSafe();
-          break;
-        case 2:
-          appState = STATE_ENS160_AHT21_GAS_ECO2;
-          ENS160AHT21Screen::markScreenDirty();
-          drawStatsSafe();
-          break;
-        case 3:
-          appState = STATE_ENS160_AHT21_CLIMATE_TEMP;
-          ENS160AHT21Screen::markScreenDirty();
-          drawStatsSafe();
-          break;
-        case 4:
-          appState = STATE_ENS160_AHT21_CLIMATE_HUM;
-          ENS160AHT21Screen::markScreenDirty();
-          drawStatsSafe();
-          break;
-        case 5:
-          appState = STATE_ENS160_AHT21_STATUS;
-          ENS160AHT21Screen::markScreenDirty();
-          drawStatsSafe();
-          break;
-        default:
-          break;
-      }
-      return;
-    }
-
-    // --- LOGIKA MENU BMP280 ---
-    if (appState == STATE_BMP280) {
-      switch (bmp280MenuIndex) {
-        case 0:
-          appState = STATE_BMP280_TEMP;
-          markBmp280DirtyAndDrawStats();
-          break;
-        case 1:
-          appState = STATE_BMP280_PRESSURE;
-          markBmp280DirtyAndDrawStats();
-          break;
-        case 2:
-          appState = STATE_BMP280_STATUS;
-          markBmp280DirtyAndDrawStats();
-          break;
-        case 3:
-          appState = STATE_BMP280_ALTITUDE;
-          markBmp280DirtyAndDrawStats();
-          break;
-        default:
-          break;
-      }
-      return;
-    }
-
-    // --- LOGIKA MENU USTAWIEŃ (Settings) ---
-    if (appState == STATE_SETTINGS) {
-      switch (settingsMenuIndex) {
-        case 0:  // PMS5003
-          appState = STATE_SETTINGS_PMS5003;
-          settingsPmsMenuIndex = pms5003Enabled ? 0 : 1;
-          drawStatsSafe();
-          break;
-        case 1:  // Buzzer
-          appState = STATE_SETTINGS_BUZZER;
-          settingsBuzzerMenuIndex = buzzerEnabled ? 0 : 1;
-          drawStatsSafe();
-          break;
-        case 2:  // MQTT
-          appState = STATE_SETTINGS_MQTT;
-          settingsMqttMenuIndex = mqttEnabled ? 0 : 1;
-          drawStatsSafe();
-          break;
-        case 3:  // ALARMY
-          settingsAlarmMelodyIndex = clampMenuIndexSafe(AlarmMelodyPrefs::loadIndex(s_prefs), AlarmMelodies::kCount);
-          s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
-          appState = STATE_SETTINGS_ALARM_MELODY;
-          drawStatsSafe();
-          break;
-        case 4:  // Synchronizacja
-          appState = STATE_SETTINGS_SYNC;
-          // store previous value so long-press can cancel
-          s_prevSettingsSyncMin = settingsSyncMinutes;
-          drawStatsSafe();
-          break;
-        case 5:  // Rotacja Ekranu
-          appState = STATE_SETTINGS_ROTATION;
-          // store previous value so long-press can cancel
-          s_prevSettingsRotationSec = settingsRotationSec;
-          drawStatsSafe();
-          break;
-        case 6:  // UI Ekran
-          settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenIndex, settingsUiScreenCount);
-          appState = STATE_SETTINGS_UI_SCREEN;
-          s_prevSettingsUiScreenIndex = settingsUiScreenIndex;
-          drawStatsSafe();
-          break;
-        case 7:  // Boot Intro
-          settingsEpicIntroIndex = showEpicIntro ? 0 : 1;
-          appState = STATE_SETTINGS_BOOT_INTRO;
-          drawStatsSafe();
-          break;
-        case 8:  // Wyjście
-          appState = STATE_MENU;
-          drawMenuSafe();
-          break;
-        default:
-          break;
-      }
-      return;
-    }
+    if (handleMainMenuClick()) return;
+    if (handleStatsMenuClick()) return;
+    if (handleResourcesMenuClick()) return;
+    if (handlePmsMenuClick()) return;
+    if (handlePmsCf1MenuClick()) return;
+    if (handlePmsAtmMenuClick()) return;
+    if (handlePmsParticlesMenuClick()) return;
+    if (handleEnsMenuClick()) return;
+    if (handleBmp280MenuClick()) return;
+    if (handleSettingsMenuClick()) return;
 
     if (handleSettingsConfirmClick()) {
       return;

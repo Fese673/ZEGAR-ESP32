@@ -1043,6 +1043,26 @@ static bool isEns160State(AppState state) {
          state == STATE_ENS160_AHT21_STATUS;
 }
 
+static bool isPmsState(AppState state) {
+  return state == STATE_PMS5003 ||
+         state == STATE_PMS5003_CF1 ||
+         state == STATE_PMS5003_CF1_PM1 ||
+         state == STATE_PMS5003_CF1_PM25 ||
+         state == STATE_PMS5003_CF1_PM10 ||
+         state == STATE_PMS5003_ATM ||
+         state == STATE_PMS5003_ATM_PM1 ||
+         state == STATE_PMS5003_ATM_PM25 ||
+         state == STATE_PMS5003_ATM_PM10 ||
+         state == STATE_PMS5003_PARTICLES ||
+         state == STATE_PMS5003_PARTICLES_0_3 ||
+         state == STATE_PMS5003_PARTICLES_0_5 ||
+         state == STATE_PMS5003_PARTICLES_1_0 ||
+         state == STATE_PMS5003_PARTICLES_2_5 ||
+         state == STATE_PMS5003_PARTICLES_5_0 ||
+         state == STATE_PMS5003_PARTICLES_10_0 ||
+         state == STATE_PMS5003_TELEMETRY;
+}
+
 static bool isBmp280State(AppState state) {
   return state == STATE_BMP280 ||
          state == STATE_BMP280_TEMP ||
@@ -1091,6 +1111,144 @@ static void printBmp280AgeSeconds(uint32_t lastSampleMs) {
 
   LCD_PRINT((millis() - lastSampleMs) / 1000UL);
   LCD_PRINT(F("s"));
+}
+
+typedef void (*PagedMenuRowRenderer)(int itemIndex);
+
+static void drawLongBackFooter() {
+  LCD_SET(0, 3);
+  LCD_PRINT(F("Dlugi -> Powrot"));
+}
+
+static void drawPagedMenu3Rows(uint8_t headerCol,
+                               const __FlashStringHelper* header,
+                               int selectedIndex,
+                               int itemCount,
+                               PagedMenuRowRenderer rowRenderer) {
+  LCD_SET(headerCol, 0);
+  LCD_PRINT(header);
+
+  const int first = (selectedIndex / 3) * 3;
+  for (int row = 0; row < 3; ++row) {
+    const int item = first + row;
+    if (item >= itemCount) {
+      break;
+    }
+
+    LCD_SET(0, row + 1);
+    LCD_PRINT(item == selectedIndex ? F("> ") : F("  "));
+    rowRenderer(item);
+  }
+}
+
+static void drawCenteredSettingLine(const __FlashStringHelper* title, const char* valueLine) {
+  lcdPrintCentered(0, title);
+  lcdPrintCentered(1, F(ALIGN_CENTER));
+  lcdPrintCentered(2, valueLine);
+  clearRow(3);
+}
+
+static void drawCenteredSettingFormatted(const __FlashStringHelper* title,
+                                         const char* lineFormat,
+                                         const char* value) {
+  char line[32];
+  snprintf(line, sizeof(line), lineFormat, value);
+  drawCenteredSettingLine(title, line);
+}
+
+static void drawPmsMassMenu(const __FlashStringHelper* title,
+                            int selectedIndex,
+                            uint16_t pm1,
+                            uint16_t pm25,
+                            uint16_t pm10) {
+  LCD_SET(0, 0);
+  LCD_PRINT(title);
+
+  LCD_SET(0, 1);
+  LCD_PRINT(selectedIndex == 0 ? F(">") : F(" "));
+  LCD_PRINT(F(" PM1.0: "));
+  LCD_PRINT(pm1 > 0 ? pm1 : 0);
+  LCD_PRINT(F(" \xE4g/m3"));
+
+  LCD_SET(0, 2);
+  LCD_PRINT(selectedIndex == 1 ? F(">") : F(" "));
+  LCD_PRINT(F(" PM2.5: "));
+  LCD_PRINT(pm25 > 0 ? pm25 : 0);
+  LCD_PRINT(F(" \xE4g/m3"));
+
+  LCD_SET(0, 3);
+  LCD_PRINT(selectedIndex == 2 ? F(">") : F(" "));
+  LCD_PRINT(F(" PM10:  "));
+  LCD_PRINT(pm10 > 0 ? pm10 : 0);
+  LCD_PRINT(F(" \xE4g/m3"));
+}
+
+static void drawPmsMassDetail(const __FlashStringHelper* title,
+                              uint16_t current,
+                              uint16_t minValue,
+                              uint16_t maxValue) {
+  LCD_SET(0, 0);
+  LCD_PRINT(title);
+  LCD_SET(0, 1);
+  LCD_PRINT(F("Biezaca: "));
+  LCD_PRINT(current);
+  LCD_PRINT(F(" \xE4g/m3"));
+  LCD_SET(0, 2);
+  LCD_PRINT(F("Min:"));
+  LCD_PRINT(minValue < 9999 ? minValue : 0);
+  LCD_PRINT(F(" Max:"));
+  LCD_PRINT(maxValue);
+  drawLongBackFooter();
+}
+
+static void drawPmsParticleDetail(const __FlashStringHelper* title,
+                                  uint16_t current,
+                                  uint16_t minValue,
+                                  uint16_t maxValue) {
+  LCD_SET(0, 0);
+  LCD_PRINT(title);
+  LCD_SET(0, 1);
+  LCD_PRINT(F("Biezaca: "));
+  LCD_PRINT(current);
+  LCD_SET(0, 2);
+  LCD_PRINT(F("Min:"));
+  LCD_PRINT(minValue < 9999 ? minValue : 0);
+  LCD_PRINT(F(" Max:"));
+  LCD_PRINT(maxValue);
+  drawLongBackFooter();
+}
+
+static void drawPmsParticlesMenu() {
+  static const char* const kParticleLabels[] = {
+      "0.3um", "0.5um", "1.0um", "2.5um", "5.0um", "10um",
+  };
+
+  const uint16_t particleValues[] = {
+      pms5003_particleCount_0_3,
+      pms5003_particleCount_0_5,
+      pms5003_particleCount_1_0,
+      pms5003_particleCount_2_5,
+      pms5003_particleCount_5_0,
+      pms5003_particleCount_10_0,
+  };
+
+  LCD_SET(0, 0);
+  LCD_PRINT(F("Liczba Czastek"));
+
+  const int first = (pms5003ParticlesMenuIndex / 3) * 3;
+  for (int row = 0; row < 3; ++row) {
+    const int i = first + row;
+    if (i >= 6) {
+      break;
+    }
+
+    LCD_SET(0, row + 1);
+    LCD_PRINT(i == pms5003ParticlesMenuIndex ? F(">") : F(" "));
+    LCD_PRINT(F(" "));
+    LCD_PRINT(kParticleLabels[i]);
+    LCD_PRINT(F(": "));
+    LCD_PRINT(particleValues[i]);
+  }
 }
 
 struct Ens160UiHistory {
@@ -1240,14 +1398,29 @@ static void printEnsMenuValue(int itemIndex, const ENS160AHT21Screen::RuntimeDat
   }
 }
 
+static void drawPmsMenuRow(int itemIndex) {
+  LCD_PRINT(pms5003MenuItems[itemIndex]);
+}
+
+static void drawEnsMenuRow(int itemIndex) {
+  printEnsMenuValue(itemIndex, ENS160AHT21Screen::runtimeData);
+}
+
+static void drawBmpMenuRow(int itemIndex) {
+  printBmp280MenuValue(itemIndex, BMP280Screen::runtimeData);
+}
+
+static void drawSettingsMenuRow(int itemIndex) {
+  LCD_PRINT(settingsMenuItems[itemIndex]);
+}
+
+static void drawResourcesMenuRow(int itemIndex) {
+  LCD_PRINT(resourcesMenuItems[itemIndex]);
+}
+
 void drawStats() {
   // Optymalizacja dla ekranów PMS5003: rysuj tylko gdy są nowe dane
-  if (appState == STATE_PMS5003 || appState == STATE_PMS5003_CF1 ||
-      appState == STATE_PMS5003_CF1_PM1 || appState == STATE_PMS5003_CF1_PM25 || appState == STATE_PMS5003_CF1_PM10 ||
-      appState == STATE_PMS5003_ATM || appState == STATE_PMS5003_ATM_PM1 || appState == STATE_PMS5003_ATM_PM25 || appState == STATE_PMS5003_ATM_PM10 ||
-      appState == STATE_PMS5003_PARTICLES || appState == STATE_PMS5003_PARTICLES_0_3 || appState == STATE_PMS5003_PARTICLES_0_5 ||
-      appState == STATE_PMS5003_PARTICLES_1_0 || appState == STATE_PMS5003_PARTICLES_2_5 || appState == STATE_PMS5003_PARTICLES_5_0 || appState == STATE_PMS5003_PARTICLES_10_0 ||
-      appState == STATE_PMS5003_TELEMETRY) {
+  if (isPmsState(appState)) {
     static uint32_t lastPmsSeen = 0;
     uint32_t lu = PMS5003Sensor::getLastUpdateTime();
     if (!pmsScreenDirty && lu == lastPmsSeen) return; // brak nowych danych -> nie rysuj
@@ -1318,34 +1491,11 @@ void drawStats() {
   }
   // === 1b. MENU PMS5003 (LISTA Z WYBOREM) ===
   case STATE_PMS5003: {
-    LCD_SET(2, 0);
-    LCD_PRINT(F("MENU PMS5003"));
-
-    const int first = (pms5003MenuIndex / 3) * 3;
-
-    for (int row = 0; row < 3; row++) {
-      const int i = first + row;
-      if (i >= pms5003MenuCount) break;
-
-      LCD_SET(0, row + 1);
-      LCD_PRINT(i == pms5003MenuIndex ? F("> ") : F("  "));
-      LCD_PRINT(pms5003MenuItems[i]);
-    }
+    drawPagedMenu3Rows(2, F("MENU PMS5003"), pms5003MenuIndex, pms5003MenuCount, drawPmsMenuRow);
     break;
   }
   case STATE_ENS160_AHT21: {
-    LCD_SET(1, 0);
-    LCD_PRINT(F("AHT21 + ENS160"));
-
-    const int first = (ens160MenuIndex / 3) * 3;
-    for (int row = 0; row < 3; row++) {
-      const int i = first + row;
-      if (i >= ens160MenuCount) break;
-
-      LCD_SET(0, row + 1);
-      LCD_PRINT(i == ens160MenuIndex ? F("> ") : F("  "));
-      printEnsMenuValue(i, ENS160AHT21Screen::runtimeData);
-    }
+    drawPagedMenu3Rows(1, F("AHT21 + ENS160"), ens160MenuIndex, ens160MenuCount, drawEnsMenuRow);
     break;
   }
   case STATE_ENS160_AHT21_GAS_AQI: {
@@ -1492,18 +1642,7 @@ void drawStats() {
     break;
   }
   case STATE_BMP280: {
-    LCD_SET(2, 0);
-    LCD_PRINT(F("BMP280"));
-
-    const int first = (bmp280MenuIndex / 3) * 3;
-    for (int row = 0; row < 3; row++) {
-      const int i = first + row;
-      if (i >= bmp280MenuCount) break;
-
-      LCD_SET(0, row + 1);
-      LCD_PRINT(i == bmp280MenuIndex ? F("> ") : F("  "));
-      printBmp280MenuValue(i, BMP280Screen::runtimeData);
-    }
+    drawPagedMenu3Rows(2, F("BMP280"), bmp280MenuIndex, bmp280MenuCount, drawBmpMenuRow);
     break;
   }
   case STATE_BMP280_TEMP: {
@@ -1598,55 +1737,22 @@ void drawStats() {
   }
   // === 1c. MENU USTAWIEŃ (Settings) ===
   case STATE_SETTINGS: {
-    LCD_SET(2, 0);
-    LCD_PRINT(F("USTAWIENIA"));
-
-    const int first = (settingsMenuIndex / 3) * 3;
-
-    for (int row = 0; row < 3; row++) {
-      const int i = first + row;
-      if (i >= settingsMenuCount) break;
-
-      LCD_SET(0, row + 1);
-      LCD_PRINT(i == settingsMenuIndex ? F("> ") : F("  "));
-      LCD_PRINT(settingsMenuItems[i]);
-    }
+    drawPagedMenu3Rows(2, F("USTAWIENIA"), settingsMenuIndex, settingsMenuCount, drawSettingsMenuRow);
     break;
   }
   // === 1d. USTAWIENIA PMS5003 (włącz/wyłącz) ===
   case STATE_SETTINGS_PMS5003: {
-    lcdPrintCentered(0, F("PMS5003"));
-    lcdPrintCentered(1, F(ALIGN_CENTER));
-
-    char pbuf[21];
-    const char* pstate = settingsPmsMenuIndex == 0 ? "ON" : "OFF";
-    snprintf(pbuf, sizeof(pbuf), "SENSOR: <  %s  >", pstate);
-    lcdPrintCentered(2, pbuf);
-    clearRow(3);
+    drawCenteredSettingFormatted(F("PMS5003"), "SENSOR: <  %s  >", settingsPmsMenuIndex == 0 ? "ON" : "OFF");
     break;
   }
   // === 1e. USTAWIENIA BUZERA (włącz/wyłącz) ===
   case STATE_SETTINGS_BUZZER: {
-    lcdPrintCentered(0, F("BUZZER"));
-    lcdPrintCentered(1, F(ALIGN_CENTER));
-
-    char bbuf[21];
-    const char* bstate = settingsBuzzerMenuIndex == 0 ? "ON" : "OFF";
-    snprintf(bbuf, sizeof(bbuf), "STAN:   <  %s  >", bstate);
-    lcdPrintCentered(2, bbuf);
-    clearRow(3);
+    drawCenteredSettingFormatted(F("BUZZER"), "STAN:   <  %s  >", settingsBuzzerMenuIndex == 0 ? "ON" : "OFF");
     break;
   }
   // === 1f. USTAWIENIA MQTT (włącz/wyłącz) ===
   case STATE_SETTINGS_MQTT: {
-    lcdPrintCentered(0, F("MQTT"));
-    lcdPrintCentered(1, F(ALIGN_CENTER));
-
-    char buf[21];
-    const char* state = settingsMqttMenuIndex == 0 ? "ON" : "OFF";
-    snprintf(buf, sizeof(buf), "BROKER: <  %s  >", state);
-    lcdPrintCentered(2, buf);
-    clearRow(3);
+    drawCenteredSettingFormatted(F("MQTT"), "BROKER: <  %s  >", settingsMqttMenuIndex == 0 ? "ON" : "OFF");
     break;
   }
   // === 1f1. Wybór melodii alarmu ===
@@ -1669,13 +1775,9 @@ void drawStats() {
   }
   // === 1g. USTAWIENIE: ROTACJA EKRANU (1..10s, enkoder) ===
   case STATE_SETTINGS_ROTATION: {
-    lcdPrintCentered(0, F("ROTACJA EKRANU"));
-    lcdPrintCentered(1, F(ALIGN_CENTER));
-
     char valueBuf[32];
     snprintf(valueBuf, sizeof(valueBuf), "CZAS: < %2ds >", settingsRotationSec);
-    lcdPrintCentered(2, valueBuf);
-    clearRow(3);
+    drawCenteredSettingLine(F("ROTACJA EKRANU"), valueBuf);
     break;
   }
   // === 1g1. USTAWIENIA UI EKRAN (wizualny wybór profilu) ===
@@ -1698,13 +1800,8 @@ void drawStats() {
   }
   // === 1g2. USTAWIENIA BOOT INTRO (włącz/wyłącz) ===
   case STATE_SETTINGS_BOOT_INTRO: {
-    lcdPrintCentered(0, F("BOOT INTRO"));
-    lcdPrintCentered(1, F(ALIGN_CENTER));
-
-    char valueBuf[32];
-    snprintf(valueBuf, sizeof(valueBuf), "START: <  %s  >", settingsEpicIntroItems[settingsEpicIntroIndex == 0 ? 0 : 1]);
-    lcdPrintCentered(2, valueBuf);
-    clearRow(3);
+    const int introIndex = (settingsEpicIntroIndex == 0) ? 0 : 1;
+    drawCenteredSettingFormatted(F("BOOT INTRO"), "START: <  %s  >", settingsEpicIntroItems[introIndex]);
     break;
   }
   // === 1x. Lista budzików ===
@@ -1767,13 +1864,9 @@ void drawStats() {
   
   // === 1h. USTAWIENIE: SYNCHRONIZACJA NTP (10..360 min, enkoder) ===
   case STATE_SETTINGS_SYNC: {
-    lcdPrintCentered(0, F("SYNCHRONIZACJA"));
-    lcdPrintCentered(1, F(ALIGN_CENTER));
-
     char valueBuf[32];
     snprintf(valueBuf, sizeof(valueBuf), "CZAS: < %3dmin >", settingsSyncMinutes);
-    lcdPrintCentered(2, valueBuf);
-    clearRow(3);
+    drawCenteredSettingLine(F("SYNCHRONIZACJA"), valueBuf);
     break;
   }
   // === 2. WIDOK KLIKNIĘĆ ===
@@ -1850,19 +1943,7 @@ void drawStats() {
   }
   // === 5b. MENU ZASOBÓW SYSTEMU ===
   case STATE_STATS_RESOURCES_MENU: {
-    LCD_SET(1, 0);
-    LCD_PRINT(F("ZASOBY SYSTEMU"));
-
-    const int first = (resourcesMenuIndex / 3) * 3;
-
-    for (int row = 0; row < 3; row++) {
-      const int i = first + row;
-      if (i >= resourcesMenuCount) break;
-
-      LCD_SET(0, row + 1);
-      LCD_PRINT(i == resourcesMenuIndex ? F("> ") : F("  "));
-      LCD_PRINT(resourcesMenuItems[i]);
-    }
+    drawPagedMenu3Rows(1, F("ZASOBY SYSTEMU"), resourcesMenuIndex, resourcesMenuCount, drawResourcesMenuRow);
     break;
   }
   // === 5c. WIDOK PAMIĘCI RAM ===
@@ -1936,197 +2017,86 @@ void drawStats() {
   }
   // === 6. WIDOK PMS5003 TRYB FABRYCZNY CF=1 (BIEŻĄCE DANE Z WYBOREM) ===
   case STATE_PMS5003_CF1: {
-    LCD_SET(0, 0);
-    LCD_PRINT(F("PMS5003 CF=1"));
-    
-    // Wiersz 1: PM1.0 (z > jeśli wybrany)
-    LCD_SET(0, 1);
-    LCD_PRINT(pms5003CF1MenuIndex == 0 ? F(">") : F(" "));
-    LCD_PRINT(F(" PM1.0: "));
-    LCD_PRINT(pms5003_PM1_0_CF1 > 0 ? pms5003_PM1_0_CF1 : 0);
-    LCD_PRINT(F(" \xE4g/m3"));
-    
-    // Wiersz 2: PM2.5
-    LCD_SET(0, 2);
-    LCD_PRINT(pms5003CF1MenuIndex == 1 ? F(">") : F(" "));
-    LCD_PRINT(F(" PM2.5: "));
-    LCD_PRINT(pms5003_PM2_5_CF1 > 0 ? pms5003_PM2_5_CF1 : 0);
-    LCD_PRINT(F(" \xE4g/m3"));
-    
-    // Wiersz 3: PM10
-    LCD_SET(0, 3);
-    LCD_PRINT(pms5003CF1MenuIndex == 2 ? F(">") : F(" "));
-    LCD_PRINT(F(" PM10:  "));
-    LCD_PRINT(pms5003_PM10_CF1 > 0 ? pms5003_PM10_CF1 : 0);
-    LCD_PRINT(F(" \xE4g/m3"));
+    drawPmsMassMenu(F("PMS5003 CF=1"),
+                    pms5003CF1MenuIndex,
+                    pms5003_PM1_0_CF1,
+                    pms5003_PM2_5_CF1,
+                    pms5003_PM10_CF1);
     break;
   }
   // === 6a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB CF=1 (MIN/MAX) ===
   case STATE_PMS5003_CF1_PM1: {
-    LCD_SET(0, 0); LCD_PRINT(F("PM1.0 CF=1"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM1_0_CF1); LCD_PRINT(F(" \xE4g/m3"));
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM1_0_CF1_MIN < 9999 ? pms5003_PM1_0_CF1_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM1_0_CF1_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsMassDetail(F("PM1.0 CF=1"), pms5003_PM1_0_CF1, pms5003_PM1_0_CF1_MIN, pms5003_PM1_0_CF1_MAX);
     break;
   }
   // === 6b. WIDOK SZCZEGÓŁÓW PM2.5 TRYB CF=1 (MIN/MAX) ===
   case STATE_PMS5003_CF1_PM25: {
-    LCD_SET(0, 0); LCD_PRINT(F("PM2.5 CF=1"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM2_5_CF1); LCD_PRINT(F(" \xE4g/m3"));
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM2_5_CF1_MIN < 9999 ? pms5003_PM2_5_CF1_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM2_5_CF1_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsMassDetail(F("PM2.5 CF=1"), pms5003_PM2_5_CF1, pms5003_PM2_5_CF1_MIN, pms5003_PM2_5_CF1_MAX);
     break;
   }
   // === 6c. WIDOK SZCZEGÓŁÓW PM10 TRYB CF=1 (MIN/MAX) ===
   case STATE_PMS5003_CF1_PM10: {
-    LCD_SET(0, 0); LCD_PRINT(F("PM10 CF=1"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM10_CF1); LCD_PRINT(F(" \xE4g/m3"));
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM10_CF1_MIN < 9999 ? pms5003_PM10_CF1_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM10_CF1_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsMassDetail(F("PM10 CF=1"), pms5003_PM10_CF1, pms5003_PM10_CF1_MIN, pms5003_PM10_CF1_MAX);
     break;
   }
   // === 7. WIDOK PMS5003 TRYB ATMOSFERYCZNY (BIEŻĄCE DANE Z WYBOREM) ===
   case STATE_PMS5003_ATM: {
-    LCD_SET(0, 0);
-    LCD_PRINT(F("PMS5003 ATM"));
-    
-    // Wiersz 1: PM1.0
-    LCD_SET(0, 1);
-    LCD_PRINT(pms5003ATMMenuIndex == 0 ? F(">") : F(" "));
-    LCD_PRINT(F(" PM1.0: "));
-    LCD_PRINT(pms5003_PM1_0_ATM > 0 ? pms5003_PM1_0_ATM : 0);
-    LCD_PRINT(F(" \xE4g/m3"));
-    
-    // Wiersz 2: PM2.5
-    LCD_SET(0, 2);
-    LCD_PRINT(pms5003ATMMenuIndex == 1 ? F(">") : F(" "));
-    LCD_PRINT(F(" PM2.5: "));
-    LCD_PRINT(pms5003_PM2_5_ATM > 0 ? pms5003_PM2_5_ATM : 0);
-    LCD_PRINT(F(" \xE4g/m3"));
-    
-    // Wiersz 3: PM10
-    LCD_SET(0, 3);
-    LCD_PRINT(pms5003ATMMenuIndex == 2 ? F(">") : F(" "));
-    LCD_PRINT(F(" PM10:  "));
-    LCD_PRINT(pms5003_PM10_ATM > 0 ? pms5003_PM10_ATM : 0);
-    LCD_PRINT(F(" \xE4g/m3"));
+    drawPmsMassMenu(F("PMS5003 ATM"),
+                    pms5003ATMMenuIndex,
+                    pms5003_PM1_0_ATM,
+                    pms5003_PM2_5_ATM,
+                    pms5003_PM10_ATM);
     break;
   }
   // === 7a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB ATM (MIN/MAX) ===
   case STATE_PMS5003_ATM_PM1: {
-    LCD_SET(0, 0); LCD_PRINT(F("PM1.0 ATM"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM1_0_ATM); LCD_PRINT(F(" \xE4g/m3"));
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM1_0_ATM_MIN < 9999 ? pms5003_PM1_0_ATM_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM1_0_ATM_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsMassDetail(F("PM1.0 ATM"), pms5003_PM1_0_ATM, pms5003_PM1_0_ATM_MIN, pms5003_PM1_0_ATM_MAX);
     break;
   }
   // === 7b. WIDOK SZCZEGÓŁÓW PM2.5 TRYB ATM (MIN/MAX) ===
   case STATE_PMS5003_ATM_PM25: {
-    LCD_SET(0, 0); LCD_PRINT(F("PM2.5 ATM"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM2_5_ATM); LCD_PRINT(F(" \xE4g/m3"));
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM2_5_ATM_MIN < 9999 ? pms5003_PM2_5_ATM_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM2_5_ATM_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsMassDetail(F("PM2.5 ATM"), pms5003_PM2_5_ATM, pms5003_PM2_5_ATM_MIN, pms5003_PM2_5_ATM_MAX);
     break;
   }
   // === 7c. WIDOK SZCZEGÓŁÓW PM10 TRYB ATM (MIN/MAX) ===
   case STATE_PMS5003_ATM_PM10: {
-    LCD_SET(0, 0); LCD_PRINT(F("PM10 ATM"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_PM10_ATM); LCD_PRINT(F(" \xE4g/m3"));
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_PM10_ATM_MIN < 9999 ? pms5003_PM10_ATM_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_PM10_ATM_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsMassDetail(F("PM10 ATM"), pms5003_PM10_ATM, pms5003_PM10_ATM_MIN, pms5003_PM10_ATM_MAX);
     break;
   }
 
   // ========== Particles ==========
   case STATE_PMS5003_PARTICLES: {
-    LCD_SET(0, 0);
-    LCD_PRINT(F("Liczba Czastek"));
-    
-    // Pagination: show 3 items per page
-    const int itemsPerPage = 3;
-    const int first = (pms5003ParticlesMenuIndex / itemsPerPage) * itemsPerPage;
-    
-    const char* const particleLabels[] = {"0.3um", "0.5um", "1.0um", "2.5um", "5.0um", "10um"};
-    uint16_t particleValues[] = {
-      pms5003_particleCount_0_3,
-      pms5003_particleCount_0_5,
-      pms5003_particleCount_1_0,
-      pms5003_particleCount_2_5,
-      pms5003_particleCount_5_0,
-      pms5003_particleCount_10_0
-    };
-    
-    for (int row = 0; row < itemsPerPage; row++) {
-      const int i = first + row;
-      if (i >= 6) break;
-      
-      LCD_SET(0, row + 1);
-      LCD_PRINT(i == pms5003ParticlesMenuIndex ? F(">") : F(" "));
-      LCD_PRINT(F(" "));
-      LCD_PRINT(particleLabels[i]);
-      LCD_PRINT(F(": "));
-      LCD_PRINT(particleValues[i]);
-    }
+    drawPmsParticlesMenu();
     break;
   }
 
   case STATE_PMS5003_PARTICLES_0_3: {
-    LCD_SET(0, 0); LCD_PRINT(F("0.3um"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_0_3);
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_0_3_MIN < 9999 ? pms5003_particleCount_0_3_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_0_3_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsParticleDetail(F("0.3um"), pms5003_particleCount_0_3, pms5003_particleCount_0_3_MIN, pms5003_particleCount_0_3_MAX);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_0_5: {
-    LCD_SET(0, 0); LCD_PRINT(F("0.5um"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_0_5);
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_0_5_MIN < 9999 ? pms5003_particleCount_0_5_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_0_5_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsParticleDetail(F("0.5um"), pms5003_particleCount_0_5, pms5003_particleCount_0_5_MIN, pms5003_particleCount_0_5_MAX);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_1_0: {
-    LCD_SET(0, 0); LCD_PRINT(F("1.0um"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_1_0);
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_1_0_MIN < 9999 ? pms5003_particleCount_1_0_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_1_0_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsParticleDetail(F("1.0um"), pms5003_particleCount_1_0, pms5003_particleCount_1_0_MIN, pms5003_particleCount_1_0_MAX);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_2_5: {
-    LCD_SET(0, 0); LCD_PRINT(F("2.5um"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_2_5);
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_2_5_MIN < 9999 ? pms5003_particleCount_2_5_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_2_5_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsParticleDetail(F("2.5um"), pms5003_particleCount_2_5, pms5003_particleCount_2_5_MIN, pms5003_particleCount_2_5_MAX);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_5_0: {
-    LCD_SET(0, 0); LCD_PRINT(F("5.0um"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_5_0);
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_5_0_MIN < 9999 ? pms5003_particleCount_5_0_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_5_0_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsParticleDetail(F("5.0um"), pms5003_particleCount_5_0, pms5003_particleCount_5_0_MIN, pms5003_particleCount_5_0_MAX);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_10_0: {
-    LCD_SET(0, 0); LCD_PRINT(F("10um"));
-    LCD_SET(0, 1); LCD_PRINT(F("Biezaca: ")); LCD_PRINT(pms5003_particleCount_10_0);
-    LCD_SET(0, 2); LCD_PRINT(F("Min:")); LCD_PRINT(pms5003_particleCount_10_0_MIN < 9999 ? pms5003_particleCount_10_0_MIN : 0);
-    LCD_PRINT(F(" Max:")); LCD_PRINT(pms5003_particleCount_10_0_MAX);
-    LCD_SET(0, 3); LCD_PRINT(F("Dlugi -> Powrot"));
+    drawPmsParticleDetail(F("10um"), pms5003_particleCount_10_0, pms5003_particleCount_10_0_MIN, pms5003_particleCount_10_0_MAX);
     break;
   }
 

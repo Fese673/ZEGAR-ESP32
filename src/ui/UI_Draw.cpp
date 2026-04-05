@@ -2,6 +2,7 @@
 #include "AppSettings.h"
 #include "LCDMirror.h"
 #include "StatsManager.h"
+#include "RtcSyncService.h"
 #include "WiFiSync.h"
 #include "ModeManager.h"
 #include "RadioModeSwitch.h"
@@ -174,6 +175,13 @@ void updateSevenSeg() {
     return;
   }
 
+  const bool systemTimeValid = RtcSyncService::isSystemTimeValid();
+  const bool clockSeeded = RtcSyncService::isClockSeeded();
+
+  if (!timerRunning && appState != STATE_SET_TIME && !systemTimeValid && !clockSeeded) {
+    return;
+  }
+
   uint8_t HH, MM, SS;
 
   if (timerRunning) {
@@ -187,6 +195,13 @@ void updateSevenSeg() {
     HH = ((rh / 10) << 4) | (rh % 10);
     MM = ((rm / 10) << 4) | (rm % 10);
     SS = ((rs / 10) << 4) | (rs % 10);
+  } else if (appState != STATE_SET_TIME && systemTimeValid) {
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+    HH = ((timeinfo.tm_hour / 10) << 4) | (timeinfo.tm_hour % 10);
+    MM = ((timeinfo.tm_min / 10) << 4) | (timeinfo.tm_min % 10);
+    SS = ((timeinfo.tm_sec / 10) << 4) | (timeinfo.tm_sec % 10);
   } else {
     HH = ((hours / 10) << 4) | (hours % 10);
     MM = ((minutes / 10) << 4) | (minutes % 10);
@@ -335,18 +350,33 @@ void drawHome() {
     lcdPrintCentered(0, titleBuf);
   }
 
-  // Date (centered)
-  time_t now = time(nullptr);
-  struct tm timeinfo;
-  localtime_r(&now, &timeinfo);
-  char dateBuf[21];
-  snprintf(dateBuf, sizeof(dateBuf), "%02d %s %04d", timeinfo.tm_mday, polishMonths[timeinfo.tm_mon], 1900 + timeinfo.tm_year);
-  lcdPrintCentered(1, dateBuf);
+  const bool clockSeeded = RtcSyncService::isClockSeeded();
+  const bool systemTimeValid = RtcSyncService::isSystemTimeValid();
 
-  // Row 2: centered time with symmetric arrows
-  char timeLine[21];
-  snprintf(timeLine, sizeof(timeLine), ">> %02d:%02d:%02d <<", hours, minutes, seconds);
-  lcdPrintCentered(2, timeLine);
+  if (systemTimeValid) {
+    // Date (centered)
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+    char dateBuf[21];
+    snprintf(dateBuf, sizeof(dateBuf), "%02d %s %04d", timeinfo.tm_mday, polishMonths[timeinfo.tm_mon], 1900 + timeinfo.tm_year);
+    lcdPrintCentered(1, dateBuf);
+
+    // Row 2: centered time with symmetric arrows
+    char timeLine[21];
+    snprintf(timeLine, sizeof(timeLine), ">> %02d:%02d:%02d <<", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    lcdPrintCentered(2, timeLine);
+  } else if (clockSeeded) {
+    lcdPrintCentered(1, F("BRAK DATY RTC/NTP"));
+
+    // Row 2: centered time with symmetric arrows
+    char timeLine[21];
+    snprintf(timeLine, sizeof(timeLine), ">> %02d:%02d:%02d <<", hours, minutes, seconds);
+    lcdPrintCentered(2, timeLine);
+  } else {
+    lcdPrintCentered(1, F("OCZEKIWANIE NA CZAS"));
+    lcdPrintCentered(2, F(">> --:--:-- <<"));
+  }
 
   // Row 3: indoor summary from BMP280 temperature/pressure + AHT21 humidity.
   char lineBuf[21];

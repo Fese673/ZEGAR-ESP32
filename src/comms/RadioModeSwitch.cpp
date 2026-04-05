@@ -13,6 +13,10 @@ extern int hours;
 extern int minutes;
 extern int seconds;
 
+namespace RadioModeSwitch {
+void clearRTCTime();
+}
+
 namespace {
 
 constexpr char TAG[] = "RADIO";
@@ -101,6 +105,7 @@ void loadBootModeFromRtc() {
   } else {
     s_next_mode = RADIO_NEXT_NONE;
     s_current_state = RADIO_STATE_WIFI;
+    RadioModeSwitch::clearRTCTime();
   }
 
   rtc_state.mode_flag = kRtcFlagNone;

@@ -719,11 +719,18 @@ void updateSystemResources() {
 // ============================================================================
 
 static bool restoreRtcHandoffTime(RuntimeContext& ctx, unsigned long nowMs, bool refreshHomeUi) {
+  if (!RadioModeSwitch::wasBootHandoffDetected()) {
+    LOG_I(TAG_MAIN, "RTC handoff skipped reason=no_boot_handoff");
+    RadioModeSwitch::clearRTCTime();
+    return false;
+  }
+
   const uint8_t rtcHours = RadioModeSwitch::getRTCHours();
   const uint8_t rtcMinutes = RadioModeSwitch::getRTCMinutes();
   const uint8_t rtcSeconds = RadioModeSwitch::getRTCSeconds();
 
   if (rtcHours == 0 && rtcMinutes == 0 && rtcSeconds == 0) {
+    RadioModeSwitch::clearRTCTime();
     return false;
   }
 
@@ -732,6 +739,7 @@ static bool restoreRtcHandoffTime(RuntimeContext& ctx, unsigned long nowMs, bool
     ctx.minutes = rtcMinutes;
     ctx.seconds = rtcSeconds;
     ctx.lastTick = nowMs;
+    RtcSyncService::markClockSeeded();
     LOG_I(TAG_MAIN, "Restore time from RTC handoff hours=%02u minutes=%02u seconds=%02u", (unsigned)ctx.hours, (unsigned)ctx.minutes, (unsigned)ctx.seconds);
     updateSevenSeg();
     if (refreshHomeUi) {

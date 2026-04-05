@@ -51,8 +51,10 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
   }
 
   const unsigned long nowMs = millis();
+  const bool timeSeeded = RtcSyncService::isClockSeeded();
+  const bool timeValid = RtcSyncService::isSystemTimeValid();
 
-  if (RtcSyncService::isSystemTimeValid()) {
+  if (timeSeeded && timeValid) {
     if (nowMs - lastTick >= clockTickMs) {
       lastTick = nowMs - ((nowMs - lastTick) % clockTickMs);
       RtcSyncService::syncLocalClockFromSystemTime(hours, minutes, seconds);
@@ -63,7 +65,7 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
         HomeRuntime::markHomeDirty();
       }
     }
-  } else {
+  } else if (timeSeeded) {
     if (nowMs - lastTick >= clockTickMs) {
       int loops = 0;
       while (nowMs - lastTick >= clockTickMs && loops < 60) {
@@ -87,9 +89,11 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
         HomeRuntime::markHomeDirty();
       }
     }
+  } else if (timerRunning && appState != STATE_STOPER) {
+    updateSevenSeg();
   }
 
-  if (!alarmRinging && seconds == 0 && alarmsCount > 0) {
+  if (timeValid && !alarmRinging && seconds == 0 && alarmsCount > 0) {
     const time_t nowTime = time(nullptr);
     tm timeInfo;
     localtime_r(&nowTime, &timeInfo);

@@ -14,6 +14,7 @@
 #include <Preferences.h>
 #include "HomeRuntime.h"
 #include "WiFiSync.h"
+#include "RtcSyncService.h"
 #include "UI_Draw.h"
 #include "UIState.h"
 
@@ -966,7 +967,9 @@ void ui_begin(const UI_Callbacks& callbacks) {
   ui.alarmReturnState = STATE_MENU;
   ui.pmsScreenDirty = true;
 
-  drawHomeSafe();
+  if (!showEpicIntro || RadioModeSwitch::wasBootHandoffDetected()) {
+    drawHomeSafe();
+  }
 }
 
 // Pomocnicza: zmiana czasu w trybie edycji
@@ -1186,6 +1189,7 @@ void ui_handleEvent(EncoderEvent e) {
       editState = static_cast<EditState>(editState + 1);
       if (editState == EDIT_DONE) {
         lastTick = millis();
+        RtcSyncService::markClockSeeded();
         appState = STATE_HOME;
         updateSevenSegSafe();
         drawHomeSafe();

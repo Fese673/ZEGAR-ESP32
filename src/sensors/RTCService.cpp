@@ -108,16 +108,15 @@ Status begin(const Config &config)
         return Status::DeviceNotFound;
     }
 
+    gDiag.initialized = true;
+    gDiag.rtcDetected = true;
+
     if (!gRtc.begin(*gConfig.wire)) {
-        gDiag.initialized = false;
-        gDiag.rtcDetected = true;
         gDiag.oscillatorRunning = false;
         setLastStatus(Status::InternalError);
         return Status::InternalError;
     }
 
-    gDiag.initialized = true;
-    gDiag.rtcDetected = true;
     gDiag.oscillatorRunning = gRtc.isRunning();
 
     if (!gDiag.oscillatorRunning) {

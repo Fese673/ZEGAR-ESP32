@@ -19,6 +19,7 @@ static unsigned long rtcWriteNotBeforeMillis = 0;
 static uint8_t rtcWriteFailureCount = 0;
 static time_t rtcPendingEpoch = 0;
 static unsigned long lastSeenNtpSyncMillis = 0;
+static bool s_clockSeeded = false;
 
 static const char* kTzPoland = "CET-1CEST,M3.5.0,M10.5.0/3";
 
@@ -53,6 +54,14 @@ bool isSystemTimeValid() {
   return time(nullptr) >= 1609459200;
 }
 
+bool isClockSeeded() {
+  return s_clockSeeded;
+}
+
+void markClockSeeded() {
+  s_clockSeeded = true;
+}
+
 void syncLocalClockFromSystemTime(int& hours, int& minutes, int& seconds) {
   const time_t now = time(nullptr);
   tm localTime;
@@ -74,8 +83,18 @@ void tryRestoreSystemTimeFromDs3231(int& hours, int& minutes, int& seconds, unsi
   rtcCfg.enableI2cDiagnostics = true;
 
   const RTCService::Status beginStatus = RTCService::begin(rtcCfg);
-  LOG_I(TAG, "Begin status=%s", RTCService::statusToString(beginStatus));
+  if (beginStatus == RTCService::Status::DeviceNotFound) {
+    LOG_W(TAG, "Begin status=%s action=skip", RTCService::statusToString(beginStatus));
+    return;
+  }
+
   if (beginStatus != RTCService::Status::Ok) {
+    LOG_W(TAG, "Begin status=%s action=read_fallback", RTCService::statusToString(beginStatus));
+  } else {
+    LOG_I(TAG, "Begin status=%s", RTCService::statusToString(beginStatus));
+  }
+
+  if (beginStatus == RTCService::Status::OscillatorStopped) {
     return;
   }
 
@@ -98,6 +117,7 @@ void tryRestoreSystemTimeFromDs3231(int& hours, int& minutes, int& seconds, unsi
 
   lastTick = millis();
   syncLocalClockFromSystemTime(hours, minutes, seconds);
+  s_clockSeeded = true;
   LOG_I(TAG, "Time restored from DS3231 local_time=%02d:%02d:%02d", hours, minutes, seconds);
 }
 
@@ -107,6 +127,7 @@ void noteNtpSync(unsigned long ntpSyncMillis) {
   }
 
   lastSeenNtpSyncMillis = ntpSyncMillis;
+  s_clockSeeded = true;
   scheduleRtcWriteFromSystemTime();
 }
 

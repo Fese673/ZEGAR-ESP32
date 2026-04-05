@@ -96,6 +96,7 @@ void loadIcons(LiquidCrystal_I2C& lcd, const IconId* iconIds, uint8_t count, uin
 
 enum class Palette : uint8_t {
   Home,
+  HomeWifi,
   Weather,
   System,
   Media,

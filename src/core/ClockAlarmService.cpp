@@ -3,25 +3,31 @@
 #include <time.h>
 
 #include "AlarmMelodies.h"
-#include "AlarmTypes.h"
+#include "AlarmRuntime.h"
+#include "AppSettings.h"
 #include "AppState.h"
 #include "HomeRuntime.h"
 #include "RtcSyncService.h"
 
-// Global runtime state from main.cpp
+// Global clock/timer runtime state from main.cpp
 extern int hours;
 extern int minutes;
 extern int seconds;
 extern unsigned long lastTick;
 
-extern bool alarmEnabled;
-extern bool alarmRinging;
-extern unsigned long alarmStartTime;
+// Shared alarm runtime state.
+namespace {
 
-extern const int MAX_ALARMS;
-extern AlarmEntry alarms[];
-extern int alarmsCount;
-extern int settingsAlarmMelodyIndex;
+AlarmRuntime::State& alarmRuntime = AlarmRuntime::mutableState();
+AlarmEntry (&alarms)[AlarmRuntime::kMaxAlarms] = alarmRuntime.alarms;
+int& alarmsCount = alarmRuntime.alarmsCount;
+bool& alarmEnabled = alarmRuntime.alarmEnabled;
+bool& alarmRinging = alarmRuntime.alarmRinging;
+unsigned long& alarmStartTime = alarmRuntime.alarmStartTime;
+const int& settingsAlarmMelodyIndex = AppSettings::state().alarmMelodyIndex;
+const bool& buzzerEnabled = AppSettings::state().buzzerEnabled;
+
+}  // namespace
 
 extern bool timerRunning;
 extern unsigned long timerStartMillis;
@@ -95,10 +101,12 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
       if (alarms[i].hour == hours &&
           alarms[i].minute == minutes &&
           alarms[i].lastTriggerDay != (uint16_t)today) {
-        alarmRinging = true;
         alarmStartTime = millis();
         alarms[i].lastTriggerDay = (uint16_t)today;
-        AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, buzzerPin);
+        if (buzzerEnabled) {
+          alarmRinging = true;
+          AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, buzzerPin);
+        }
         break;
       }
     }
@@ -108,9 +116,11 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
     const unsigned long elapsed = millis() - timerStartMillis;
     if (elapsed >= timerDurationMs) {
       timerRunning = false;
-      alarmRinging = true;
       alarmStartTime = millis();
-      AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, buzzerPin);
+      if (buzzerEnabled) {
+        alarmRinging = true;
+        AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, buzzerPin);
+      }
       editState = EDIT_HOURS;
       timerStartMillis = 0;
       timerDurationMs = 0;

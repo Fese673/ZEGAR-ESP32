@@ -1,4 +1,5 @@
 #include "UI_Draw.h"
+#include "AppSettings.h"
 #include "LCDMirror.h"
 #include "StatsManager.h"
 #include "WiFiSync.h"
@@ -18,6 +19,8 @@
 #include "BMP280Sensor.h"
 #include "LCDIcons.h"
 #include "AlarmMelodies.h"
+#include "AlarmRuntime.h"
+#include "UIState.h"
 
 extern LiquidCrystal_I2C lcd;
 
@@ -25,91 +28,78 @@ extern LiquidCrystal_I2C lcd;
 extern LcdMirror20x4 lcdMirror;
 #endif
 
-// ============================================================================
-// ZMIENNE GLOBALNE (extern)
-// ============================================================================
+namespace {
 
 static bool s_sevenSegReady = false;
 
-// --- Statystyki ---
-extern int statsMenuIndex;
-extern const char* statsMenuItems[];
-extern int statsMenuCount;
+UIState::State& ui = UIState::mutableState();
+const AppSettings::State& appSettings = AppSettings::state();
 
-// --- Zasoby ---
-extern int resourcesMenuIndex;
-extern const char* resourcesMenuItems[];
-extern int resourcesMenuCount;
+const int& statsMenuIndex = ui.statsMenu.index;
+const int& statsMenuCount = ui.statsMenu.count;
 
-// --- PMS5003 ---
-extern int pms5003MenuIndex;
-extern const char* pms5003MenuItems[];
-extern int pms5003MenuCount;
-extern int pms5003CF1MenuIndex;
-extern const char* pms5003CF1MenuItems[];
-extern int pms5003CF1MenuCount;
-extern int pms5003ATMMenuIndex;
-extern const char* pms5003ATMMenuItems[];
-extern int pms5003ATMMenuCount;
-extern int pms5003ParticlesMenuIndex;
-extern const char* pms5003ParticlesMenuItems[];
-extern int pms5003ParticlesMenuCount;
-extern int ens160MenuIndex;
-extern const char* ens160MenuItems[];
-extern int ens160MenuCount;
-extern int bmp280MenuIndex;
-extern const char* bmp280MenuItems[];
-extern int bmp280MenuCount;
+const int& menuIndex = ui.mainMenu.index;
+const int& menuCount = ui.mainMenu.count;
+const char* const*& menuItems = ui.mainMenu.items;
 
-// --- Stan aplikacji ---
-extern enum AppState appState;
-extern enum EditState editState;
-extern RadioMode radioMode;
+const int& resourcesMenuIndex = ui.resourcesMenu.index;
+const int& resourcesMenuCount = ui.resourcesMenu.count;
+const char* const*& resourcesMenuItems = ui.resourcesMenu.items;
 
-// --- Budzik ---
-extern int  alarmHour;
-extern int  alarmMinute;
-extern bool alarmEnabled;
-extern bool alarmRinging;
+const int& pms5003MenuIndex = ui.pmsMenu.index;
+const int& pms5003MenuCount = ui.pmsMenu.count;
+const char* const*& pms5003MenuItems = ui.pmsMenu.items;
+const int& pms5003CF1MenuIndex = ui.pmsCf1Menu.index;
+const int& pms5003CF1MenuCount = ui.pmsCf1Menu.count;
+const int& pms5003ATMMenuIndex = ui.pmsAtmMenu.index;
+const int& pms5003ATMMenuCount = ui.pmsAtmMenu.count;
+const int& pms5003ParticlesMenuIndex = ui.pmsParticlesMenu.index;
+const int& pms5003ParticlesMenuCount = ui.pmsParticlesMenu.count;
+const int& ens160MenuIndex = ui.ens160Menu.index;
+const int& ens160MenuCount = ui.ens160Menu.count;
+const int& bmp280MenuIndex = ui.bmp280Menu.index;
+const int& bmp280MenuCount = ui.bmp280Menu.count;
 
-// --- Stoper ---
-extern bool stoperRunning;
-extern unsigned long stoperStart;
-extern unsigned long stoperElapsed;
+const int& settingsMenuIndex = ui.settingsMenu.index;
+const int& settingsMenuCount = ui.settingsMenu.count;
+const char* const*& settingsMenuItems = ui.settingsMenu.items;
+const int& settingsPmsMenuIndex = ui.settingsPmsMenu.index;
+const int& settingsPmsMenuCount = ui.settingsPmsMenu.count;
+const char* const*& settingsPmsMenuItems = ui.settingsPmsMenu.items;
+const int& settingsBuzzerMenuIndex = ui.settingsBuzzerMenu.index;
+const int& settingsBuzzerMenuCount = ui.settingsBuzzerMenu.count;
+const char* const*& settingsBuzzerMenuItems = ui.settingsBuzzerMenu.items;
+const int& settingsMqttMenuIndex = ui.settingsMqttMenu.index;
+const int& settingsMqttMenuCount = ui.settingsMqttMenu.count;
+const char* const*& settingsMqttMenuItems = ui.settingsMqttMenu.items;
+const int& settingsAlarmMelodyIndex = ui.settingsAlarmMelodyMenu.index;
+const int& settingsEpicIntroIndex = ui.settingsBootIntroMenu.index;
+const int& settingsEpicIntroMenuCount = ui.settingsBootIntroMenu.count;
+const char* const*& settingsEpicIntroItems = ui.settingsBootIntroMenu.items;
+const int& settingsUiScreenIndex = ui.settingsUiScreenMenu.index;
+const int& settingsUiScreenCount = ui.settingsUiScreenMenu.count;
+const char* const*& settingsUiScreenItems = ui.settingsUiScreenMenu.items;
 
-// --- Czas ---
-extern int hours;
-extern int minutes;
-extern int seconds;
+const int& alarmsMenuIndex = ui.alarmsMenu.index;
+const int& selectedAlarmIndex = ui.selectedAlarmIndex;
+const int& alarmEditCursor = ui.alarmEditCursor;
 
-// --- STM32 ---
-extern int  displayedBPM;
-extern int  displayedSPO2;
-extern bool stm32Connected;
+bool& pmsScreenDirty = ui.pmsScreenDirty;
 
-// --- Heap Usage ---
-extern uint8_t heapUsagePercent;
-extern uint8_t heapUsageCore0Percent;
-extern uint8_t heapUsageCore1Percent;
+const bool& mqttEnabled = appSettings.mqttEnabled;
+const bool& buzzerEnabled = appSettings.buzzerEnabled;
+const int& settingsRotationSec = appSettings.homeOverlaySeconds;
+const int& settingsSyncMinutes = appSettings.ntpSyncMinutes;
 
-// --- System Resources ---
-extern uint32_t ramFreeBytes;
-extern uint32_t ramTotalBytes;
-extern uint32_t ramLargestBlockBytes;
-extern uint32_t ramMinFreeBytes;
-extern uint32_t ramDmaFreeBytes;
-extern uint32_t flashFreeBytes;
+const AlarmRuntime::State& alarmRuntime = AlarmRuntime::state();
+const int& alarmHour = alarmRuntime.alarmHour;
+const int& alarmMinute = alarmRuntime.alarmMinute;
+const bool& alarmEnabled = alarmRuntime.alarmEnabled;
+const bool& alarmRinging = alarmRuntime.alarmRinging;
+const AlarmEntry (&alarms)[AlarmRuntime::kMaxAlarms] = alarmRuntime.alarms;
+const int& alarmsCount = alarmRuntime.alarmsCount;
 
-// --- Settings (z main.cpp / UI_Controller.cpp) ---
-extern int settingsMqttMenuIndex;
-extern int settingsAlarmMelodyIndex;
-extern int settingsEpicIntroIndex;
-extern bool mqttEnabled;
-extern int settingsRotationSec;
-extern int settingsUiScreenIndex;
-extern int settingsUiScreenCount;
-extern const char* settingsUiScreenItems[];
-extern const char* settingsEpicIntroItems[];
+}  // namespace
 
 // ============================================================================
 // IMPLEMENTACJA FUNKCJI - 7-SEGMENT (74HC595)
@@ -337,9 +327,7 @@ void drawHome() {
   }
 
   const bool showWifiIcon = ModeManager::isBtOn();
-  if (showWifiIcon) {
-    LCDIcons::loadIcon(lcd, LCDIcons::WifiSlot, LCDIcons::IconId::Wifi);
-  }
+  LCDIcons::loadPalette(lcd, showWifiIcon ? LCDIcons::Palette::HomeWifi : LCDIcons::Palette::Home);
 
   if (iconCount > 0 || showWifiIcon) {
     lcdPrintCenteredWithIconsAndSuffix(0, titleBuf, icons, iconCount, showWifiIcon ? LCDIcons::WifiSlot : -1);

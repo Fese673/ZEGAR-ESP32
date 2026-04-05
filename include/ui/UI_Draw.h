@@ -7,7 +7,6 @@
 #include "LCDMirror.h"
 #include "AppState.h" // for EditState / AppState enums
 #include "BoardPins.h"
-#include "AlarmTypes.h"
 
 
 // --- Fallback pin definitions (will not override existing defines in main) ---
@@ -28,17 +27,7 @@ extern int minutes;
 extern int seconds;
 
 
-extern bool alarmEnabled;
-extern int alarmHour;
-extern int alarmMinute;
-
-
-extern EditState editState; // from AppState.cpp/h
-
-
-extern int menuIndex;
-extern const char* menuItems[];
-extern int menuCount;
+extern unsigned long lastTick;
 
 
 extern bool stoperRunning;
@@ -49,35 +38,15 @@ extern unsigned long stoperElapsed;
 extern int displayedBPM;
 extern int displayedSPO2;
 extern bool stm32Connected;
-// === Flaga ekranów PMS5003 - wymusi rysowanie przy wejściu do podmenu ===
-extern bool pmsScreenDirty;
-
-// === Zmienne Ustawień (Settings) ===
-extern int settingsMenuIndex;
-extern const char* settingsMenuItems[];
-extern int settingsMenuCount;
-extern int settingsPmsMenuIndex;
-extern int settingsPmsMenuCount;
-extern int settingsMqttMenuIndex;
-extern const char* settingsMqttMenuItems[];
-extern int settingsMqttMenuCount;
-extern int settingsBuzzerMenuIndex;
-extern const char* settingsBuzzerMenuItems[];
-extern int settingsBuzzerMenuCount;
-extern int settingsAlarmMelodyIndex;
-extern bool buzzerEnabled;
-extern bool mqttEnabled;
-extern int settingsRotationSec;
-extern int s_prevSettingsRotationSec;
-extern int settingsSyncMinutes;
-extern int s_prevSettingsSyncMin;
-// Alarms
-extern const int MAX_ALARMS;
-extern AlarmEntry alarms[];
-extern int alarmsCount;
-extern int alarmsMenuIndex; // selection in list
-extern int selectedAlarmIndex; // editing index
-extern int alarmEditCursor; // 0=CZAS,1=STATUS,2=USUN
+extern uint8_t heapUsagePercent;
+extern uint8_t heapUsageCore0Percent;
+extern uint8_t heapUsageCore1Percent;
+extern uint32_t ramFreeBytes;
+extern uint32_t ramTotalBytes;
+extern uint32_t ramLargestBlockBytes;
+extern uint32_t ramMinFreeBytes;
+extern uint32_t ramDmaFreeBytes;
+extern uint32_t flashFreeBytes;
 
 // Minutnik (Timer) - ustawienia i status
 extern int timerSetMinutes;

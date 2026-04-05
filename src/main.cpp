@@ -38,7 +38,9 @@
 #include "RuntimeTelemetry.h"
 #include "RamTelemetry.h"
 #include "HomeRuntime.h"
-#include "AlarmTypes.h"
+#include "AlarmRuntime.h"
+#include "AppSettings.h"
+#include "UIState.h"
 #include <cstring>
 #include "AppLog.h"
 #include "SecretsConfig.h"
@@ -61,14 +63,58 @@ constexpr unsigned long STM32_TIMEOUT_MS    = 3000; // timeout połączenia STM3
 constexpr unsigned long STOPER_DRAW_MS      = 100;  // odświeżanie stopera
 constexpr unsigned long BASELINE_REPORT_WINDOW_MS = 10000; // okno telemetrii etapu 0
 
-// Runtime-configurable overlay switch interval (ms). Persisted via Preferences as seconds.
-int settingsRotationSec = 7;               // 1..10 seconds (user-facing)
-int s_prevSettingsRotationSec = 7;         // used to restore on cancel
-int s_prevSettingsUiScreenIndex = 0;        // used to restore UI screen selection on cancel
+namespace {
 
-extern int settingsUiScreenIndex;
+AppSettings::State& appSettings = AppSettings::mutableState();
+UIState::State& uiState = UIState::mutableState();
+AlarmRuntime::State& alarmRuntime = AlarmRuntime::mutableState();
+
+int& settingsRotationSec = appSettings.homeOverlaySeconds;
+int& settingsUiScreenIndex = appSettings.homeUiProfile;
+int& settingsAlarmMelodyIndex = appSettings.alarmMelodyIndex;
+bool& mqttEnabled = appSettings.mqttEnabled;
+bool& showEpicIntro = appSettings.showEpicIntro;
+
+int& s_prevSettingsRotationSec = uiState.prevSettingsRotationSec;
+int& s_prevSettingsUiScreenIndex = uiState.prevSettingsUiScreenIndex;
+int& s_prevSettingsAlarmMelodyIndex = uiState.prevSettingsAlarmMelodyIndex;
+int& s_prevSettingsSyncMin = uiState.prevSettingsSyncMin;
+
+int& settingsMqttMenuIndex = uiState.settingsMqttMenu.index;
+int& settingsEpicIntroIndex = uiState.settingsBootIntroMenu.index;
+
+int& alarmHour = alarmRuntime.alarmHour;
+int& alarmMinute = alarmRuntime.alarmMinute;
+bool& alarmEnabled = alarmRuntime.alarmEnabled;
+bool& alarmRinging = alarmRuntime.alarmRinging;
+unsigned long& alarmStartTime = alarmRuntime.alarmStartTime;
+AlarmEntry (&alarms)[AlarmRuntime::kMaxAlarms] = alarmRuntime.alarms;
+int& alarmsCount = alarmRuntime.alarmsCount;
+
+}  // namespace
 
 constexpr uint8_t BUZZER_PIN = BoardPins::kBuzzer;
+
+static void lcdBacklightSafe() {
+  if (I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
+    lcd.backlight();
+    I2cShared::unlock();
+  }
+}
+
+static void lcdNoBacklightSafe() {
+  if (I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
+    lcd.noBacklight();
+    I2cShared::unlock();
+  }
+}
+
+static void lcdClearSafe() {
+  if (I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
+    lcd.clear();
+    I2cShared::unlock();
+  }
+}
 
 enum class IntroPhase : uint8_t {
   Idle,
@@ -278,13 +324,13 @@ static bool serviceEpicBootSequence() {
         s_intro.flashCount = 0;
         s_intro.backlightOn = true;
         renderTickingFrameText(11);
-        lcd.backlight();
+        lcdBacklightSafe();
       }
       break;
 
     case IntroPhase::FlashOn:
       if (!s_intro.backlightOn) {
-        lcd.backlight();
+        lcdBacklightSafe();
         s_intro.backlightOn = true;
       }
       if ((nowMs - s_intro.flashStartedMs) >= 110UL) {
@@ -295,13 +341,13 @@ static bool serviceEpicBootSequence() {
 
     case IntroPhase::FlashOff:
       if (s_intro.backlightOn) {
-        lcd.noBacklight();
+        lcdNoBacklightSafe();
         s_intro.backlightOn = false;
       }
       if ((nowMs - s_intro.flashStartedMs) >= 90UL) {
         ++s_intro.flashCount;
         if (s_intro.flashCount >= 3) {
-          lcd.backlight();
+          lcdBacklightSafe();
           s_intro.backlightOn = true;
           introPrintBorderLine(0, '.', '.');
           introPrintCentered(1, "SYSTEM READY");
@@ -355,18 +401,11 @@ static bool serviceEpicBootSequence() {
 }
 
 Preferences s_prefs;
-bool showEpicIntro = true;
-int settingsEpicIntroIndex = 0;
-int settingsEpicIntroMenuCount = 2;
-const char* settingsEpicIntroItems[] = {"ON", "OFF"};
 
 constexpr unsigned long SETUP_DELAY_MS      = 100;  // cooperative startup wait for serial init
 constexpr long UART_BAUD = 921600;
 HardwareSerial& uart = Serial2;
 static uint32_t heapBaseline = 0;
-int settingsUiScreenIndex = 0;
-int settingsAlarmMelodyIndex = 0;
-int s_prevSettingsAlarmMelodyIndex = 0;
 constexpr uint8_t ENC_CLK = BoardPins::kEncoderClk;
 constexpr uint8_t ENC_DT  = BoardPins::kEncoderDt;
 constexpr uint8_t ENC_SW  = BoardPins::kEncoderSw;
@@ -376,117 +415,7 @@ static String s_wifiPass = PROJECT_WIFI_PASS;
 static String s_ntpServer = PROJECT_NTP_SERVER;
 static MQTTSync::Config s_mqttConfig;
 
-constexpr int BMP280_MENU_COUNT = 4;
-int bmp280MenuCount = BMP280_MENU_COUNT;
-
-// --- Menu Główne ---
-int menuIndex = 0;
-const char* menuItems[] = {
-  "Ustaw czas",
-  "Minutnik",
-  "Stoper",
-  "Budzik",
-  "Statystyki",
-  "Debug STM32",
-  "PMS5003",
-  "AHT21 + ENS160",
-  "BMP280",
-  "Ustawienia",
-  "Wyjscie",
-  "Tryb radia"
-};
-constexpr int MENU_COUNT = 12;
-int menuCount = MENU_COUNT;
-
-// --- Menu Statystyk ---
-int statsMenuIndex = 0;
-const char* statsMenuItems[] = {
-  "Kliki",
-  "Kroki",
-  "Temp min/max",
-  "Wilg min/max",
-  "Ram Free",
-  "Heap",
-  "Flash Free"
-};
-constexpr int STATS_MENU_COUNT = 7;
-int statsMenuCount = STATS_MENU_COUNT;
-
-// --- Menu Zasobów Systemu ---
-int resourcesMenuIndex = 0;
-const char* resourcesMenuItems[] = {
-  "RAM Free",
-  "Heap",
-  "Flash Free"
-};
-constexpr int RESOURCES_MENU_COUNT = 3;
-int resourcesMenuCount = RESOURCES_MENU_COUNT;
-
-// --- Menu ENS160 + AHT21 ---
-int ens160MenuIndex = 0;
-const char* ens160MenuItems[] = {
-  "AQI",
-  "TVOC",
-  "eCO2",
-};
-constexpr int ENS160_MENU_COUNT = 3;
-int ens160MenuCount = ENS160_MENU_COUNT;
-
-// --- Menu BMP280 ---
-int bmp280MenuIndex = 0;
-const char* bmp280MenuItems[] = {
-  "Temperature",
-  "Pressure",
-  "Status",
-  "Altitude"
-};
-
-// --- Menu Ustawień ---
-int settingsMenuIndex = 0;
-const char* settingsMenuItems[] = {
-  "PMS5003",
-  "Buzzer",
-  "MQTT",
-  "Alarmy",
-  "Synchronizacja",
-  "Rotacja Ekranu",
-  "UI ekran",
-  "Boot Intro",
-  "Wyjscie"
-};
-constexpr int SETTINGS_MENU_COUNT = 9;
-int settingsMenuCount = SETTINGS_MENU_COUNT;
-
-// --- Menu: Synchronizacja ---
-int settingsSyncMinutes = 60;
-int s_prevSettingsSyncMin = 60;
-
-// --- Menu Ustawienia UI EKRAN ---
-const char* settingsUiScreenItems[] = {
-  "Minimal",
-  "Balanced",
-  "Extreme"
-};
-constexpr int SETTINGS_UI_SCREEN_COUNT = 3;
-int settingsUiScreenCount = SETTINGS_UI_SCREEN_COUNT;
-
-// --- Menu Ustawienia Buzera ---
-int settingsBuzzerMenuIndex = 0;
-const char* settingsBuzzerMenuItems[] = {
-  "Wlaczony",
-  "Wylaczony"
-};
-constexpr int SETTINGS_BUZZER_MENU_COUNT = 2;
-int settingsBuzzerMenuCount = SETTINGS_BUZZER_MENU_COUNT;
-
-// --- Menu Ustawienia MQTT ---
-int settingsMqttMenuIndex = 0;
-const char* settingsMqttMenuItems[] = {
-  "Wlaczony",
-  "Wylaczony"
-};
-constexpr int SETTINGS_MQTT_MENU_COUNT = 2;
-int settingsMqttMenuCount = SETTINGS_MQTT_MENU_COUNT;
+// runtime menu counts are owned by UIState and initialized in ui_begin()
 
 static void drawHomeThrottled() {
   HomeRuntime::markHomeDirty();
@@ -495,7 +424,6 @@ static void drawHomeThrottled() {
 
 void setHomeUiProfile(uint8_t profileIndex) {
   HomeRuntime::setProfile(profileIndex);
-  settingsUiScreenIndex = (int)HomeRuntime::getProfile();
 }
 
 static bool looksLikePlaceholder(const String& value) {
@@ -525,14 +453,6 @@ static void loadNetworkConfigFromPreferences() {
   }
 }
 
-void startAlarmMelodyDemo(uint8_t melodyIndex) {
-  ClockAlarmService::startAlarmMelodyDemo(melodyIndex, BUZZER_PIN);
-}
-
-void stopAlarmMelodyDemo() {
-  ClockAlarmService::stopAlarmMelodyDemo(BUZZER_PIN);
-}
-
 // --- Heap Usage Tracking (used by system resources view) ---
 uint8_t heapUsagePercent = 0;
 uint8_t heapUsageCore0Percent = 0;
@@ -546,24 +466,6 @@ uint32_t ramLargestBlockBytes = 0;
 uint32_t ramMinFreeBytes = 0;
 uint32_t ramDmaFreeBytes = 0;
 uint32_t flashFreeBytes = 0;
-
-// --- Ustawienia (Configuration settings) ---
-bool buzzerEnabled = true;    // Czy buzzer jest włączony
-
-// --- Budzik ---
-int  alarmHour       = 7;
-int  alarmMinute     = 0;
-bool alarmEnabled    = false;
-bool alarmRinging    = false;
-unsigned long alarmStartTime  = 0;
-
-// --- Multi-alarm storage ---
-const int MAX_ALARMS = 8;
-AlarmEntry alarms[MAX_ALARMS];
-int alarmsCount = 0; // number of configured alarms
-int alarmsMenuIndex = 0; // selection in list view
-int selectedAlarmIndex = 0; // index for editing/deleting
-int alarmEditCursor = 0; // 0=CZAS,1=STATUS,2=USUN
 
 // --- Minutnik (Timer) ---
 int  timerSetMinutes  = 0;    // ustawiane przez użytkownika
@@ -591,9 +493,6 @@ int hours   = 12;
 int minutes = 0;
 int seconds = 0;
 unsigned long lastTick = 0;
-
-// --- MQTT Mode Control ---
-bool mqttEnabled = true;
 
 struct MainRuntimeState {
   bool bootDiagReprinted = false;
@@ -869,6 +768,7 @@ static void initCoreHardware() {
 
 static void initPersistenceAndConfig(RuntimeContext& ctx) {
   s_prefs.begin("zegar", false);
+  AlarmRuntime::reset();
   loadNetworkConfigFromPreferences();
   showEpicIntro = s_prefs.getBool("epicIntro", true);
   settingsEpicIntroIndex = showEpicIntro ? 0 : 1;
@@ -898,8 +798,8 @@ static void initUiAndInput() {
 
   lcd.setExecTimes(37, 1520);
   lcd.init();
-  lcd.backlight();
-  lcd.clear();
+  lcdBacklightSafe();
+  lcdClearSafe();
   lcdFrame.syncToCurrentFrame();
   LCDIcons::loadPalette(lcd, LCDIcons::Palette::Home);
 
@@ -922,7 +822,7 @@ static void initSensors(RuntimeContext& ctx) {
   ENS160AHT21Screen::resetRuntimeData();
   ENS160AHT21Sensor::begin();
   BMP280Sensor::begin();
-  bmp280MenuCount = BMP280Sensor::menuItemCount();
+  uiState.bmp280Menu.count = BMP280Sensor::menuItemCount();
   RAM_CHECKPOINT("SENSORS_INIT");
 
   HomeRuntime::DrawCallbacks homeDrawCallbacks;
@@ -953,7 +853,7 @@ static void initComms(RuntimeContext& ctx) {
 
   lcdFrame.forceFullRedrawOnce();
   ui_begin(callbacks);
-  lcd.backlight();
+  lcdBacklightSafe();
 
 #if CORE_DEBUG_LEVEL > 0
   lcdFrame.reportTiming("startup");
@@ -979,7 +879,7 @@ static void initComms(RuntimeContext& ctx) {
 
   ctx.alarmsCount = s_prefs.getUShort("alarmCount", 0);
   if (ctx.alarmsCount < 0) ctx.alarmsCount = 0;
-  if (ctx.alarmsCount > MAX_ALARMS) ctx.alarmsCount = MAX_ALARMS;
+  if (ctx.alarmsCount > AlarmRuntime::kMaxAlarms) ctx.alarmsCount = AlarmRuntime::kMaxAlarms;
   for (int i = 0; i < ctx.alarmsCount; ++i) {
     char keyH[12];
     char keyM[12];

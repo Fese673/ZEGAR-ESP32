@@ -2,9 +2,13 @@
 
 #include <string.h>
 
+#include "I2C_bus_shared.h"
+
 namespace LCDIcons {
 
 namespace {
+
+constexpr uint32_t kLcdI2cLockTimeoutMs = 1;
 
 constexpr uint8_t kGlyphs[][8] = {
   {0x00,0x0E,0x15,0x17,0x11,0x0E,0x00,0x00}, // Alarm
@@ -97,6 +101,17 @@ constexpr IconId kHomePalette[] = {
   IconId::Note,
 };
 
+constexpr IconId kHomeWifiPalette[] = {
+  IconId::Ntp,
+  IconId::Bell,
+  IconId::Heart,
+  IconId::Check,
+  IconId::Cross,
+  IconId::Smile,
+  IconId::Sad,
+  IconId::Wifi,
+};
+
 constexpr IconId kWeatherPalette[] = {
   IconId::Cloud,
   IconId::Rain,
@@ -130,20 +145,29 @@ constexpr IconId kMediaPalette[] = {
   IconId::Menu3,
 };
 
-}  // namespace
+uint8_t s_loadedIconBySlot[kCgramSlots] = {
+  0xFF, 0xFF, 0xFF, 0xFF,
+  0xFF, 0xFF, 0xFF, 0xFF,
+};
 
-void loadIcon(LiquidCrystal_I2C& lcd, uint8_t slot, IconId iconId) {
+bool loadIconUnlocked(LiquidCrystal_I2C& lcd, uint8_t slot, IconId iconId) {
   const uint8_t id = static_cast<uint8_t>(iconId);
   if (slot >= kCgramSlots || id >= glyphCount()) {
-    return;
+    return false;
+  }
+
+  if (s_loadedIconBySlot[slot] == id) {
+    return false;
   }
 
   uint8_t glyph[8];
   memcpy(glyph, kGlyphs[id], sizeof(glyph));
   lcd.createChar(slot, glyph);
+  s_loadedIconBySlot[slot] = id;
+  return true;
 }
 
-void loadIcons(LiquidCrystal_I2C& lcd, const IconId* iconIds, uint8_t count, uint8_t firstSlot) {
+void loadIconsUnlocked(LiquidCrystal_I2C& lcd, const IconId* iconIds, uint8_t count, uint8_t firstSlot) {
   if (iconIds == nullptr) {
     return;
   }
@@ -153,25 +177,71 @@ void loadIcons(LiquidCrystal_I2C& lcd, const IconId* iconIds, uint8_t count, uin
     if (slot >= kCgramSlots) {
       break;
     }
-    loadIcon(lcd, slot, iconIds[i]);
+    loadIconUnlocked(lcd, slot, iconIds[i]);
   }
 }
 
+}  // namespace
+
+void loadIcon(LiquidCrystal_I2C& lcd, uint8_t slot, IconId iconId) {
+  if (!I2cShared::lock(kLcdI2cLockTimeoutMs)) {
+    return;
+  }
+
+  loadIconUnlocked(lcd, slot, iconId);
+  I2cShared::unlock();
+}
+
+void loadIcons(LiquidCrystal_I2C& lcd, const IconId* iconIds, uint8_t count, uint8_t firstSlot) {
+  if (iconIds == nullptr) {
+    return;
+  }
+
+  if (!I2cShared::lock(kLcdI2cLockTimeoutMs)) {
+    return;
+  }
+
+  loadIconsUnlocked(lcd, iconIds, count, firstSlot);
+  I2cShared::unlock();
+}
+
 void loadPalette(LiquidCrystal_I2C& lcd, Palette palette) {
+  const IconId* iconIds = nullptr;
+  uint8_t count = 0;
+
   switch (palette) {
     case Palette::Home:
-      loadIcons(lcd, kHomePalette, (uint8_t)(sizeof(kHomePalette) / sizeof(kHomePalette[0])));
+      iconIds = kHomePalette;
+      count = (uint8_t)(sizeof(kHomePalette) / sizeof(kHomePalette[0]));
+      break;
+    case Palette::HomeWifi:
+      iconIds = kHomeWifiPalette;
+      count = (uint8_t)(sizeof(kHomeWifiPalette) / sizeof(kHomeWifiPalette[0]));
       break;
     case Palette::Weather:
-      loadIcons(lcd, kWeatherPalette, (uint8_t)(sizeof(kWeatherPalette) / sizeof(kWeatherPalette[0])));
+      iconIds = kWeatherPalette;
+      count = (uint8_t)(sizeof(kWeatherPalette) / sizeof(kWeatherPalette[0]));
       break;
     case Palette::System:
-      loadIcons(lcd, kSystemPalette, (uint8_t)(sizeof(kSystemPalette) / sizeof(kSystemPalette[0])));
+      iconIds = kSystemPalette;
+      count = (uint8_t)(sizeof(kSystemPalette) / sizeof(kSystemPalette[0]));
       break;
     case Palette::Media:
-      loadIcons(lcd, kMediaPalette, (uint8_t)(sizeof(kMediaPalette) / sizeof(kMediaPalette[0])));
+      iconIds = kMediaPalette;
+      count = (uint8_t)(sizeof(kMediaPalette) / sizeof(kMediaPalette[0]));
       break;
   }
+
+  if (iconIds == nullptr || count == 0) {
+    return;
+  }
+
+  if (!I2cShared::lock(kLcdI2cLockTimeoutMs)) {
+    return;
+  }
+
+  loadIconsUnlocked(lcd, iconIds, count, 0);
+  I2cShared::unlock();
 }
 
 }  // namespace LCDIcons

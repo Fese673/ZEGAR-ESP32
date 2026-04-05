@@ -11,6 +11,7 @@ docs/
 ├── telemetry/            # runtime and diagnostic telemetry docs
 │   └── telemetry.md
 ├── reports/              # architecture/refactor/analysis reports
+│   └── old/              # archived or superseded reports
 └── reports_ram/          # RAM and heap analysis reports
 
 hardware/
@@ -34,13 +35,15 @@ include/
 │   └── TemperatureConfig.h
 ├── core/                # core application interfaces
 │   ├── AlarmTypes.h
+│   ├── AppSettings.h
 │   ├── AppState.h
 │   ├── ClockAlarmService.h
 │   ├── ModeManager.h
 │   ├── RamTelemetry.h
 │   ├── RtcSyncService.h
 │   ├── RuntimeTelemetry.h
-│   └── StatsManager.h
+│   ├── StatsManager.h
+│   └── STM32_Data.h
 ├── display/             # display driver and screen interfaces
 │   ├── BMP280Screen.h
 │   ├── ENS160AHT21Screen.h
@@ -60,7 +63,6 @@ include/
 │   ├── BluetoothA2DPOutput.h
 │   ├── BluetoothA2DPSink.h
 │   ├── BluetoothA2DPSinkQueued.h
-│   ├── BluetoothA2DPSource.h
 │   └── BluetoothA2DPSource.h
 ├── comms/               # networking and telemetry composer headers
 │   ├── MQTTSync.h
@@ -74,24 +76,83 @@ include/
 ├── input/               # input controller headers
 │   └── Encoder.h
 ├── sensors/             # sensor abstraction headers
+│   ├── AHTxx.h
+│   ├── BMP280Sensor.h
+│   ├── ENS160AHT21Sensor.h
+│   ├── PMserial.h
+│   ├── PMS_Czujnik.h
+│   └── RTCService.h
 └── ui/                  # UI and menu headers
+    ├── HomeRuntime.h
+    ├── UIState.h
+    ├── UI_Controller.h
+    └── UI_Draw.h
 
 scripts/
 ├── generate_alarm_melodies.py    # build-time melody generation
-└── mqtt_firebase_bridge.py       # bridge/utility script for MQTT diagnostics
+├── mqtt_firebase_bridge.py       # bridge/utility script for MQTT diagnostics
+└── scan_project_map.py           # workspace inventory generator
 
 src/
 ├── main.cpp              # application entrypoint, setup() + loop()
 ├── ErriezDS3231.cpp      # RTC hardware integration
-├── audio/                # audio subsystem implementation
-├── bluetooth/            # Bluetooth service implementation
-├── comms/                # WiFi/MQTT and network orchestration implementation
-├── core/                 # core application logic and state management
-├── display/              # screen rendering and UI output
-├── drivers/              # low-level hardware driver implementations
-├── input/                # encoder and user input services
-├── sensors/              # sensor runtime acquisition services
-└── ui/                   # menu, display flow, and user interaction
+├── audio/
+│   ├── AlarmMelodies.cpp
+│   ├── AlarmMelodies.generated.inc
+│   ├── AlarmMelodyPrefs.cpp
+│   └── README.md
+├── bluetooth/
+│   ├── AudioBT.cpp
+│   ├── BluetoothA2DPCommon.cpp
+│   ├── BluetoothA2DPOutput.cpp
+│   ├── BluetoothA2DPSink.cpp
+│   ├── BluetoothA2DPSinkQueued.cpp
+│   └── BluetoothA2DPSource.cpp
+├── comms/
+│   ├── MQTTSync.cpp
+│   ├── NetworkOrchestrator.cpp
+│   ├── RadioModeSwitch.cpp
+│   ├── README.md
+│   ├── TelemetryComposer.cpp
+│   └── WiFiSync.cpp
+├── core/
+│   ├── AppSettings.cpp
+│   ├── AppState.cpp
+│   ├── ClockAlarmService.cpp
+│   ├── ModeManager.cpp
+│   ├── RamTelemetry.cpp
+│   ├── README.md
+│   ├── RtcSyncService.cpp
+│   ├── RuntimeTelemetry.cpp
+│   ├── StatsManager.cpp
+│   └── STM32_Data.cpp
+├── display/
+│   ├── BMP280Screen.cpp
+│   ├── ENS160AHT21Screen.cpp
+│   ├── LCDIcons.cpp
+│   ├── LCDMirror.cpp
+│   └── README.md
+├── drivers/
+│   ├── I2C_bus_shared.cpp
+│   └── README.md
+├── input/
+│   ├── Encoder.cpp
+│   └── README.md
+├── sensors/
+│   ├── AHTxx.cpp
+│   ├── BMP280Sensor.cpp
+│   ├── ENS160AHT21Sensor.cpp
+│   ├── PMS_Czujnik.cpp
+│   ├── PMserial.cpp
+│   ├── README.md
+│   └── RTCService.cpp
+├── ui/
+│   ├── HomeRuntime.cpp
+│   ├── README.md
+│   ├── UI_Controller.cpp
+│   ├── UI_Draw.cpp
+│   └── UIState.cpp
+└── ZEGAR-ESP32.code-workspace
 
 test/
 ├── test.md               # test directory usage notes

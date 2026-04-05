@@ -5,11 +5,13 @@
 #include <LiquidCrystal_I2C.h>
 
 #include "AppLog.h"
+#include "I2C_bus_shared.h"
 
 extern LiquidCrystal_I2C lcd;
 
 constexpr uint8_t LCD_COLS = 20;
 constexpr uint8_t LCD_ROWS = 4;
+constexpr uint32_t LCD_I2C_LOCK_TIMEOUT_MS = 1;
 
 class LcdFrameBuffer20x4 : public Print {
 public:
@@ -57,6 +59,10 @@ public:
       return false;
     }
 
+    if (!I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
+      return false;
+    }
+
     const uint32_t commitStartUs = micros();
     bool changed = false;
 
@@ -94,6 +100,7 @@ public:
       }
     }
 
+    I2cShared::unlock();
     dirty = false;
     fullForceNext = false;
 
@@ -247,7 +254,7 @@ extern LcdMirror20x4 lcdMirror;
   #define LCD_SET(c, r) do { lcdFrame.setCursor(c, r); lcdMirror.setCursor(c, r); } while(0)
   #define LCD_PRINT(v) do { lcdFrame.print(v); lcdMirror.print(v); } while(0)
   #define LCD_WRITE(b) do { lcdFrame.write(b); lcdMirror.write(b); } while(0)
-  #define LCD_DUMP() do { lcdFrame.commit(); lcdMirror.dumpUART(); } while(0)
+  #define LCD_DUMP() do { if (lcdFrame.commit()) lcdMirror.dumpUART(); } while(0)
 #else
   #define LCD_CLEAR() lcdFrame.clear()
   #define LCD_CLEAR_ROW(r) lcdFrame.clearRow(r)

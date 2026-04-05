@@ -1,5 +1,6 @@
 #include "UI_Controller.h"
 #include <Arduino.h>
+#include "AppSettings.h"
 #include "AppState.h"
 #include "ModeManager.h"
 #include "RadioModeSwitch.h"
@@ -8,145 +9,161 @@
 #include "BMP280Sensor.h"
 #include "AlarmMelodies.h"
 #include "AlarmMelodyPrefs.h"
-#include "AlarmTypes.h"
+#include "AlarmRuntime.h"
+#include "AlarmMelodyPreview.h"
 #include <Preferences.h>
 #include "HomeRuntime.h"
 #include "WiFiSync.h"
+#include "UI_Draw.h"
+#include "UIState.h"
 
-int pms5003MenuIndex = 0;
-const char* pms5003MenuItems[] = {
-  "Tryb Fabryczny",
-  "Tryb Atmosferyczny",
-  "L.Czastek #/100cm3",
-  "Telemetria",
-};
-constexpr int kPms5003MenuCount = 4;
-int pms5003MenuCount = kPms5003MenuCount;
-
-int pms5003CF1MenuIndex = 0;
-const char* pms5003CF1MenuItems[] = {
-  "PM1.0",
-  "PM2.5",
-  "PM10",
-};
-constexpr int kPms5003Cf1MenuCount = 3;
-int pms5003CF1MenuCount = kPms5003Cf1MenuCount;
-
-int pms5003ATMMenuIndex = 0;
-const char* pms5003ATMMenuItems[] = {
-  "PM1.0",
-  "PM2.5",
-  "PM10",
-};
-constexpr int kPms5003AtmMenuCount = 3;
-int pms5003ATMMenuCount = kPms5003AtmMenuCount;
-
-int pms5003ParticlesMenuIndex = 0;
-const char* pms5003ParticlesMenuItems[] = {
-  "0.3um",
-  "0.5um",
-  "1.0um",
-  "2.5um",
-  "5.0um",
-  "10.0um",
-};
-constexpr int kPms5003ParticlesMenuCount = 6;
-int pms5003ParticlesMenuCount = kPms5003ParticlesMenuCount;
-
-int settingsPmsMenuIndex = 0;
-constexpr int kSettingsPmsMenuCount = 2;
-int settingsPmsMenuCount = kSettingsPmsMenuCount;
-
-bool pmsScreenDirty = true;
-
-// ============================================================================
-// ZMIENNE GLOBALNE (extern z main.cpp)
-// ============================================================================
-
-// --- Menu ---
-extern int menuIndex;
-extern int menuCount;
-extern enum AppState appState;
-extern enum EditState editState;
-
-// --- Budzik ---
-extern int  alarmHour;
-extern int  alarmMinute;
-extern bool alarmEnabled;
-extern bool alarmRinging;
-extern unsigned long alarmStartTime;
-extern int alarmEditCursor;
-
-// --- Stoper ---
-extern bool stoperRunning;
-extern unsigned long stoperStart;
-extern unsigned long stoperElapsed;
-
-// --- Czas ---
-extern int hours;
-extern int minutes;
-extern int seconds;
-extern unsigned long lastTick;
-
-// --- Statystyki ---
-extern int statsMenuIndex;
-extern int statsMenuCount;
-
-// --- Zasoby ---
-extern int resourcesMenuIndex;
-extern int resourcesMenuCount;
-
-// --- PMS5003 ---
-extern int ens160MenuIndex;
-extern int ens160MenuCount;
-extern int bmp280MenuIndex;
-extern int bmp280MenuCount;
-
-// --- Minutnik (Timer) externs
-extern int timerSetMinutes;
-extern int timerSetSeconds;
-extern bool timerRunning;
-extern int timerSetHours;
-extern unsigned long timerStartMillis;
-extern unsigned long timerDurationMs;
-extern int timerUiCursor;
-extern int timerPresetIndex;
-
-// --- Multi-Alarm shared state ---
-extern const int MAX_ALARMS;
-extern AlarmEntry alarms[];
-extern int alarmsCount;
-extern int alarmsMenuIndex;
-extern int selectedAlarmIndex;
-
-// --- Ustawienia (Settings) ---
-extern int settingsMenuIndex;
-extern int settingsMenuCount;
-extern int settingsMqttMenuIndex;
-extern int settingsMqttMenuCount;
-extern int settingsBuzzerMenuIndex;
-extern int settingsBuzzerMenuCount;
-extern int settingsAlarmMelodyIndex;
-extern int s_prevSettingsAlarmMelodyIndex;
-extern int settingsEpicIntroIndex;
-extern int settingsEpicIntroMenuCount;
-extern bool buzzerEnabled;
-extern bool mqttEnabled;
-extern bool showEpicIntro;
-extern int settingsRotationSec;
-extern int s_prevSettingsRotationSec;
-extern int settingsSyncMinutes;
-extern int s_prevSettingsSyncMin;
-extern int settingsUiScreenIndex;
-extern int s_prevSettingsUiScreenIndex;
-extern int settingsUiScreenCount;
 extern Preferences s_prefs;
+
+namespace {
+
+template <typename T, size_t N>
+constexpr int arrayCount(const T (&)[N]) {
+  return static_cast<int>(N);
+}
+
+constexpr const char* const kMainMenuItems[] = {
+    "Ustaw czas",
+    "Minutnik",
+    "Stoper",
+    "Budzik",
+    "Statystyki",
+    "Debug STM32",
+    "PMS5003",
+    "AHT21 + ENS160",
+    "BMP280",
+    "Ustawienia",
+    "Wyjscie",
+    "Tryb radia",
+};
+
+constexpr const char* const kPms5003MenuItems[] = {
+    "Tryb Fabryczny",
+    "Tryb Atmosferyczny",
+    "L.Czastek #/100cm3",
+    "Telemetria",
+};
+
+constexpr const char* const kResourcesMenuItems[] = {
+    "RAM Free",
+    "Heap",
+    "Flash Free",
+};
+
+constexpr const char* const kSettingsMenuItems[] = {
+    "PMS5003",
+    "Buzzer",
+    "MQTT",
+    "Alarmy",
+    "Synchronizacja",
+    "Rotacja Ekranu",
+    "UI ekran",
+    "Boot Intro",
+    "Wyjscie",
+};
+
+constexpr const char* const kToggleItems[] = {"Wlaczony", "Wylaczony"};
+constexpr const char* const kIntroItems[] = {"ON", "OFF"};
+constexpr const char* const kUiScreenItems[] = {"Minimal", "Balanced", "Extreme"};
+
+UIState::State& ui = UIState::mutableState();
+AppSettings::State& settings = AppSettings::mutableState();
+AlarmRuntime::State& alarmRuntime = AlarmRuntime::mutableState();
+
+int& menuIndex = ui.mainMenu.index;
+int& menuCount = ui.mainMenu.count;
+const char* const*& menuItems = ui.mainMenu.items;
+
+int& statsMenuIndex = ui.statsMenu.index;
+int& statsMenuCount = ui.statsMenu.count;
+
+int& resourcesMenuIndex = ui.resourcesMenu.index;
+int& resourcesMenuCount = ui.resourcesMenu.count;
+const char* const*& resourcesMenuItems = ui.resourcesMenu.items;
+
+int& pms5003MenuIndex = ui.pmsMenu.index;
+int& pms5003MenuCount = ui.pmsMenu.count;
+const char* const*& pms5003MenuItems = ui.pmsMenu.items;
+
+int& pms5003CF1MenuIndex = ui.pmsCf1Menu.index;
+int& pms5003CF1MenuCount = ui.pmsCf1Menu.count;
+
+int& pms5003ATMMenuIndex = ui.pmsAtmMenu.index;
+int& pms5003ATMMenuCount = ui.pmsAtmMenu.count;
+
+int& pms5003ParticlesMenuIndex = ui.pmsParticlesMenu.index;
+int& pms5003ParticlesMenuCount = ui.pmsParticlesMenu.count;
+
+int& ens160MenuIndex = ui.ens160Menu.index;
+int& ens160MenuCount = ui.ens160Menu.count;
+
+int& bmp280MenuIndex = ui.bmp280Menu.index;
+int& bmp280MenuCount = ui.bmp280Menu.count;
+
+int& settingsMenuIndex = ui.settingsMenu.index;
+int& settingsMenuCount = ui.settingsMenu.count;
+const char* const*& settingsMenuItems = ui.settingsMenu.items;
+
+int& settingsPmsMenuIndex = ui.settingsPmsMenu.index;
+int& settingsPmsMenuCount = ui.settingsPmsMenu.count;
+const char* const*& settingsPmsMenuItems = ui.settingsPmsMenu.items;
+
+int& settingsBuzzerMenuIndex = ui.settingsBuzzerMenu.index;
+int& settingsBuzzerMenuCount = ui.settingsBuzzerMenu.count;
+const char* const*& settingsBuzzerMenuItems = ui.settingsBuzzerMenu.items;
+
+int& settingsMqttMenuIndex = ui.settingsMqttMenu.index;
+int& settingsMqttMenuCount = ui.settingsMqttMenu.count;
+const char* const*& settingsMqttMenuItems = ui.settingsMqttMenu.items;
+
+int& settingsAlarmMelodyIndex = ui.settingsAlarmMelodyMenu.index;
+int& settingsAlarmMelodyMenuCount = ui.settingsAlarmMelodyMenu.count;
+
+int& settingsEpicIntroIndex = ui.settingsBootIntroMenu.index;
+int& settingsEpicIntroMenuCount = ui.settingsBootIntroMenu.count;
+const char* const*& settingsEpicIntroItems = ui.settingsBootIntroMenu.items;
+
+int& settingsUiScreenIndex = ui.settingsUiScreenMenu.index;
+int& settingsUiScreenCount = ui.settingsUiScreenMenu.count;
+const char* const*& settingsUiScreenItems = ui.settingsUiScreenMenu.items;
+
+int& alarmsMenuIndex = ui.alarmsMenu.index;
+int& alarmsMenuCount = ui.alarmsMenu.count;
+
+int& selectedAlarmIndex = ui.selectedAlarmIndex;
+int& alarmEditCursor = ui.alarmEditCursor;
+bool& pmsScreenDirty = ui.pmsScreenDirty;
+
+int& alarmHour = alarmRuntime.alarmHour;
+int& alarmMinute = alarmRuntime.alarmMinute;
+bool& alarmEnabled = alarmRuntime.alarmEnabled;
+bool& alarmRinging = alarmRuntime.alarmRinging;
+unsigned long& alarmStartTime = alarmRuntime.alarmStartTime;
+AlarmEntry (&alarms)[AlarmRuntime::kMaxAlarms] = alarmRuntime.alarms;
+int& alarmsCount = alarmRuntime.alarmsCount;
+
+int& s_prevSettingsAlarmMelodyIndex = ui.prevSettingsAlarmMelodyIndex;
+int& s_prevSettingsRotationSec = ui.prevSettingsRotationSec;
+int& s_prevSettingsSyncMin = ui.prevSettingsSyncMin;
+int& s_prevSettingsUiScreenIndex = ui.prevSettingsUiScreenIndex;
+
+AppState& s_alarmReturnState = ui.alarmReturnState;
+
+bool& buzzerEnabled = settings.buzzerEnabled;
+bool& mqttEnabled = settings.mqttEnabled;
+bool& showEpicIntro = settings.showEpicIntro;
+int& settingsRotationSec = settings.homeOverlaySeconds;
+int& settingsUiScreenPersistedIndex = settings.homeUiProfile;
+int& settingsSyncMinutes = settings.ntpSyncMinutes;
+int& settingsAlarmMelodyPersistedIndex = settings.alarmMelodyIndex;
 
 // ============================================================================
 // FUNKCJE EXTERN (z main.cpp)
 // ============================================================================
-extern void startAlarmMelodyDemo(uint8_t melodyIndex);
-extern void stopAlarmMelodyDemo();
 
 static bool getPms5003Enabled() {
   return PMS5003Sensor::isEnabled();
@@ -186,7 +203,6 @@ static void setShowEpicIntro(bool enabled) {
 // ============================================================================
 
 static UI_Callbacks s_callbacks;
-static AppState s_alarmReturnState = STATE_MENU;
 
 static inline void callDraw(DrawFn fn) {
   if (fn) {
@@ -261,6 +277,19 @@ struct ToggleSettingBinding {
   void (*setValue)(bool);
   const char* prefKey;
 };
+
+static void bindMenu(UIState::MenuState& state, const char* const* items, int count) {
+  state.items = items;
+  state.count = count;
+  if (state.count <= 0) {
+    state.index = 0;
+    return;
+  }
+
+  if (state.index < 0 || state.index >= state.count) {
+    state.index = 0;
+  }
+}
 
 static int clampMenuIndexSafe(int index, int count) {
   if (count <= 0) {
@@ -353,10 +382,11 @@ static bool handleSettingsRotate(int dir) {
 static bool handleSettingsConfirmClick() {
   if (appState == STATE_SETTINGS_ALARM_MELODY) {
     settingsAlarmMelodyIndex = clampMenuIndexSafe(settingsAlarmMelodyIndex, AlarmMelodies::kCount);
+    settingsAlarmMelodyPersistedIndex = settingsAlarmMelodyIndex;
     AlarmMelodyPrefs::saveSelection(s_prefs, settingsAlarmMelodyIndex);
     drawStatsSafe();
     if (AlarmMelodies::kCount > 0) {
-      startAlarmMelodyDemo((uint8_t)settingsAlarmMelodyIndex);
+      AlarmMelodyPreview::start((uint8_t)settingsAlarmMelodyIndex);
     }
     return true;
   }
@@ -376,7 +406,8 @@ static bool handleSettingsConfirmClick() {
 
   if (appState == STATE_SETTINGS_UI_SCREEN) {
     settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenIndex, settingsUiScreenCount);
-    s_prefs.putUShort("uiScreenMode", (uint16_t)settingsUiScreenIndex);
+    settingsUiScreenPersistedIndex = settingsUiScreenIndex;
+    s_prefs.putUShort("uiScreenMode", (uint16_t)settingsUiScreenPersistedIndex);
     returnToSettingsMenu();
     return true;
   }
@@ -423,7 +454,7 @@ static bool handleSettingsLongCancel() {
 
   if (appState == STATE_SETTINGS_ALARM_MELODY) {
     settingsAlarmMelodyIndex = clampMenuIndexSafe(s_prevSettingsAlarmMelodyIndex, AlarmMelodies::kCount);
-    stopAlarmMelodyDemo();
+    AlarmMelodyPreview::stop();
     returnToSettingsMenu();
     return true;
   }
@@ -843,7 +874,8 @@ static bool handleSettingsMenuClick() {
       drawStatsSafe();
       break;
     case 3:
-      settingsAlarmMelodyIndex = clampMenuIndexSafe(AlarmMelodyPrefs::loadIndex(s_prefs), AlarmMelodies::kCount);
+      settingsAlarmMelodyPersistedIndex = clampMenuIndexSafe(AlarmMelodyPrefs::loadIndex(s_prefs), AlarmMelodies::kCount);
+      settingsAlarmMelodyIndex = settingsAlarmMelodyPersistedIndex;
       s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
       appState = STATE_SETTINGS_ALARM_MELODY;
       drawStatsSafe();
@@ -861,6 +893,7 @@ static bool handleSettingsMenuClick() {
     case 6:
       settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenIndex, settingsUiScreenCount);
       appState = STATE_SETTINGS_UI_SCREEN;
+      settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenPersistedIndex, settingsUiScreenCount);
       s_prevSettingsUiScreenIndex = settingsUiScreenIndex;
       drawStatsSafe();
       break;
@@ -880,8 +913,59 @@ static bool handleSettingsMenuClick() {
   return true;
 }
 
+}  // namespace
+
 void ui_begin(const UI_Callbacks& callbacks) {
   s_callbacks = callbacks;
+  UIState::reset();
+
+  bindMenu(ui.mainMenu, kMainMenuItems, arrayCount(kMainMenuItems));
+  bindMenu(ui.pmsMenu, kPms5003MenuItems, arrayCount(kPms5003MenuItems));
+  bindMenu(ui.resourcesMenu, kResourcesMenuItems, arrayCount(kResourcesMenuItems));
+  bindMenu(ui.settingsMenu, kSettingsMenuItems, arrayCount(kSettingsMenuItems));
+  bindMenu(ui.settingsPmsMenu, kToggleItems, arrayCount(kToggleItems));
+  bindMenu(ui.settingsBuzzerMenu, kToggleItems, arrayCount(kToggleItems));
+  bindMenu(ui.settingsMqttMenu, kToggleItems, arrayCount(kToggleItems));
+  bindMenu(ui.settingsBootIntroMenu, kIntroItems, arrayCount(kIntroItems));
+  bindMenu(ui.settingsUiScreenMenu, kUiScreenItems, arrayCount(kUiScreenItems));
+
+  ui.statsMenu.count = 6;
+  ui.statsMenu.index = 0;
+  ui.statsMenu.items = nullptr;
+
+  ui.pmsCf1Menu.count = 3;
+  ui.pmsCf1Menu.index = 0;
+  ui.pmsCf1Menu.items = nullptr;
+
+  ui.pmsAtmMenu.count = 3;
+  ui.pmsAtmMenu.index = 0;
+  ui.pmsAtmMenu.items = nullptr;
+
+  ui.pmsParticlesMenu.count = 6;
+  ui.pmsParticlesMenu.index = 0;
+  ui.pmsParticlesMenu.items = nullptr;
+
+  ui.ens160Menu.count = 6;
+  ui.ens160Menu.index = 0;
+  ui.ens160Menu.items = nullptr;
+
+  ui.bmp280Menu.count = BMP280Sensor::menuItemCount();
+  ui.bmp280Menu.index = 0;
+  ui.bmp280Menu.items = nullptr;
+
+  ui.settingsAlarmMelodyMenu.count = AlarmMelodies::kCount;
+  ui.settingsAlarmMelodyMenu.index = 0;
+  ui.settingsAlarmMelodyMenu.items = nullptr;
+
+  ui.alarmsMenu.count = 0;
+  ui.alarmsMenu.index = 0;
+  ui.alarmsMenu.items = nullptr;
+
+  ui.selectedAlarmIndex = 0;
+  ui.alarmEditCursor = 0;
+  ui.alarmReturnState = STATE_MENU;
+  ui.pmsScreenDirty = true;
+
   drawHomeSafe();
 }
 
@@ -1174,7 +1258,7 @@ void ui_handleEvent(EncoderEvent e) {
         drawStatsSafe();
       } else {
         // add new alarm (if room)
-        if (alarmsCount < MAX_ALARMS) {
+        if (alarmsCount < AlarmRuntime::kMaxAlarms) {
           alarms[alarmsCount].hour = 7;
           alarms[alarmsCount].minute = 0;
           alarms[alarmsCount].enabled = true;
@@ -1438,4 +1522,4 @@ void ui_handleEvent(EncoderEvent e) {
         return;
     }
   }
-} // koniec: ui_handleEvent(...)
+  } // koniec: ui_handleEvent(...)

@@ -14,6 +14,7 @@
 // Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
 
 #pragma once
+#include <atomic>
 #include "BluetoothA2DPCommon.h"
 #if IS_VALID_PLATFORM
 
@@ -372,10 +373,10 @@ class BluetoothA2DPSink : public BluetoothA2DPCommon {
 
 
   /// Activate/Deactivate output e.g. to I2S
-  void set_output_active(bool flag) { is_i2s_active = flag; }
+  void set_output_active(bool flag) { is_i2s_active.store(flag); }
 
   /// Checks if output is active
-  bool is_output_active() { return is_i2s_active; }
+  bool is_output_active() { return is_i2s_active.load(); }
 
   /// defines the max write size: default is A2DP_I2S_MAX_WRITE_SIZE
   void set_max_write_size(int size) { max_write_size = size; }
@@ -402,7 +403,7 @@ class BluetoothA2DPSink : public BluetoothA2DPCommon {
   BluetoothA2DPOutputDefault out_default;
   BluetoothA2DPOutput *out = &out_default;
 
-  volatile bool is_i2s_active = false;
+  std::atomic_bool is_i2s_active{false};
   // activate output via BluetoothA2DPOutput
   bool is_output = true;
   uint16_t m_sample_rate = 44100;  // set default rate

@@ -214,7 +214,7 @@ void BluetoothA2DPSink::init_i2s() {
   ESP_LOGI(BT_AV_TAG, "init_i2s");
   if (is_output) {
     out->begin();
-    is_i2s_active = true;
+    is_i2s_active.store(true);
   }
 }
 
@@ -660,7 +660,7 @@ void BluetoothA2DPSink::handle_audio_cfg(uint16_t event, void *p_param) {
              (int)a2d->audio_cfg.mcc.cie.sbc_info.alloc_mthd);
 #else
     ESP_LOGI(
-        BT_AV_TAG, "configure audio player %x-%x-%x-%x\n",
+      BT_AV_TAG, "configure audio player %x-%x-%x-%x\n",
         (int)a2d->audio_cfg.mcc.cie.sbc[0], (int)a2d->audio_cfg.mcc.cie.sbc[1],
         (int)a2d->audio_cfg.mcc.cie.sbc[2], (int)a2d->audio_cfg.mcc.cie.sbc[3]);
 #endif
@@ -714,16 +714,16 @@ void BluetoothA2DPSink::set_i2s_active(bool active) {
   ESP_LOGI(BT_AV_TAG, "%s %d", __func__, active);
   if (active) m_pkt_cnt = 0;
   if (is_output) {
-    if (is_i2s_active != active) {
+    if (is_i2s_active.load() != active) {
       // mark deactive before deactivating i2s
-      if (!active) is_i2s_active = false;
+      if (!active) is_i2s_active.store(false);
       out->set_output_active(active);
       // active flag after i2s is active
-      if (active) is_i2s_active = true;
+      if (active) is_i2s_active.store(true);
     }
   } else {
     // just update the actual status
-    is_i2s_active = active;
+    is_i2s_active.store(active);
   }
 }
 
@@ -1309,7 +1309,7 @@ size_t BluetoothA2DPSink::i2s_write_data(const uint8_t *data,
                                          size_t item_size) {
   if (!is_output) return item_size;
 
-  if (!is_i2s_active) {
+  if (!is_i2s_active.load()) {
     ESP_LOGW(BT_AV_TAG, "%s failed - inactive", __func__);
     return 0;
   }

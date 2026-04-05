@@ -3,7 +3,7 @@
 The map is organized by functional domains, not by implementation detail. It is intended to be easy to extend as the firmware grows.
 
 platformio.ini            # build config, lib_deps, build_flags
-README.md                 # high-level project overview for humans
+README                    # high-level project overview for humans
 Project-Map.md            # this file
 
 docs/
@@ -25,6 +25,9 @@ hardware/
 
 include/
 ├── headers.md           # public header guidance for cross-module integration
+├── AppLog.h             # shared logging API for application diagnostics
+├── config.h             # shared compile-time config aliases and board selection
+├── LiquidCrystal_I2C.h  # external LCD driver public header
 ├── config/              # board pins, secrets, temperature config
 │   ├── BoardPins.h
 │   ├── SecretsConfig.h
@@ -93,6 +96,7 @@ src/
 test/
 ├── test.md               # test directory usage notes
 ├── logi.txt              # collected serial/log artifacts
+├── verify_bt_no_wifi_mqtt.py  # diagnostic script for Bluetooth/MQTT behavior
 
 third_party/
 ├── third_party.md        # vendor code and archival notes

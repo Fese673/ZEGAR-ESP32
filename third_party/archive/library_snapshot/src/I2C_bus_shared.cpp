@@ -1,5 +1,7 @@
 #include "I2C_bus_shared.h"
 
+#include <atomic>
+
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -12,10 +14,10 @@ namespace {
 SemaphoreHandle_t gI2cMutex = nullptr;
 #endif
 
-volatile bool gDiagEnabled = false;
-volatile uint32_t gTimeoutCount = 0;
-volatile uint32_t gNackCount = 0;
-volatile uint32_t gErrorCount = 0;
+std::atomic_bool gDiagEnabled{false};
+std::atomic_uint32_t gTimeoutCount{0};
+std::atomic_uint32_t gNackCount{0};
+std::atomic_uint32_t gErrorCount{0};
 
 uint8_t clampRetries(uint8_t retries)
 {
@@ -26,14 +28,14 @@ uint8_t clampRetries(uint8_t retries)
 
 void classifyWireError(int err)
 {
-    if (!gDiagEnabled) return;
+    if (!gDiagEnabled.load()) return;
 
     if (err == 2 || err == 3) {
-        gNackCount++;
+        gNackCount.fetch_add(1);
     } else if (err == 5) {
-        gTimeoutCount++;
+        gTimeoutCount.fetch_add(1);
     } else if (err != 0) {
-        gErrorCount++;
+        gErrorCount.fetch_add(1);
     }
 }
 
@@ -53,44 +55,45 @@ bool ensureMutex()
 
 namespace I2cShared {
 
-void initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
+bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
 {
     if (wire == nullptr) {
-        return;
+        return false;
     }
     wire->begin(sdaPin, sclPin);
     wire->setClock(clockHz);
+    return true;
 }
 
-void initMaster(int sdaPin, int sclPin, uint32_t clockHz)
+bool initMaster(int sdaPin, int sclPin, uint32_t clockHz)
 {
-    initMaster(&Wire, sdaPin, sclPin, clockHz);
+    return initMaster(&Wire, sdaPin, sclPin, clockHz);
 }
 
 void setDiagnosticsEnabled(bool enabled)
 {
-    gDiagEnabled = enabled;
+    gDiagEnabled.store(enabled);
 }
 
 bool diagnosticsEnabled()
 {
-    return gDiagEnabled;
+    return gDiagEnabled.load();
 }
 
 I2cSharedStats getStats()
 {
     I2cSharedStats out = {};
-    out.timeout = gTimeoutCount;
-    out.nack = gNackCount;
-    out.error = gErrorCount;
+    out.timeout = gTimeoutCount.load();
+    out.nack = gNackCount.load();
+    out.error = gErrorCount.load();
     return out;
 }
 
 void resetStats()
 {
-    gTimeoutCount = 0;
-    gNackCount = 0;
-    gErrorCount = 0;
+    gTimeoutCount.store(0);
+    gNackCount.store(0);
+    gErrorCount.store(0);
 }
 
 bool lock(uint32_t timeoutMs)
@@ -106,7 +109,7 @@ bool lock(uint32_t timeoutMs)
     }
 
     if (xSemaphoreTakeRecursive(gI2cMutex, ticks) != pdTRUE) {
-        if (gDiagEnabled) gTimeoutCount++;
+        if (gDiagEnabled.load()) gTimeoutCount.fetch_add(1);
         return false;
     }
 #endif

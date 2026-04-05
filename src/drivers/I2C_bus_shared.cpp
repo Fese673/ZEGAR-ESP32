@@ -1,5 +1,6 @@
 #include "I2C_bus_shared.h"
 
+#include "AppLog.h"
 #include "RuntimeTelemetry.h"
 
 #include <atomic>
@@ -11,6 +12,8 @@
 #endif
 
 namespace {
+
+constexpr char TAG[] = "I2C";
 
 #ifdef ARDUINO_ARCH_ESP32
 SemaphoreHandle_t gI2cMutex = nullptr;
@@ -39,6 +42,7 @@ struct I2cRequest {
 
     std::atomic<uint8_t> refs{2};
     std::atomic<bool> completed{false};
+    SemaphoreHandle_t done = nullptr;
     bool inUse = false;
     bool result = false;
     Op op = Op::Probe;
@@ -77,6 +81,18 @@ I2cRequest *acquireRequest()
             slot.timeoutMs = 1;
             slot.retries = 1;
             taskEXIT_CRITICAL(&gI2cRequestPoolMux);
+
+            if (slot.done == nullptr) {
+                slot.done = xSemaphoreCreateBinary();
+                if (slot.done == nullptr) {
+                    taskENTER_CRITICAL(&gI2cRequestPoolMux);
+                    slot.inUse = false;
+                    taskEXIT_CRITICAL(&gI2cRequestPoolMux);
+                    return nullptr;
+                }
+            }
+
+            (void)xSemaphoreTake(slot.done, 0);
             return &slot;
         }
     }
@@ -158,6 +174,9 @@ void i2cWorkerTask(void *)
         }
 
         request->completed.store(true, std::memory_order_release);
+        if (request->done != nullptr) {
+            (void)xSemaphoreGive(request->done);
+        }
         releaseRequest(request);
     }
 }
@@ -208,21 +227,22 @@ bool submitRequest(I2cRequest *request)
         return false;
     }
 
-    const unsigned long startMs = millis();
     const uint32_t timeoutMs = request->timeoutMs == 0 ? 1 : request->timeoutMs;
-    while (!request->completed.load(std::memory_order_acquire)) {
-        if ((millis() - startMs) >= timeoutMs) {
-            if (gDiagEnabled) {
-                ++gTimeoutCount;
-            }
-            TELEMETRY_INC(i2c_timeouts);
-            releaseRequest(request);
-            return false;
-        }
-        vTaskDelay(1);
+    TickType_t waitTicks = pdMS_TO_TICKS(timeoutMs);
+    if (timeoutMs > 0 && waitTicks == 0) {
+        waitTicks = 1;
     }
 
-    const bool ok = request->result;
+    if (request->done == nullptr || xSemaphoreTake(request->done, waitTicks) != pdTRUE) {
+        if (gDiagEnabled) {
+            ++gTimeoutCount;
+        }
+        TELEMETRY_INC(i2c_timeouts);
+        releaseRequest(request);
+        return false;
+    }
+
+    const bool ok = request->completed.load(std::memory_order_acquire) && request->result;
     releaseRequest(request);
     return ok;
 }
@@ -461,17 +481,18 @@ bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
 
 #ifdef ARDUINO_ARCH_ESP32
     if (!ensureWorker()) {
-        Serial.println("[I2C] WARNING: worker task could not be started, using fallback path");
+        LOG_W(TAG, "Worker task could not be started fallback_path=true");
     }
 #endif
 
 #ifdef ARDUINO_ARCH_ESP32
     if (!applied) {
-        Serial.printf("[I2C] setClock(%lu) mismatch after begin(sda=%d, scl=%d): actual=%lu. Reinitializing bus and retrying.\n",
-                      (unsigned long)clockHz,
-                      sdaPin,
-                      sclPin,
-                      (unsigned long)actualClockHz);
+        LOG_W(TAG,
+              "Clock mismatch after begin requested_hz=%lu actual_hz=%lu sda=%d scl=%d retrying=true",
+              (unsigned long)clockHz,
+              (unsigned long)actualClockHz,
+              sdaPin,
+              sclPin);
 
         wire->end();
         TickType_t settleTicks = pdMS_TO_TICKS(1);
@@ -483,12 +504,13 @@ bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
         applied = applyClockAndVerify(wire, clockHz, &actualClockHz);
     }
 
-    Serial.printf("[I2C] bus ready: requested=%lu actual=%lu sda=%d scl=%d %s\n",
-                  (unsigned long)clockHz,
-                  (unsigned long)actualClockHz,
-                  sdaPin,
-                  sclPin,
-                  applied ? "OK" : "MISMATCH");
+        LOG_I(TAG,
+            "Bus ready requested_hz=%lu actual_hz=%lu sda=%d scl=%d status=%s",
+            (unsigned long)clockHz,
+            (unsigned long)actualClockHz,
+            sdaPin,
+            sclPin,
+            applied ? "OK" : "MISMATCH");
 #endif
 
     return applied;

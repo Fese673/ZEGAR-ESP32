@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <ScioSense_ENS16x.h>
+#include "AppLog.h"
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -16,6 +17,8 @@
 #include "TemperatureConfig.h"
 
 namespace {
+
+constexpr const char* TAG = "ENS160";
 
 constexpr uint8_t ENS160_I2C_ADDRESS = 0x53;
 constexpr uint8_t ENS160_I2C_ADDRESS_ALT = 0x52;
@@ -112,23 +115,28 @@ bool isEns160ValidityStable(uint8_t validityFlag) {
 
 void logEns160Measurement(Ens160RuntimeState state) {
 #ifdef ENS160_DEBUG
-    Serial.print("ENS160: status=");
-    Serial.print(getEns160RuntimeStateString(state));
-    if (s_hasGasSample) {
-        Serial.print(" AQI=");
-        Serial.print(s_lastAqi);
-        Serial.print(" TVOC=");
-        Serial.print(s_lastTvoc);
-        Serial.print(" eCO2=");
-        Serial.print(s_lastEco2);
+    if (s_hasGasSample && s_hasClimateSample) {
+        LOG_I(TAG, "status=%s aqi=%d tvoc=%u eco2=%u temperature_c=%.2f humidity_pct=%.2f",
+              getEns160RuntimeStateString(state),
+              s_lastAqi,
+              (unsigned)s_lastTvoc,
+              (unsigned)s_lastEco2,
+              s_lastTemperature,
+              s_lastHumidity);
+    } else if (s_hasGasSample) {
+        LOG_I(TAG, "status=%s aqi=%d tvoc=%u eco2=%u",
+              getEns160RuntimeStateString(state),
+              s_lastAqi,
+              (unsigned)s_lastTvoc,
+              (unsigned)s_lastEco2);
+    } else if (s_hasClimateSample) {
+        LOG_I(TAG, "status=%s temperature_c=%.2f humidity_pct=%.2f",
+              getEns160RuntimeStateString(state),
+              s_lastTemperature,
+              s_lastHumidity);
+    } else {
+        LOG_I(TAG, "status=%s", getEns160RuntimeStateString(state));
     }
-    if (s_hasClimateSample) {
-        Serial.print(" T=");
-        Serial.print(s_lastTemperature, 2);
-        Serial.print(" H=");
-        Serial.print(s_lastHumidity, 2);
-    }
-    Serial.println();
 #else
     (void)state;
 #endif
@@ -242,7 +250,7 @@ void updateClimateData() {
             const uint16_t humRaw = Ens16x_CalcRhIn(humidity);
             Result compResult = s_ens160.writeCompensation(tempRaw, humRaw);
             if (compResult != RESULT_OK) {
-                Serial.printf("AHT->ENS160 compensation write failed: %d\n", (int)compResult);
+                LOG_E(TAG, "Compensation write failed code=%d", (int)compResult);
             }
         }
 
@@ -268,10 +276,9 @@ void begin() {
     s_ens160Present = initializeENS160();
     if (!s_ens160Present) {
         setENS160OfflineState();
-        Serial.println("ENS160 not responding. Check wiring, power, and pull-ups.");
+        LOG_W(TAG, "status=offline reason=not_responding action=check_wiring_power_pullups");
     } else {
-        Serial.print("ENS160 init success at 0x");
-        Serial.println(s_ens160Address, HEX);
+        LOG_I(TAG, "status=ready address=0x%02X", s_ens160Address);
         s_runtimeState = ENS160_STATE_INIT_STARTUP;
     }
 
@@ -280,10 +287,10 @@ void begin() {
         s_aht21.setSelfHeatingCompensation(0.1f);
         s_aht21.setMeasurementInterval(3000);
         s_ahtPresent = true;
-        Serial.println("AHT21 init started");
+        LOG_I(TAG, "component=AHT21 action=init_start");
     } else {
         s_ahtPresent = false;
-        Serial.println("AHT21 not detected on I2C");
+        LOG_W(TAG, "component=AHT21 status=not_detected");
     }
 
     s_started = true;
@@ -305,7 +312,7 @@ void update() {
 
     if (!s_ens160Present) {
         if ((now - s_lastEns160CommErrLogMs) >= ENS160_COMM_ERR_LOG_INTERVAL_MS) {
-            Serial.println("ENS160: status=OFFLINE");
+            LOG_W(TAG, "status=OFFLINE");
             s_lastEns160CommErrLogMs = now;
         }
         s_runtimeState = ENS160_STATE_OFFLINE;
@@ -342,7 +349,7 @@ void update() {
     if (ensResult == RESULT_INVALID) {
         s_runtimeState = ENS160_STATE_NO_NEW_DATA;
         if ((now - s_lastEns160NoNewDataLogMs) >= ENS160_NO_NEW_DATA_LOG_INTERVAL_MS) {
-            Serial.println("ENS160: status=NO_NEW_DATA");
+            LOG_I(TAG, "status=NO_NEW_DATA");
             s_lastEns160NoNewDataLogMs = now;
         }
         publishRuntimeData(false);
@@ -353,7 +360,7 @@ void update() {
     s_runtimeState = ENS160_STATE_COMM_ERR;
 
     if ((now - s_lastEns160CommErrLogMs) >= ENS160_COMM_ERR_LOG_INTERVAL_MS) {
-        Serial.printf("ENS160: status=COMM_ERR code=%d streak=%u\n", (int)ensResult, s_ens160ErrorStreak);
+        LOG_W(TAG, "status=COMM_ERR code=%d streak=%u", (int)ensResult, s_ens160ErrorStreak);
         s_lastEns160CommErrLogMs = now;
     }
 
@@ -361,18 +368,17 @@ void update() {
         s_ens160ErrorStreak >= ENS160_REINIT_ERROR_THRESHOLD &&
         (now - s_lastEns160ReinitAttemptMs) >= ENS160_REINIT_COOLDOWN_MS) {
         s_lastEns160ReinitAttemptMs = now;
-        Serial.println("ENS160: status=COMM_ERR -> restarting sensor");
+        LOG_W(TAG, "status=COMM_ERR action=restart_sensor");
         s_runtimeState = ENS160_STATE_RECOVERING;
         publishRuntimeData(true);
 
         setENS160OfflineState();
         s_ens160Present = initializeENS160();
         if (s_ens160Present) {
-            Serial.print("ENS160 recovered at 0x");
-            Serial.println(s_ens160Address, HEX);
+            LOG_I(TAG, "status=recovered address=0x%02X", s_ens160Address);
             s_runtimeState = ENS160_STATE_RECOVERING;
         } else {
-            Serial.println("ENS160 reinit failed; sensor remains offline.");
+            LOG_E(TAG, "status=offline action=reinit_failed");
             s_runtimeState = ENS160_STATE_OFFLINE;
         }
     }

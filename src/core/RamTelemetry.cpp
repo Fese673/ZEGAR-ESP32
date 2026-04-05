@@ -1,5 +1,7 @@
 #include "RamTelemetry.h"
 
+#include "AppLog.h"
+
 #if TEST_RAM
 
 #include <cstdio>
@@ -13,6 +15,8 @@
 
 namespace RamTelemetry {
 namespace {
+constexpr char TAG[] = "RAM";
+
 TaskWatermark captureTaskWatermark(TaskHandle_t handle) {
   TaskWatermark watermark;
   if (handle == nullptr) {
@@ -51,7 +55,7 @@ void formatTaskField(char* out, size_t outSize, const char* label, const TaskWat
 }
 
 void printSnapshotLine(Stream& out,
-                       const char* kind,
+                       const char* messageKind,
                        uint32_t sequence,
                        const char* tag,
                        const Snapshot& now,
@@ -71,30 +75,29 @@ void printSnapshotLine(Stream& out,
   formatTaskField(wifiInitTaskField, sizeof(wifiInitTaskField), "wifiInit", now.taskWatermarks.wifiInitTask);
   formatTaskField(btI2STaskField, sizeof(btI2STaskField), "btI2S", now.taskWatermarks.btI2STask);
 
-  char line[512];
-  snprintf(line,
-           sizeof(line),
-           "[RAM][%s] #%lu %s free=%luB (prev %+ld, base %+ld) largest=%luB (prev %+ld, base %+ld) ratio=%u/1000 frag=%u/1000 dma=%luB (prev %+ld, base %+ld) min=%luB total=%luB stk[%s %s %s]",
-           kind,
-           static_cast<unsigned long>(sequence),
-           normalizeTag(tag),
-           static_cast<unsigned long>(now.freeHeap),
-           static_cast<long>(deltaFreePrev),
-           static_cast<long>(deltaFreeBase),
-           static_cast<unsigned long>(now.largestFreeBlock),
-           static_cast<long>(deltaLargestPrev),
-           static_cast<long>(deltaLargestBase),
-           static_cast<unsigned int>(now.largestFreeBlockRatioPermille),
-           static_cast<unsigned int>(now.fragmentationPermille),
-           static_cast<unsigned long>(now.dmaFree),
-           static_cast<long>(deltaDmaPrev),
-           static_cast<long>(deltaDmaBase),
-           static_cast<unsigned long>(now.minFreeHeap),
-           static_cast<unsigned long>(now.totalHeap),
-           mqttTaskField,
-           wifiInitTaskField,
-           btI2STaskField);
-  out.println(line);
+  LOG_TO(out,
+         TAG,
+         'I',
+         "%s #%lu checkpoint=%s free_b=%lu prev_free_b=%+ld base_free_b=%+ld largest_b=%lu prev_largest_b=%+ld base_largest_b=%+ld ratio_permille=%u frag_permille=%u dma_b=%lu prev_dma_b=%+ld base_dma_b=%+ld min_b=%lu total_b=%lu task_mqtt=%s task_wifi_init=%s task_bt_i2s=%s",
+         messageKind,
+         static_cast<unsigned long>(sequence),
+         normalizeTag(tag),
+         static_cast<unsigned long>(now.freeHeap),
+         static_cast<long>(deltaFreePrev),
+         static_cast<long>(deltaFreeBase),
+         static_cast<unsigned long>(now.largestFreeBlock),
+         static_cast<long>(deltaLargestPrev),
+         static_cast<long>(deltaLargestBase),
+         static_cast<unsigned int>(now.largestFreeBlockRatioPermille),
+         static_cast<unsigned int>(now.fragmentationPermille),
+         static_cast<unsigned long>(now.dmaFree),
+         static_cast<long>(deltaDmaPrev),
+         static_cast<long>(deltaDmaBase),
+         static_cast<unsigned long>(now.minFreeHeap),
+         static_cast<unsigned long>(now.totalHeap),
+         mqttTaskField,
+         wifiInitTaskField,
+         btI2STaskField);
 }
 }  // namespace
 
@@ -145,7 +148,7 @@ bool checkpoint(const char* tag, bool dumpHeapInfo) {
     ++g_checkpointSequence;
   }
 
-  printSnapshotLine(Serial, "CHK", g_checkpointSequence, tag, now, g_lastCheckpoint, g_baseline);
+  printSnapshotLine(Serial, "Heap check", g_checkpointSequence, tag, now, g_lastCheckpoint, g_baseline);
 
   if (dumpHeapInfo) {
     heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
@@ -181,7 +184,7 @@ bool service(Stream& out, unsigned long nowMs, unsigned long intervalMs) {
 
   ++g_heartbeatSequence;
 
-  printSnapshotLine(out, "HB", g_heartbeatSequence, "HEARTBEAT", now, g_lastHeartbeat, g_baseline);
+  printSnapshotLine(out, "Heap heartbeat", g_heartbeatSequence, "HEARTBEAT", now, g_lastHeartbeat, g_baseline);
   g_lastHeartbeat = now;
   g_lastHeartbeatMs = nowMs;
   return true;

@@ -4,11 +4,14 @@
 #include <sys/time.h>
 #include <time.h>
 
+#include "AppLog.h"
 #include "BoardPins.h"
 #include "RTCService.h"
 
 namespace RtcSyncService {
 namespace {
+
+constexpr char TAG[] = "RTC";
 
 static bool rtcWritePending = false;
 static unsigned long lastRtcWriteAttemptMillis = 0;
@@ -71,20 +74,20 @@ void tryRestoreSystemTimeFromDs3231(int& hours, int& minutes, int& seconds, unsi
   rtcCfg.enableI2cDiagnostics = true;
 
   const RTCService::Status beginStatus = RTCService::begin(rtcCfg);
-  Serial.printf("[RTC] begin: %s\n", RTCService::statusToString(beginStatus));
+  LOG_I(TAG, "Begin status=%s", RTCService::statusToString(beginStatus));
   if (beginStatus != RTCService::Status::Ok) {
     return;
   }
 
   time_t epoch = 0;
   const RTCService::Status readStatus = RTCService::getEpoch(&epoch);
-  Serial.printf("[RTC] getEpoch: %s epoch=%ld\n", RTCService::statusToString(readStatus), (long)epoch);
+  LOG_I(TAG, "Get epoch status=%s epoch=%ld", RTCService::statusToString(readStatus), (long)epoch);
   if (readStatus != RTCService::Status::Ok) {
     return;
   }
 
   if (epoch < 1609459200) {
-    Serial.println("[RTC] epoch too old/invalid; ignoring");
+    LOG_W(TAG, "Epoch too old or invalid ignored=true epoch=%ld", (long)epoch);
     return;
   }
 
@@ -95,7 +98,7 @@ void tryRestoreSystemTimeFromDs3231(int& hours, int& minutes, int& seconds, unsi
 
   lastTick = millis();
   syncLocalClockFromSystemTime(hours, minutes, seconds);
-  Serial.printf("[RTC] system time restored from DS3231 (local %02d:%02d:%02d)\n", hours, minutes, seconds);
+  LOG_I(TAG, "Time restored from DS3231 local_time=%02d:%02d:%02d", hours, minutes, seconds);
 }
 
 void noteNtpSync(unsigned long ntpSyncMillis) {
@@ -119,7 +122,7 @@ void processPendingWrite() {
 
   const time_t epochToWrite = (rtcPendingEpoch != 0) ? rtcPendingEpoch : time(nullptr);
   const RTCService::Status writeStatus = RTCService::setEpoch(epochToWrite, true);
-  Serial.printf("[RTC] setEpoch: %s epoch=%ld\n", RTCService::statusToString(writeStatus), (long)epochToWrite);
+  LOG_I(TAG, "Set epoch status=%s epoch=%ld", RTCService::statusToString(writeStatus), (long)epochToWrite);
   lastRtcWriteAttemptMillis = nowMs;
 
   if (writeStatus == RTCService::Status::Ok) {

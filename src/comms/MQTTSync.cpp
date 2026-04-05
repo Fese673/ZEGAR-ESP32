@@ -1,27 +1,12 @@
 #include "MQTTSync.h"
 #include "WiFiSync.h"
+#include "AppLog.h"
 #include <esp_system.h>
 #include <NetworkClientSecure.h>
 #include <WiFi.h>
 
+#include "PMS_Czujnik.h"
 #include "RamTelemetry.h"
-
-// Externy PMS5003 - zmienne globalne z `main.cpp`
-extern uint16_t pms5003_PM1_0_CF1;
-extern uint16_t pms5003_PM2_5_CF1;
-extern uint16_t pms5003_PM10_CF1;
-
-extern uint16_t pms5003_PM1_0_ATM;
-extern uint16_t pms5003_PM2_5_ATM;
-extern uint16_t pms5003_PM10_ATM;
-
-// Particle counts (#/100cm3)
-extern uint16_t pms5003_particleCount_0_3;
-extern uint16_t pms5003_particleCount_0_5;
-extern uint16_t pms5003_particleCount_1_0;
-extern uint16_t pms5003_particleCount_2_5;
-extern uint16_t pms5003_particleCount_5_0;
-extern uint16_t pms5003_particleCount_10_0;
 
 // ============================================================================
 // CA Certificate Definition (GLOBAL - outside namespace)
@@ -65,6 +50,8 @@ emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 
 namespace MQTTSync {
 
+static constexpr const char* TAG = "MQTT";
+
 static constexpr size_t MQTT_JSON_BUFFER_SIZE = 192;
 static constexpr size_t MQTT_PACKET_BUFFER_SIZE = 256;
 static constexpr size_t MQTT_JSON_DOC_CAPACITY = 384;
@@ -77,7 +64,6 @@ static NetworkClientSecure wifiClientSecure;
 static PubSubClient mqttClient;
 static unsigned long lastPublishTime = 0;
 static unsigned long publishInterval = 5000; // 5 seconds
-static volatile bool mqttConnected = false;
 static TaskHandle_t mqtt_task_handle = NULL;
 static Config s_config;
 static char s_pendingPayload[MQTT_PACKET_BUFFER_SIZE] = {0};
@@ -97,7 +83,6 @@ static MqttConnectionState s_state = MqttConnectionState::WaitingForWifi;
 static unsigned long s_nextStateCheckMs = 0;
 static unsigned long s_connectStartMs = 0;
 static uint8_t s_connectFailureCount = 0;
-static volatile bool s_stopRequested = false;
 
 static constexpr unsigned long MQTT_WIFI_RECOVERY_DELAY_MS = 250;
 static constexpr unsigned long MQTT_CONNECT_BUDGET_MS = 4500;
@@ -122,13 +107,11 @@ static void flushPendingPublish();
 // Callback for incoming MQTT messages
 // ============================================================================
 static void mqtt_callback(char* topic, byte* payload, unsigned int length) {
-    Serial.print("[MQTT] Message received on topic: ");
-    Serial.println(topic);
-    Serial.print("[MQTT] Payload: ");
-    for (int i = 0; i < length; i++) {
-        Serial.print((char)payload[i]);
-    }
-    Serial.println();
+    char payloadText[MQTT_PACKET_BUFFER_SIZE];
+    const size_t copyLength = (length < (sizeof(payloadText) - 1)) ? length : (sizeof(payloadText) - 1);
+    memcpy(payloadText, payload, copyLength);
+    payloadText[copyLength] = '\0';
+    LOG_I(TAG, "Message received topic=%s payload=%s payload_len=%u", topic, payloadText, length);
 }
 
 static void applyConfigToClient() {
@@ -183,27 +166,17 @@ static bool mqttPayloadFits(size_t payloadLength) {
 
 static bool queuePendingPublish(const char* payload, size_t payloadLength) {
     if (payload == nullptr) {
-        Serial.println("[MQTT] Empty payload, cannot queue");
+        LOG_W(TAG, "Empty payload action=queue_skip reason=null_payload");
         return false;
     }
 
     if (payloadLength >= sizeof(s_pendingPayload)) {
-        Serial.print("[MQTT] Payload too large for staging buffer (payload=");
-        Serial.print(payloadLength);
-        Serial.print(", buffer=");
-        Serial.print(sizeof(s_pendingPayload));
-        Serial.println(")");
+        LOG_W(TAG, "Payload too large reason=staging payload=%u buffer=%u", (unsigned)payloadLength, (unsigned)sizeof(s_pendingPayload));
         return false;
     }
 
     if (!mqttPayloadFits(payloadLength)) {
-        Serial.print("[MQTT] Payload too large for packet buffer (payload=");
-        Serial.print(payloadLength);
-        Serial.print(", topic=");
-        Serial.print(s_config.topic.length());
-        Serial.print(", buffer=");
-        Serial.print(MQTT_PACKET_BUFFER_SIZE);
-        Serial.println(")");
+        LOG_W(TAG, "Payload too large reason=packet payload=%u topic_len=%u buffer=%u", (unsigned)payloadLength, (unsigned)s_config.topic.length(), (unsigned)MQTT_PACKET_BUFFER_SIZE);
         return false;
     }
 
@@ -224,15 +197,12 @@ static void flushPendingPublish() {
     }
 
     if (mqttClient.publish(s_config.topic.c_str(), s_pendingPayload)) {
-        Serial.print("[MQTT] Published (");
-        Serial.print(s_pendingPayloadLength);
-        Serial.print(" B): ");
-        Serial.println(s_pendingPayload);
+        LOG_I(TAG, "Published bytes=%u payload=%s", (unsigned)s_pendingPayloadLength, s_pendingPayload);
         lastPublishTime = millis();
         s_pendingPayloadReady = false;
         s_pendingPayloadLength = 0;
     } else {
-        Serial.println("[MQTT] Publish failed!");
+        LOG_E(TAG, "Publish failed topic=%s bytes=%u", s_config.topic.c_str(), (unsigned)s_pendingPayloadLength);
     }
 }
 
@@ -251,21 +221,16 @@ Config currentConfig() {
 // ============================================================================
 static bool mqtt_reconnect(unsigned long nowMs) {
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[MQTT] WiFi not connected, waiting for link");
-        mqttConnected = false;
+        LOG_I(TAG, "WiFi not connected state=waiting_for_link");
         s_state = MqttConnectionState::WaitingForWifi;
         s_nextStateCheckMs = nowMs + MQTT_WIFI_RECOVERY_DELAY_MS;
         return false;
     }
 
-    Serial.print("[MQTT] Connecting to ");
-    Serial.print(s_config.brokerAddress);
-    Serial.print(":");
-    Serial.println(s_config.brokerPort);
+    LOG_I(TAG, "Connecting broker=%s port=%u", s_config.brokerAddress.c_str(), (unsigned)s_config.brokerPort);
 
     s_state = MqttConnectionState::Connecting;
     s_connectStartMs = nowMs;
-    mqttConnected = false;
 
     const bool connected = mqttClient.connect(s_config.clientId.c_str(),
                                               s_config.username.c_str(),
@@ -273,25 +238,18 @@ static bool mqtt_reconnect(unsigned long nowMs) {
     const unsigned long elapsedMs = millis() - s_connectStartMs;
 
     if (connected && elapsedMs <= MQTT_CONNECT_BUDGET_MS) {
-        Serial.print("[MQTT] Connected in ");
-        Serial.print(elapsedMs);
-        Serial.println(" ms");
-        mqttConnected = true;
+        LOG_I(TAG, "Connected elapsed_ms=%lu", elapsedMs);
         s_connectFailureCount = 0;
         s_state = MqttConnectionState::Online;
 
-        Serial.println("[MQTT] Requesting background NTP sync via WiFiSync::requestTimeSync()");
+        LOG_I(TAG, "Request time sync source=WiFiSync");
         WiFiSync::requestTimeSync();
         RAM_CHECKPOINT("MQTT_CONNECTED");
         return true;
     }
 
     if (connected) {
-        Serial.print("[MQTT] Connect exceeded budget (elapsed=");
-        Serial.print(elapsedMs);
-        Serial.print(" ms, budget=");
-        Serial.print(MQTT_CONNECT_BUDGET_MS);
-        Serial.println(" ms), disconnecting");
+        LOG_W(TAG, "Connect exceeded budget elapsed_ms=%lu budget_ms=%lu", elapsedMs, MQTT_CONNECT_BUDGET_MS);
         mqttClient.disconnect();
     }
 
@@ -303,17 +261,8 @@ static bool mqtt_reconnect(unsigned long nowMs) {
     const unsigned long backoffMs = computeBackoffMs(s_connectFailureCount);
     s_nextStateCheckMs = nowMs + backoffMs;
     s_state = MqttConnectionState::Backoff;
-    mqttConnected = false;
 
-    Serial.print("[MQTT] Connection failed, rc=");
-    Serial.print(rc);
-    Serial.print(", elapsed=");
-    Serial.print(elapsedMs);
-    Serial.print(" ms, failures=");
-    Serial.print(s_connectFailureCount);
-    Serial.print(", backoff=");
-    Serial.print(backoffMs);
-    Serial.println(" ms");
+    LOG_W(TAG, "Connection failed rc=%d elapsed_ms=%lu failures=%u backoff_ms=%lu", rc, elapsedMs, (unsigned)s_connectFailureCount, backoffMs);
     return false;
 }
 
@@ -325,7 +274,7 @@ void begin(const char* ssid, const char* password) {
     (void)ssid;
     (void)password;
 
-    Serial.println("[MQTT] Initializing MQTT client...");
+    LOG_I(TAG, "Initializing MQTT client");
     
     // Configure secure WiFi client with CA certificate
     wifiClientSecure.setCACert(g_mqtt_ca_cert);
@@ -338,23 +287,17 @@ void begin(const char* ssid, const char* password) {
     mqttClient.setBufferSize(MQTT_PACKET_BUFFER_SIZE);
 
     s_serviceStarted = false;
-    s_stopRequested = false;
     s_connectFailureCount = 0;
     s_nextStateCheckMs = 0;
     s_connectStartMs = 0;
     s_state = (WiFi.status() == WL_CONNECTED)
         ? MqttConnectionState::Idle
         : MqttConnectionState::WaitingForWifi;
-    mqttConnected = false;
     s_pendingPayloadReady = false;
     s_pendingPayloadLength = 0;
     s_pendingPayload[0] = '\0';
     
-    Serial.println("[MQTT] Client configured");
-    Serial.print("[MQTT] Broker: ");
-    Serial.println(s_config.brokerAddress);
-    Serial.print("[MQTT] Port: ");
-    Serial.println(s_config.brokerPort);
+    LOG_I(TAG, "Client configured broker=%s port=%u", s_config.brokerAddress.c_str(), (unsigned)s_config.brokerPort);
 }
 
 void startCore1Task() {
@@ -362,13 +305,11 @@ void startCore1Task() {
         return;
     }
 
-    s_stopRequested = false;
     s_serviceStarted = true;
     s_state = MqttConnectionState::WaitingForWifi;
     s_nextStateCheckMs = millis() + MQTT_WIFI_RECOVERY_DELAY_MS;
     s_connectStartMs = 0;
-    mqttConnected = false;
-    Serial.println("[MQTT] Service started on main loop");
+    LOG_I(TAG, "Service started scope=main_loop");
     RAM_CHECKPOINT("MQTT_ON");
 }
 
@@ -377,7 +318,6 @@ void stopCore1Task() {
         return;
     }
 
-    s_stopRequested = true;
     s_serviceStarted = false;
     s_state = MqttConnectionState::WaitingForWifi;
     s_nextStateCheckMs = 0;
@@ -386,17 +326,16 @@ void stopCore1Task() {
     s_pendingPayloadLength = 0;
     s_pendingPayload[0] = '\0';
     mqttClient.disconnect();
-    mqttConnected = false;
     mqtt_task_handle = NULL;
 
-    Serial.println("[MQTT] Service stopped");
+    LOG_I(TAG, "Service stopped");
     RAM_CHECKPOINT("MQTT_OFF");
 }
 
 void publishSensorData(float temp, int humidity, int pressure,
                        uint8_t aqi, uint16_t tvoc, uint16_t eco2) {
-    if (!s_serviceStarted || s_stopRequested) {
-        Serial.println("[MQTT] Service not active, cannot publish");
+    if (!s_serviceStarted) {
+        LOG_W(TAG, "Service not active action=publish_sensor_data");
         return;
     }
 
@@ -406,6 +345,8 @@ void publishSensorData(float temp, int humidity, int pressure,
     // [ t, h, p, aqi, tvoc, eco2, ts, [A_pm1,A_pm25,A_pm10], [n0.3,n0.5,1.0,2.5,5.0,10.0] ]
     StaticJsonDocument<MQTT_JSON_DOC_CAPACITY> doc;
     JsonArray root = doc.to<JsonArray>();
+    const PMS5003Sensor::MassReadings atmospheric = PMS5003Sensor::getAtmospheric();
+    const PMS5003Sensor::ParticleCounts particleCounts = PMS5003Sensor::getParticleCounts();
     char tempBuffer[16];
     snprintf(tempBuffer, sizeof(tempBuffer), "%.2f", temp);
     root.add(serialized(tempBuffer));
@@ -416,61 +357,49 @@ void publishSensorData(float temp, int humidity, int pressure,
     root.add(eco2);
     root.add(millis());
 
-    Serial.print("[MQTT] ENS160 values: AQI="); Serial.print(aqi);
-    Serial.print(" TVOC="); Serial.print(tvoc);
-    Serial.print(" eCO2="); Serial.println(eco2);
+    LOG_I(TAG, "ENS160 values aqi=%u tvoc=%u eco2=%u", (unsigned)aqi, (unsigned)tvoc, (unsigned)eco2);
 
     JsonArray a = root.createNestedArray();
-    a.add(pms5003_PM1_0_ATM);
-    a.add(pms5003_PM2_5_ATM);
-    a.add(pms5003_PM10_ATM);
+    a.add(atmospheric.pm01);
+    a.add(atmospheric.pm25);
+    a.add(atmospheric.pm10);
 
-    JsonArray particles = root.createNestedArray();
-    particles.add(pms5003_particleCount_0_3);
-    particles.add(pms5003_particleCount_0_5);
-    particles.add(pms5003_particleCount_1_0);
-    particles.add(pms5003_particleCount_2_5);
-    particles.add(pms5003_particleCount_5_0);
-    particles.add(pms5003_particleCount_10_0);
+    JsonArray particleArray = root.createNestedArray();
+    particleArray.add(particleCounts.count0p3);
+    particleArray.add(particleCounts.count0p5);
+    particleArray.add(particleCounts.count1p0);
+    particleArray.add(particleCounts.count2p5);
+    particleArray.add(particleCounts.count5p0);
+    particleArray.add(particleCounts.count10p0);
 
     if (doc.overflowed()) {
-        Serial.println("[MQTT] JSON document overflow, skipping publish");
+        LOG_E(TAG, "JSON document overflow action=skip_publish");
         return;
     }
 
     const size_t payloadLength = measureJson(doc);
     if (payloadLength >= MQTT_JSON_BUFFER_SIZE) {
-        Serial.print("[MQTT] JSON payload exceeds staging buffer (payload=");
-        Serial.print(payloadLength);
-        Serial.print(", buffer=");
-        Serial.print(MQTT_JSON_BUFFER_SIZE);
-        Serial.println(")");
+        LOG_W(TAG, "JSON payload exceeds staging buffer payload=%u buffer=%u", (unsigned)payloadLength, (unsigned)MQTT_JSON_BUFFER_SIZE);
         return;
     }
     if (!mqttPayloadFits(payloadLength)) {
-        Serial.print("[MQTT] Payload too large for packet buffer (payload=");
-        Serial.print(payloadLength);
-        Serial.print(", topic=");
-        Serial.print(s_config.topic.length());
-        Serial.print(", buffer=");
-        Serial.print(MQTT_PACKET_BUFFER_SIZE);
-        Serial.println(")");
+        LOG_W(TAG, "Payload too large reason=packet payload=%u topic_len=%u buffer=%u", (unsigned)payloadLength, (unsigned)s_config.topic.length(), (unsigned)MQTT_PACKET_BUFFER_SIZE);
         return;
     }
 
     // Debug: log particle counts before serialization
-    Serial.print("[MQTT] Particles: ");
-    Serial.print(pms5003_particleCount_0_3); Serial.print(",");
-    Serial.print(pms5003_particleCount_0_5); Serial.print(",");
-    Serial.print(pms5003_particleCount_1_0); Serial.print(",");
-    Serial.print(pms5003_particleCount_2_5); Serial.print(",");
-    Serial.print(pms5003_particleCount_5_0); Serial.print(",");
-    Serial.println(pms5003_particleCount_10_0);
+    LOG_I(TAG, "Particles p0_3=%u p0_5=%u p1_0=%u p2_5=%u p5_0=%u p10_0=%u",
+            (unsigned)particleCounts.count0p3,
+            (unsigned)particleCounts.count0p5,
+            (unsigned)particleCounts.count1p0,
+            (unsigned)particleCounts.count2p5,
+            (unsigned)particleCounts.count5p0,
+            (unsigned)particleCounts.count10p0);
 
     // Serialize to string
     char buffer[MQTT_JSON_BUFFER_SIZE];
     size_t n = serializeJson(doc, buffer, sizeof(buffer));
-    Serial.print("[MQTT] Payload size: "); Serial.println(n);
+    LOG_I(TAG, "Payload size bytes=%u", (unsigned)n);
 
     if (!queuePendingPublish(buffer, n)) {
         return;
@@ -479,18 +408,18 @@ void publishSensorData(float temp, int humidity, int pressure,
     if (mqttClient.connected()) {
         flushPendingPublish();
     } else {
-        Serial.println("[MQTT] Not connected yet, queued publish");
+        LOG_I(TAG, "Publish queued state=offline");
     }
 }
 
 void publishRawJSON(const char* jsonString) {
-    if (!s_serviceStarted || s_stopRequested) {
-        Serial.println("[MQTT] Service not active, cannot publish");
+    if (!s_serviceStarted) {
+        LOG_W(TAG, "Service not active action=publish_raw_json");
         return;
     }
 
     if (jsonString == nullptr) {
-        Serial.println("[MQTT] Raw JSON is null, cannot publish");
+        LOG_W(TAG, "Raw JSON is null action=publish_skip");
         return;
     }
 
@@ -502,7 +431,7 @@ void publishRawJSON(const char* jsonString) {
     if (mqttClient.connected()) {
         flushPendingPublish();
     } else {
-        Serial.println("[MQTT] Not connected yet, queued publish");
+        LOG_I(TAG, "Publish queued state=offline");
     }
 }
 
@@ -511,7 +440,7 @@ bool isConnected() {
 }
 
 void update() {
-    if (!s_serviceStarted || s_stopRequested) {
+    if (!s_serviceStarted) {
         return;
     }
 
@@ -522,9 +451,8 @@ void update() {
             mqttClient.disconnect();
         }
 
-        mqttConnected = false;
         if (s_state != MqttConnectionState::WaitingForWifi) {
-            Serial.println("[MQTT] WiFi lost, waiting for link recovery");
+            LOG_W(TAG, "WiFi lost state=waiting_for_link_recovery");
         }
 
         s_state = MqttConnectionState::WaitingForWifi;
@@ -546,17 +474,14 @@ void update() {
             return;
         }
 
-        mqttConnected = true;
         s_state = MqttConnectionState::Online;
     }
 
     if (s_state == MqttConnectionState::Online) {
-        mqttConnected = true;
         flushPendingPublish();
         mqttClient.loop();
 
         if (!mqttClient.connected()) {
-            mqttConnected = false;
             if (s_connectFailureCount < 255) {
                 ++s_connectFailureCount;
             }
@@ -565,11 +490,7 @@ void update() {
             s_nextStateCheckMs = now + backoffMs;
             s_state = MqttConnectionState::Backoff;
 
-            Serial.print("[MQTT] Connection lost, retry in ");
-            Serial.print(backoffMs);
-            Serial.print(" ms (failures=");
-            Serial.print(s_connectFailureCount);
-            Serial.println(")");
+            LOG_W(TAG, "Connection lost backoff_ms=%lu failures=%u", backoffMs, (unsigned)s_connectFailureCount);
         }
     }
 }

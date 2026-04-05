@@ -40,10 +40,16 @@
 #include "HomeRuntime.h"
 #include "AlarmTypes.h"
 #include <cstring>
+#include "AppLog.h"
 #include "SecretsConfig.h"
 #include "BoardPins.h"
 #include "i2c/SharedBus.h"
 #include <Preferences.h>
+
+// Log format standard:
+//  - use LOG_I / LOG_W / LOG_E / LOG_D for application logs
+//  - every line must start with [TAG][LEVEL]
+//  - keep messages in English and prefer key=val fields
 
 // ============================================================================
 // STAŁE CZASOWE (zamiast magic numbers)
@@ -99,6 +105,13 @@ struct BootIntroState {
 };
 
 static BootIntroState s_intro;
+
+static constexpr char TAG_MAIN[] = "MAIN";
+static constexpr char TAG_I2C[] = "I2C";
+static constexpr char TAG_RAM[] = "RAM";
+static constexpr char TAG_BASELINE[] = "BASELINE";
+static constexpr char TAG_NET[] = "NET";
+static constexpr char TAG_BT[] = "BT";
 
 static size_t boundedTextLength(const char* text, size_t maxLength) {
   if (text == nullptr) {
@@ -348,7 +361,7 @@ int settingsEpicIntroMenuCount = 2;
 const char* settingsEpicIntroItems[] = {"ON", "OFF"};
 
 constexpr unsigned long SETUP_DELAY_MS      = 100;  // cooperative startup wait for serial init
-constexpr long UART_BAUD = 115200;
+constexpr long UART_BAUD = 921600;
 HardwareSerial& uart = Serial2;
 static uint32_t heapBaseline = 0;
 int settingsUiScreenIndex = 0;
@@ -409,17 +422,6 @@ const char* resourcesMenuItems[] = {
 constexpr int RESOURCES_MENU_COUNT = 3;
 int resourcesMenuCount = RESOURCES_MENU_COUNT;
 
-// --- Menu PMS5003 ---
-int pms5003MenuIndex = 0;
-const char* pms5003MenuItems[] = {
-  "Tryb Fabryczny",
-  "Tryb Atmosferyczny",
-  "L.Czastek #/100cm3",
-  "Telemetria",
-};
-constexpr int PMS5003_MENU_COUNT = 4;
-int pms5003MenuCount = PMS5003_MENU_COUNT;
-
 // --- Menu ENS160 + AHT21 ---
 int ens160MenuIndex = 0;
 const char* ens160MenuItems[] = {
@@ -438,39 +440,6 @@ const char* bmp280MenuItems[] = {
   "Status",
   "Altitude"
 };
-
-// --- Menu PMS5003 CF=1 ---
-int pms5003CF1MenuIndex = 0;
-const char* pms5003CF1MenuItems[] = {
-  "PM1.0",
-  "PM2.5",
-  "PM10"
-};
-constexpr int PMS5003_CF1_MENU_COUNT = 3;
-int pms5003CF1MenuCount = PMS5003_CF1_MENU_COUNT;
-
-// --- Menu PMS5003 ATM ---
-int pms5003ATMMenuIndex = 0;
-const char* pms5003ATMMenuItems[] = {
-  "PM1.0",
-  "PM2.5",
-  "PM10"
-};
-constexpr int PMS5003_ATM_MENU_COUNT = 3;
-int pms5003ATMMenuCount = PMS5003_ATM_MENU_COUNT;
-
-// --- Menu PMS5003 PARTICLE COUNT ---
-int pms5003ParticlesMenuIndex = 0;
-const char* pms5003ParticlesMenuItems[] = {
-  "0.3um",
-  "0.5um",
-  "1.0um",
-  "2.5um",
-  "5.0um",
-  "10.0um"
-};
-constexpr int PMS5003_PARTICLES_MENU_COUNT = 6;
-int pms5003ParticlesMenuCount = PMS5003_PARTICLES_MENU_COUNT;
 
 // --- Menu Ustawień ---
 int settingsMenuIndex = 0;
@@ -501,15 +470,6 @@ const char* settingsUiScreenItems[] = {
 constexpr int SETTINGS_UI_SCREEN_COUNT = 3;
 int settingsUiScreenCount = SETTINGS_UI_SCREEN_COUNT;
 
-// --- Menu Ustawienia PMS5003 ---
-int settingsPmsMenuIndex = 0;
-const char* settingsPmsMenuItems[] = {
-  "Wlaczony",
-  "Wylaczony"
-};
-constexpr int SETTINGS_PMS_MENU_COUNT = 2;
-int settingsPmsMenuCount = SETTINGS_PMS_MENU_COUNT;
-
 // --- Menu Ustawienia Buzera ---
 int settingsBuzzerMenuIndex = 0;
 const char* settingsBuzzerMenuItems[] = {
@@ -527,20 +487,6 @@ const char* settingsMqttMenuItems[] = {
 };
 constexpr int SETTINGS_MQTT_MENU_COUNT = 2;
 int settingsMqttMenuCount = SETTINGS_MQTT_MENU_COUNT;
-
-// --- PMS5003 Telemetry ---
-uint16_t pms5003_errorCount_current = 0;
-uint16_t pms5003_errorCount_total = 0;
-uint16_t pms5003_bytesReceived = 0;
-uint32_t pms5003_lastFrameTime = 0;
-uint32_t pms5003_latency_ms = 0;
-
-// --- PMS5003 Current Values ---
-uint16_t pms5003_PM1_0_CF1 = 0;
-uint16_t pms5003_PM2_5_CF1 = 0;
-uint16_t pms5003_PM10_CF1 = 0;
-
-uint16_t pms5003_PM1_0_ATM = 0;
 
 static void drawHomeThrottled() {
   HomeRuntime::markHomeDirty();
@@ -569,13 +515,13 @@ static void loadNetworkConfigFromPreferences() {
   s_mqttConfig.clientId = s_prefs.isKey("mqttClient") ? s_prefs.getString("mqttClient", PROJECT_MQTT_CLIENT_ID) : PROJECT_MQTT_CLIENT_ID;
 
   if (looksLikePlaceholder(s_wifiSsid) || looksLikePlaceholder(s_wifiPass)) {
-    Serial.println("[config] WiFi credentials are placeholders; configure NVS keys wifiSsid/wifiPass.");
+    LOG_W(TAG_MAIN, "WiFi credentials are placeholders config_keys=wifiSsid,wifiPass");
   }
 
   if (looksLikePlaceholder(s_mqttConfig.brokerAddress) ||
       looksLikePlaceholder(s_mqttConfig.username) ||
       looksLikePlaceholder(s_mqttConfig.password)) {
-    Serial.println("[config] MQTT credentials are placeholders; configure NVS keys mqttHost/mqttUser/mqttPass.");
+    LOG_W(TAG_MAIN, "MQTT credentials are placeholders config_keys=mqttHost,mqttUser,mqttPass");
   }
 }
 
@@ -586,35 +532,6 @@ void startAlarmMelodyDemo(uint8_t melodyIndex) {
 void stopAlarmMelodyDemo() {
   ClockAlarmService::stopAlarmMelodyDemo(BUZZER_PIN);
 }
-
-uint16_t pms5003_PM2_5_ATM = 0;
-uint16_t pms5003_PM10_ATM = 0;
-
-// --- Dane PMS5003 HISTORYCZNE (min/max) - TRYB CF=1 ---
-uint16_t pms5003_PM1_0_CF1_MIN = 9999;  uint16_t pms5003_PM1_0_CF1_MAX = 0;
-uint16_t pms5003_PM2_5_CF1_MIN = 9999;  uint16_t pms5003_PM2_5_CF1_MAX = 0;
-uint16_t pms5003_PM10_CF1_MIN = 9999;   uint16_t pms5003_PM10_CF1_MAX = 0;
-
-// --- Dane PMS5003 HISTORYCZNE (min/max) - TRYB ATMOSFERYCZNY ---
-uint16_t pms5003_PM1_0_ATM_MIN = 9999;  uint16_t pms5003_PM1_0_ATM_MAX = 0;
-uint16_t pms5003_PM2_5_ATM_MIN = 9999;  uint16_t pms5003_PM2_5_ATM_MAX = 0;
-uint16_t pms5003_PM10_ATM_MIN = 9999;   uint16_t pms5003_PM10_ATM_MAX = 0;
-
-// --- Dane PMS5003 LICZBA CZĄSTEK (#/100cm³) - BIEŻĄCE ---
-uint16_t pms5003_particleCount_0_3 = 0;
-uint16_t pms5003_particleCount_0_5 = 0;
-uint16_t pms5003_particleCount_1_0 = 0;
-uint16_t pms5003_particleCount_2_5 = 0;
-uint16_t pms5003_particleCount_5_0 = 0;
-uint16_t pms5003_particleCount_10_0 = 0;
-
-// --- Dane PMS5003 LICZBA CZĄSTEK (min/max) ---
-uint16_t pms5003_particleCount_0_3_MIN = 9999;  uint16_t pms5003_particleCount_0_3_MAX = 0;
-uint16_t pms5003_particleCount_0_5_MIN = 9999;  uint16_t pms5003_particleCount_0_5_MAX = 0;
-uint16_t pms5003_particleCount_1_0_MIN = 9999;  uint16_t pms5003_particleCount_1_0_MAX = 0;
-uint16_t pms5003_particleCount_2_5_MIN = 9999;  uint16_t pms5003_particleCount_2_5_MAX = 0;
-uint16_t pms5003_particleCount_5_0_MIN = 9999;  uint16_t pms5003_particleCount_5_0_MAX = 0;
-uint16_t pms5003_particleCount_10_0_MIN = 9999; uint16_t pms5003_particleCount_10_0_MAX = 0;
 
 // --- Heap Usage Tracking (used by system resources view) ---
 uint8_t heapUsagePercent = 0;
@@ -631,7 +548,6 @@ uint32_t ramDmaFreeBytes = 0;
 uint32_t flashFreeBytes = 0;
 
 // --- Ustawienia (Configuration settings) ---
-bool pms5003Enabled = true;   // Czy czujnik PMS5003 jest włączony
 bool buzzerEnabled = true;    // Czy buzzer jest włączony
 
 // --- Budzik ---
@@ -678,9 +594,6 @@ unsigned long lastTick = 0;
 
 // --- MQTT Mode Control ---
 bool mqttEnabled = true;
-
-// Flaga do wymuszenia rysowania ekranów PMS5003 przy wejściu do podmenu
-bool pmsScreenDirty = true;
 
 struct MainRuntimeState {
   bool bootDiagReprinted = false;
@@ -774,8 +687,8 @@ static void baselineOnLoopEnd(unsigned long nowMs, uint32_t loopStartUs, uint32_
 
   const uint32_t minPeriodUs = (s_loopBaseline.minLoopPeriodUs == 0xFFFFFFFFUL) ? 0UL : s_loopBaseline.minLoopPeriodUs;
   const uint32_t minHeapBytes = (s_loopBaseline.minFreeHeapBytes == 0xFFFFFFFFUL) ? ESP.getFreeHeap() : s_loopBaseline.minFreeHeapBytes;
-  Serial.printf(
-      "[BASELINE] win=%lums loops=%lu loop_us[min=%lu max=%lu jitter=%lu body_max=%lu] ui_max=%lu net_max=%lu mqtt_max=%lu heap_min=%lu\n",
+    LOG_I(TAG_BASELINE,
+      "Window complete window_ms=%lu loops=%lu loop_us_min=%lu loop_us_max=%lu loop_us_jitter=%lu body_max_us=%lu ui_max_us=%lu net_max_us=%lu mqtt_max_us=%lu heap_min_b=%lu",
       (unsigned long)(nowMs - s_loopBaseline.windowStartedMs),
       s_loopBaseline.loopCount,
       (unsigned long)minPeriodUs,
@@ -920,7 +833,7 @@ static bool restoreRtcHandoffTime(RuntimeContext& ctx, unsigned long nowMs, bool
     ctx.minutes = rtcMinutes;
     ctx.seconds = rtcSeconds;
     ctx.lastTick = nowMs;
-    Serial.printf("[main] Restore time from RTC handoff: %02d:%02d:%02d\n", ctx.hours, ctx.minutes, ctx.seconds);
+    LOG_I(TAG_MAIN, "Restore time from RTC handoff hours=%02u minutes=%02u seconds=%02u", (unsigned)ctx.hours, (unsigned)ctx.minutes, (unsigned)ctx.seconds);
     updateSevenSeg();
     if (refreshHomeUi) {
       drawHomeThrottled();
@@ -929,25 +842,21 @@ static bool restoreRtcHandoffTime(RuntimeContext& ctx, unsigned long nowMs, bool
     return true;
   }
 
-  Serial.printf("[main] Invalid RTC handoff time: %02d:%02d:%02d - ignoring\n", rtcHours, rtcMinutes, rtcSeconds);
+  LOG_W(TAG_MAIN, "Invalid RTC handoff time hours=%02u minutes=%02u seconds=%02u action=ignore", (unsigned)rtcHours, (unsigned)rtcMinutes, (unsigned)rtcSeconds);
   RadioModeSwitch::clearRTCTime();
   return false;
 }
 
 static void initCoreHardware() {
   Serial.begin(UART_BAUD);
-#ifdef ARDUINO_ARCH_ESP32
-  vTaskDelay(pdMS_TO_TICKS(SETUP_DELAY_MS));
-#else
   const unsigned long setupWaitUntilMs = millis() + SETUP_DELAY_MS;
   while ((long)(millis() - setupWaitUntilMs) < 0) {
     yield();
   }
-#endif
 
   RtcSyncService::applyTimezone();
   heapBaseline = ESP.getFreeHeap();
-  Serial.printf("[diag] baseline_heap=%u\n", heapBaseline);
+  LOG_I(TAG_RAM, "Baseline heap free_b=%u", heapBaseline);
   ModeManager::logDiag("boot");
   RamTelemetry::begin();
 
@@ -978,9 +887,11 @@ static void initUiAndInput() {
                                                      BoardPins::kI2cSda,
                                                      BoardPins::kI2cScl,
                                                      BoardPins::kI2cClockHz);
-  Serial.printf("[main] I2C clock readback: %lu Hz (%s)\n",
-                (unsigned long)Wire.getClock(),
-                i2cClockApplied ? "applied" : "fallback/mismatch");
+    LOG_I(TAG_I2C,
+      "Clock readback requested_hz=%lu actual_hz=%lu status=%s",
+      (unsigned long)BoardPins::kI2cClockHz,
+      (unsigned long)Wire.getClock(),
+      i2cClockApplied ? "applied" : "fallback_mismatch");
   RAM_CHECKPOINT("I2C_READY");
 
   RtcSyncService::tryRestoreSystemTimeFromDs3231(hours, minutes, seconds, lastTick);
@@ -996,7 +907,7 @@ static void initUiAndInput() {
   if (showEpicIntro && !skipIntroAfterModeHandoff) {
     introBegin();
   } else if (showEpicIntro && skipIntroAfterModeHandoff) {
-    Serial.println("[main] Boot intro skipped after radio mode handoff restart");
+    LOG_I(TAG_MAIN, "Boot intro skipped reason=radio_mode_handoff_restart");
   }
 
   encoder_begin(ENC_CLK, ENC_DT, ENC_SW);
@@ -1098,7 +1009,7 @@ static void initComms(RuntimeContext& ctx) {
   netCfg.wifiStatusCheckMs = 2000UL;
   NetworkOrchestrator::begin(netCfg);
   NetworkOrchestrator::setMqttEnabled(ctx.mqttEnabled);
-  Serial.println("[main] Network orchestrator armed (WiFi/Radio/MQTT)");
+  LOG_I(TAG_NET, "Network orchestrator armed services=wifi,radio,mqtt");
   RAM_CHECKPOINT("NETWORK_INIT");
 }
 
@@ -1131,9 +1042,10 @@ void setup() {
 static void serviceBootDiagnostics(RuntimeContext& ctx, unsigned long nowMs) {
   if (!ctx.state.bootDiagReprinted && nowMs >= 5000UL) {
     ctx.state.bootDiagReprinted = true;
-    Serial.printf("[boot] serial alive, i2c=%lu Hz, heap=%u\n",
-                  (unsigned long)Wire.getClock(),
-                  ESP.getFreeHeap());
+    LOG_I(TAG_MAIN,
+          "Boot serial alive i2c_hz=%lu heap_b=%u",
+          (unsigned long)Wire.getClock(),
+          ESP.getFreeHeap());
   }
 }
 
@@ -1225,13 +1137,14 @@ static void serviceDiagnostics(RuntimeContext& ctx, unsigned long nowMs) {
     const int heap_delta = (int)current_heap - (int)last_heap;
     last_heap = current_heap;
 
-    Serial.printf("[STATUS] WiFi:%s MQTT:%s BT:%s Heap:%u (%+d) Mode:%s\n",
-                  ModeManager::isWifiOn() ? "ON" : "OFF",
-                  NetworkOrchestrator::isMqttInitialized() ? "ON" : "OFF",
-                  ModeManager::isBtOn() ? "ON" : "OFF",
-                  current_heap,
-                  heap_delta,
-                  (NetworkOrchestrator::getCurrentRadioState() == RADIO_STATE_BT) ? "BT" : "WiFi");
+    LOG_I(TAG_MAIN,
+          "Status wifi=%s mqtt=%s bt=%s heap_b=%u delta_b=%+d mode=%s",
+          ModeManager::isWifiOn() ? "ON" : "OFF",
+          NetworkOrchestrator::isMqttInitialized() ? "ON" : "OFF",
+          ModeManager::isBtOn() ? "ON" : "OFF",
+          current_heap,
+          heap_delta,
+          (NetworkOrchestrator::getCurrentRadioState() == RADIO_STATE_BT) ? "BT" : "WiFi");
   }
 
 #if ENABLE_RUNTIME_TELEMETRY
@@ -1323,8 +1236,7 @@ static void serviceDiagnosticsTail(RuntimeContext& ctx, unsigned long nowMs) {
   static unsigned long lastBtCheck = 0;
   if (nowMs - lastBtCheck > 60000UL) {
     lastBtCheck = nowMs;
-    Serial.print("BT Connected: ");
-    Serial.println(audioBT_isConnected() ? "TAK" : "NIE");
+    LOG_I(TAG_BT, "Connected=%s", audioBT_isConnected() ? "yes" : "no");
   }
 }
 

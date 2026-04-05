@@ -13,6 +13,52 @@
 #include "HomeRuntime.h"
 #include "WiFiSync.h"
 
+int pms5003MenuIndex = 0;
+const char* pms5003MenuItems[] = {
+  "Tryb Fabryczny",
+  "Tryb Atmosferyczny",
+  "L.Czastek #/100cm3",
+  "Telemetria",
+};
+constexpr int kPms5003MenuCount = 4;
+int pms5003MenuCount = kPms5003MenuCount;
+
+int pms5003CF1MenuIndex = 0;
+const char* pms5003CF1MenuItems[] = {
+  "PM1.0",
+  "PM2.5",
+  "PM10",
+};
+constexpr int kPms5003Cf1MenuCount = 3;
+int pms5003CF1MenuCount = kPms5003Cf1MenuCount;
+
+int pms5003ATMMenuIndex = 0;
+const char* pms5003ATMMenuItems[] = {
+  "PM1.0",
+  "PM2.5",
+  "PM10",
+};
+constexpr int kPms5003AtmMenuCount = 3;
+int pms5003ATMMenuCount = kPms5003AtmMenuCount;
+
+int pms5003ParticlesMenuIndex = 0;
+const char* pms5003ParticlesMenuItems[] = {
+  "0.3um",
+  "0.5um",
+  "1.0um",
+  "2.5um",
+  "5.0um",
+  "10.0um",
+};
+constexpr int kPms5003ParticlesMenuCount = 6;
+int pms5003ParticlesMenuCount = kPms5003ParticlesMenuCount;
+
+int settingsPmsMenuIndex = 0;
+constexpr int kSettingsPmsMenuCount = 2;
+int settingsPmsMenuCount = kSettingsPmsMenuCount;
+
+bool pmsScreenDirty = true;
+
 // ============================================================================
 // ZMIENNE GLOBALNE (extern z main.cpp)
 // ============================================================================
@@ -51,14 +97,6 @@ extern int resourcesMenuIndex;
 extern int resourcesMenuCount;
 
 // --- PMS5003 ---
-extern int pms5003MenuIndex;
-extern int pms5003MenuCount;
-extern int pms5003CF1MenuIndex;
-extern int pms5003CF1MenuCount;
-extern int pms5003ATMMenuIndex;
-extern int pms5003ATMMenuCount;
-extern int pms5003ParticlesMenuIndex;
-extern int pms5003ParticlesMenuCount;
 extern int ens160MenuIndex;
 extern int ens160MenuCount;
 extern int bmp280MenuIndex;
@@ -81,55 +119,9 @@ extern int alarmsCount;
 extern int alarmsMenuIndex;
 extern int selectedAlarmIndex;
 
-// --- Dane PMS5003 ---
-extern uint16_t pms5003_PM1_0_CF1;
-extern uint16_t pms5003_PM2_5_CF1;
-extern uint16_t pms5003_PM10_CF1;
-extern uint16_t pms5003_PM1_0_ATM;
-extern uint16_t pms5003_PM2_5_ATM;
-extern uint16_t pms5003_PM10_ATM;
-extern uint16_t pms5003_PM1_0_CF1_MIN;
-extern uint16_t pms5003_PM1_0_CF1_MAX;
-extern uint16_t pms5003_PM2_5_CF1_MIN;
-extern uint16_t pms5003_PM2_5_CF1_MAX;
-extern uint16_t pms5003_PM10_CF1_MIN;
-extern uint16_t pms5003_PM10_CF1_MAX;
-extern uint16_t pms5003_PM1_0_ATM_MIN;
-extern uint16_t pms5003_PM1_0_ATM_MAX;
-extern uint16_t pms5003_PM2_5_ATM_MIN;
-extern uint16_t pms5003_PM2_5_ATM_MAX;
-extern uint16_t pms5003_PM10_ATM_MIN;
-extern uint16_t pms5003_PM10_ATM_MAX;
-extern uint16_t pms5003_particleCount_0_3;
-extern uint16_t pms5003_particleCount_0_5;
-extern uint16_t pms5003_particleCount_1_0;
-extern uint16_t pms5003_particleCount_2_5;
-extern uint16_t pms5003_particleCount_5_0;
-extern uint16_t pms5003_particleCount_10_0;
-extern uint16_t pms5003_particleCount_0_3_MIN;
-extern uint16_t pms5003_particleCount_0_3_MAX;
-extern uint16_t pms5003_particleCount_0_5_MIN;
-extern uint16_t pms5003_particleCount_0_5_MAX;
-extern uint16_t pms5003_particleCount_1_0_MIN;
-extern uint16_t pms5003_particleCount_1_0_MAX;
-extern uint16_t pms5003_particleCount_2_5_MIN;
-extern uint16_t pms5003_particleCount_2_5_MAX;
-extern uint16_t pms5003_particleCount_5_0_MIN;
-extern uint16_t pms5003_particleCount_5_0_MAX;
-extern uint16_t pms5003_particleCount_10_0_MIN;
-extern uint16_t pms5003_particleCount_10_0_MAX;
-extern uint16_t pms5003_errorCount_current;
-extern uint16_t pms5003_errorCount_total;
-extern uint16_t pms5003_bytesReceived;
-extern uint32_t pms5003_lastFrameTime;
-extern uint32_t pms5003_latency_ms;
-extern bool pmsScreenDirty;
-
 // --- Ustawienia (Settings) ---
 extern int settingsMenuIndex;
 extern int settingsMenuCount;
-extern int settingsPmsMenuIndex;
-extern int settingsPmsMenuCount;
 extern int settingsMqttMenuIndex;
 extern int settingsMqttMenuCount;
 extern int settingsBuzzerMenuIndex;
@@ -138,7 +130,6 @@ extern int settingsAlarmMelodyIndex;
 extern int s_prevSettingsAlarmMelodyIndex;
 extern int settingsEpicIntroIndex;
 extern int settingsEpicIntroMenuCount;
-extern bool pms5003Enabled;
 extern bool buzzerEnabled;
 extern bool mqttEnabled;
 extern bool showEpicIntro;
@@ -156,6 +147,39 @@ extern Preferences s_prefs;
 // ============================================================================
 extern void startAlarmMelodyDemo(uint8_t melodyIndex);
 extern void stopAlarmMelodyDemo();
+
+static bool getPms5003Enabled() {
+  return PMS5003Sensor::isEnabled();
+}
+
+static void setPms5003Enabled(bool enabled) {
+  PMS5003Sensor::setEnabled(enabled);
+  pmsScreenDirty = true;
+}
+
+static bool getBuzzerEnabled() {
+  return buzzerEnabled;
+}
+
+static void setBuzzerEnabled(bool enabled) {
+  buzzerEnabled = enabled;
+}
+
+static bool getMqttEnabled() {
+  return mqttEnabled;
+}
+
+static void setMqttEnabled(bool enabled) {
+  mqttEnabled = enabled;
+}
+
+static bool getShowEpicIntro() {
+  return showEpicIntro;
+}
+
+static void setShowEpicIntro(bool enabled) {
+  showEpicIntro = enabled;
+}
 
 // ============================================================================
 // UI CONTROLLER - IMPLEMENTACJA
@@ -234,7 +258,7 @@ struct ToggleSettingBinding {
   AppState state;
   int* menuIndex;
   int* menuCount;
-  bool* value;
+  void (*setValue)(bool);
   const char* prefKey;
 };
 
@@ -247,10 +271,10 @@ static int clampMenuIndexSafe(int index, int count) {
 
 static ToggleSettingBinding* findToggleSettingBinding(AppState state) {
   static ToggleSettingBinding kBindings[] = {
-      {STATE_SETTINGS_PMS5003, &settingsPmsMenuIndex, &settingsPmsMenuCount, &pms5003Enabled, nullptr},
-      {STATE_SETTINGS_BUZZER, &settingsBuzzerMenuIndex, &settingsBuzzerMenuCount, &buzzerEnabled, nullptr},
-      {STATE_SETTINGS_MQTT, &settingsMqttMenuIndex, &settingsMqttMenuCount, &mqttEnabled, "mqttEnabled"},
-      {STATE_SETTINGS_BOOT_INTRO, &settingsEpicIntroIndex, &settingsEpicIntroMenuCount, &showEpicIntro, "epicIntro"},
+      {STATE_SETTINGS_PMS5003, &settingsPmsMenuIndex, &settingsPmsMenuCount, &setPms5003Enabled, nullptr},
+      {STATE_SETTINGS_BUZZER, &settingsBuzzerMenuIndex, &settingsBuzzerMenuCount, &setBuzzerEnabled, nullptr},
+      {STATE_SETTINGS_MQTT, &settingsMqttMenuIndex, &settingsMqttMenuCount, &setMqttEnabled, "mqttEnabled"},
+      {STATE_SETTINGS_BOOT_INTRO, &settingsEpicIntroIndex, &settingsEpicIntroMenuCount, &setShowEpicIntro, "epicIntro"},
   };
 
   for (size_t i = 0; i < (sizeof(kBindings) / sizeof(kBindings[0])); ++i) {
@@ -359,9 +383,12 @@ static bool handleSettingsConfirmClick() {
 
   ToggleSettingBinding* toggle = findToggleSettingBinding(appState);
   if (toggle != nullptr) {
-    *toggle->value = (*toggle->menuIndex == 0);
+    const bool value = (*toggle->menuIndex == 0);
+    if (toggle->setValue != nullptr) {
+      toggle->setValue(value);
+    }
     if (toggle->prefKey != nullptr) {
-      s_prefs.putBool(toggle->prefKey, *toggle->value);
+      s_prefs.putBool(toggle->prefKey, value);
     }
     returnToSettingsMenu();
     return true;
@@ -802,17 +829,17 @@ static bool handleSettingsMenuClick() {
   switch (settingsMenuIndex) {
     case 0:
       appState = STATE_SETTINGS_PMS5003;
-      settingsPmsMenuIndex = pms5003Enabled ? 0 : 1;
+      settingsPmsMenuIndex = getPms5003Enabled() ? 0 : 1;
       drawStatsSafe();
       break;
     case 1:
       appState = STATE_SETTINGS_BUZZER;
-      settingsBuzzerMenuIndex = buzzerEnabled ? 0 : 1;
+      settingsBuzzerMenuIndex = getBuzzerEnabled() ? 0 : 1;
       drawStatsSafe();
       break;
     case 2:
       appState = STATE_SETTINGS_MQTT;
-      settingsMqttMenuIndex = mqttEnabled ? 0 : 1;
+      settingsMqttMenuIndex = getMqttEnabled() ? 0 : 1;
       drawStatsSafe();
       break;
     case 3:
@@ -838,7 +865,7 @@ static bool handleSettingsMenuClick() {
       drawStatsSafe();
       break;
     case 7:
-      settingsEpicIntroIndex = showEpicIntro ? 0 : 1;
+      settingsEpicIntroIndex = getShowEpicIntro() ? 0 : 1;
       appState = STATE_SETTINGS_BOOT_INTRO;
       drawStatsSafe();
       break;

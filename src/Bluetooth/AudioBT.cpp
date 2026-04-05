@@ -4,52 +4,154 @@
 #include "esp_bt_main.h"
 #include "esp_log.h"
 #include "BoardPins.h"
+#include "AppLog.h"
 #include "RamTelemetry.h"
+
+#include <atomic>
 
 #if A2DP_I2S_AUDIOTOOLS
 static audio_tools::I2SStream s_audioStream;
+static bool s_audioStreamActive = false;
 #endif
 
-static BluetoothA2DPSinkQueued* a2dp = nullptr;
-static volatile bool connected = false;
+namespace {
 
-// Callback połączenia
-static void connection_state_callback(esp_a2d_connection_state_t state, void*) {
-    connected = (state == ESP_A2D_CONNECTION_STATE_CONNECTED);
+constexpr char TAG[] = "BT";
+constexpr char kSinkName[] = "ESP32-BASS";
+
+constexpr int kSampleRateHz = 44100;
+constexpr int kBitsPerSample = 16;
+constexpr int kChannelCount = 2;
+constexpr int kI2sBufferCount = 8;
+constexpr int kI2sBufferSize = 256;
+constexpr int kRingbufferSizeBytes = 12 * 1024;
+constexpr int kRingbufferPrefetchPercent = 80;
+constexpr int kI2sStackSizeBytes = 3072;
+constexpr size_t kI2sWriteSizeUpto = 240 * 8;
+constexpr int kI2sTicks = 10;
+constexpr UBaseType_t kTaskCore = 0;
+constexpr UBaseType_t kTaskPriority = configMAX_PRIORITIES - 3;
+constexpr UBaseType_t kI2sTaskPriority = configMAX_PRIORITIES - 1;
+constexpr UBaseType_t kEventQueueSize = 32;
+constexpr UBaseType_t kEventStackSize = 4096;
+
+static BluetoothA2DPSinkQueued s_a2dp;
+static std::atomic<bool> s_connected{false};
+static bool s_audioInitialized = false;
+
+void connection_state_callback(esp_a2d_connection_state_t state, void*) {
+    s_connected.store(state == ESP_A2D_CONNECTION_STATE_CONNECTED);
 }
 
-bool audioBT_init() {
-    // Reduce BT stack log churn in runtime audio mode to minimize UART-side jitter.
+void reduceBtLogNoise() {
+    // Keep library logs readable, but avoid the highest-volume categories during playback.
     esp_log_level_set("BT_AV", ESP_LOG_WARN);
     esp_log_level_set("BT_API", ESP_LOG_WARN);
     esp_log_level_set("RCCT", ESP_LOG_WARN);
+}
 
-    // KROK 2: Utwórz A2DP sink (Queued = osobny ringbuffer + I2S task)
-    if (a2dp == nullptr) {
-        a2dp = new BluetoothA2DPSinkQueued();
-    }
-    
-    // KROK 3: Konfiguracja wyjścia audio.
+bool isBtStackReady() {
+    const bool controllerReady = esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED;
+    const bool bluedroidReady = esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED;
+    return controllerReady && bluedroidReady;
+}
+
 #if A2DP_I2S_AUDIOTOOLS
+bool configureAudioToolsOutput() {
     audio_tools::I2SConfig i2sConfig = s_audioStream.defaultConfig(audio_tools::TX_MODE);
-    i2sConfig.sample_rate = 44100;
-    i2sConfig.bits_per_sample = 16;
-    i2sConfig.channels = 2;
+    i2sConfig.sample_rate = kSampleRateHz;
+    i2sConfig.bits_per_sample = kBitsPerSample;
+    i2sConfig.channels = kChannelCount;
     i2sConfig.is_master = true;
     i2sConfig.use_apll = true;
     i2sConfig.auto_clear = true;
-    i2sConfig.buffer_count = 12;
-    i2sConfig.buffer_size = 128;
+    i2sConfig.buffer_count = kI2sBufferCount;
+    i2sConfig.buffer_size = kI2sBufferSize;
     i2sConfig.pin_bck = BoardPins::kBtI2sBclk;
     i2sConfig.pin_ws = BoardPins::kBtI2sWs;
     i2sConfig.pin_data = BoardPins::kBtI2sData;
 
     if (!s_audioStream.begin(i2sConfig)) {
-        Serial.println("[BT] Failed to initialize AudioTools I2S output");
+        s_audioStream.end();
+        s_audioStreamActive = false;
         return false;
     }
 
-    a2dp->set_output(s_audioStream);
+    s_audioStreamActive = true;
+    return true;
+}
+
+void stopAudioToolsOutput() {
+    if (!s_audioStreamActive) {
+        return;
+    }
+
+    s_audioStream.end();
+    s_audioStreamActive = false;
+}
+#endif
+
+void configureSink() {
+    s_a2dp.set_i2s_ringbuffer_size(kRingbufferSizeBytes);
+    s_a2dp.set_i2s_ringbuffer_prefetch_percent(kRingbufferPrefetchPercent);
+    s_a2dp.set_i2s_stack_size(kI2sStackSizeBytes);
+    s_a2dp.set_i2s_write_size_upto(kI2sWriteSizeUpto);
+    s_a2dp.set_i2s_ticks(kI2sTicks);
+
+    // Keep the realtime path on Core 0 and leave the rest of the app on Core 1.
+    s_a2dp.set_task_core(kTaskCore);
+    s_a2dp.set_task_priority(kTaskPriority);
+    s_a2dp.set_event_queue_size(kEventQueueSize);
+    s_a2dp.set_event_stack_size(kEventStackSize);
+    s_a2dp.set_i2s_task_priority(kI2sTaskPriority);
+    s_a2dp.set_on_connection_state_changed(connection_state_callback);
+}
+
+void shutdownAudio(bool writeCheckpoint) {
+    const esp_bt_controller_status_t controllerStatus = esp_bt_controller_get_status();
+    const esp_bluedroid_status_t bluedroidStatus = esp_bluedroid_get_status();
+    const bool stackWasInitialized =
+        (controllerStatus != ESP_BT_CONTROLLER_STATUS_IDLE) ||
+        (bluedroidStatus != ESP_BLUEDROID_STATUS_UNINITIALIZED);
+
+    s_audioInitialized = false;
+    s_connected.store(false);
+
+    if (stackWasInitialized) {
+        s_a2dp.end(false);
+#if A2DP_I2S_AUDIOTOOLS
+        s_audioStreamActive = false;
+#endif
+    } else {
+#if A2DP_I2S_AUDIOTOOLS
+        stopAudioToolsOutput();
+#endif
+    }
+
+    if (writeCheckpoint) {
+        RAM_CHECKPOINT("AUDIO_OFF");
+    }
+}
+
+}  // namespace
+
+bool audioBT_init() {
+    if (s_audioInitialized) {
+        LOG_I(TAG, "Already initialized sink=%s", kSinkName);
+        return true;
+    }
+
+    s_connected.store(false);
+    reduceBtLogNoise();
+
+#if A2DP_I2S_AUDIOTOOLS
+    if (!configureAudioToolsOutput()) {
+        LOG_E(TAG, "Failed to initialize AudioTools I2S output");
+        shutdownAudio(false);
+        return false;
+    }
+
+    s_a2dp.set_output(s_audioStream);
 #elif A2DP_LEGACY_I2S_SUPPORT
     i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
@@ -71,76 +173,38 @@ bool audioBT_init() {
         .data_in_num = I2S_PIN_NO_CHANGE
     };
 
-    a2dp->set_i2s_config(i2s_config);
-    a2dp->set_pin_config(pin_config);
+    s_a2dp.set_i2s_config(i2s_config);
+    s_a2dp.set_pin_config(pin_config);
 #else
-    Serial.println("[BT] No supported audio backend available");
+    LOG_E(TAG, "No supported audio backend available");
     return false;
 #endif
 
-    // KROK 4: Ringbuffer + I2S queue tuned for stable playback under mixed system load.
-    a2dp->set_i2s_ringbuffer_size(24 * 1024);
-    a2dp->set_i2s_ringbuffer_prefetch_percent(50);
-    a2dp->set_i2s_stack_size(3072);
-    a2dp->set_i2s_write_size_upto(240 * 8);
-    a2dp->set_i2s_ticks(4);
-    
-    // KROK 5: FreeRTOS isolation profile.
-    // - Core 0: BT app + I2S queue task
-    // - Core 1: UI/WiFi/MQTT path
-    a2dp->set_task_core(0);
-    a2dp->set_task_priority(configMAX_PRIORITIES - 4);
-    a2dp->set_event_queue_size(32);
-    a2dp->set_event_stack_size(4096);
-    a2dp->set_i2s_task_priority(configMAX_PRIORITIES - 2);
-    
-    // KROK 6: Callback połączenia
-    a2dp->set_on_connection_state_changed(connection_state_callback);
-    
-    // KROK 7: Start
-    a2dp->start("ESP32-BASS");
+    configureSink();
+    s_a2dp.start(kSinkName);
 
-    const bool controllerReady = esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED;
-    const bool bluedroidReady = esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED;
-    if (!controllerReady || !bluedroidReady) {
-        Serial.printf("[BT] start failed: controller=%d bluedroid=%d\n",
-                      (int)esp_bt_controller_get_status(),
-                      (int)esp_bluedroid_get_status());
-        audioBT_deinit();
+    if (!isBtStackReady()) {
+        LOG_E(TAG,
+              "Start failed controller=%d bluedroid=%d",
+              (int)esp_bt_controller_get_status(),
+              (int)esp_bluedroid_get_status());
+        shutdownAudio(false);
         return false;
     }
 
+    s_audioInitialized = true;
     RAM_CHECKPOINT("AUDIO_ON");
     return true;
 }
 
 void audioBT_deinit() {
-    if (a2dp != nullptr) {
-        const esp_bt_controller_status_t controllerStatus = esp_bt_controller_get_status();
-        const esp_bluedroid_status_t bluedroidStatus = esp_bluedroid_get_status();
-        const bool stackWasInitialized =
-            (controllerStatus != ESP_BT_CONTROLLER_STATUS_IDLE) ||
-            (bluedroidStatus != ESP_BLUEDROID_STATUS_UNINITIALIZED);
-
-        if (stackWasInitialized) {
-            // Keep CLASSIC BT memory allocated so BT can be re-started without reboot.
-            a2dp->end(false);
-        }
-
-        delete a2dp;
-        a2dp = nullptr;
-    }
-#if A2DP_I2S_AUDIOTOOLS
-    s_audioStream.end();
-#endif
-    connected = false;
-    RAM_CHECKPOINT("AUDIO_OFF");
+    shutdownAudio(true);
 }
 
 bool audioBT_isConnected() {
-    return connected;
+    return s_connected.load();
 }
 
 TaskHandle_t audioBT_getI2STaskHandle() {
-    return (a2dp != nullptr) ? a2dp->getI2STaskHandle() : nullptr;
+    return s_audioInitialized ? s_a2dp.getI2STaskHandle() : nullptr;
 }

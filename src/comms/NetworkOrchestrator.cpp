@@ -2,12 +2,15 @@
 
 #include <WiFi.h>
 
+#include "AppLog.h"
 #include "MQTTSync.h"
 #include "ModeManager.h"
 #include "WiFiSync.h"
 
 namespace NetworkOrchestrator {
 namespace {
+
+constexpr char TAG[] = "NET";
 
 Config s_config;
 bool s_initialized = false;
@@ -36,11 +39,11 @@ void setMqttEnabled(bool enabled) {
 
 void quiesceForModeSwitch(RadioModeSwitchNextMode nextMode) {
   if (nextMode == RADIO_NEXT_BT) {
-    Serial.println("[NetworkOrchestrator] Quiescing runtime before BT restart");
+    LOG_I(TAG, "Quiescing runtime target=BT");
   } else if (nextMode == RADIO_NEXT_WIFI) {
-    Serial.println("[NetworkOrchestrator] Quiescing runtime before WiFi restart");
+    LOG_I(TAG, "Quiescing runtime target=WiFi");
   } else {
-    Serial.println("[NetworkOrchestrator] Quiescing runtime before restart");
+    LOG_I(TAG, "Quiescing runtime target=restart");
   }
 
   if (s_mqttInitialized) {
@@ -57,12 +60,12 @@ void quiesceForModeSwitch(RadioModeSwitchNextMode nextMode) {
 
 static void startWifiStack() {
   if (ModeManager::isBtOn()) {
-    Serial.println("[NetworkOrchestrator] WiFi requested -> stopping BT first");
+    LOG_I(TAG, "WiFi requested stopping_bt_first=true");
     ModeManager::btOff();
   }
 
   if (!ModeManager::isWifiOn()) {
-    Serial.println("[NetworkOrchestrator] WiFi requested -> starting WiFi stack");
+    LOG_I(TAG, "WiFi requested starting_wifi_stack=true");
     ModeManager::wifiOn();
   }
 }
@@ -73,14 +76,12 @@ static void startBtStack(unsigned long nowMs) {
       return;
     }
 
-    Serial.println("[NetworkOrchestrator] BT requested -> starting BT stack");
+    LOG_I(TAG, "BT requested starting_bt_stack=true");
     ModeManager::btOn();
 
     if (!ModeManager::isBtOn()) {
       s_nextBtActivationMs = nowMs + kBtActivationRetryMs;
-      Serial.print("[NetworkOrchestrator] BT init failed, retry in ");
-      Serial.print(kBtActivationRetryMs);
-      Serial.println(" ms");
+      LOG_W(TAG, "BT init failed retry_ms=%lu", kBtActivationRetryMs);
     } else {
       s_nextBtActivationMs = 0;
     }
@@ -107,8 +108,7 @@ void update() {
   }
 
   if (currentRadioMode != s_lastRadioMode) {
-    Serial.print("[NetworkOrchestrator] Radio target changed -> ");
-    Serial.println((currentRadioMode == RADIO_STATE_BT) ? "BT" : "WiFi");
+    LOG_I(TAG, "Radio target changed target=%s", (currentRadioMode == RADIO_STATE_BT) ? "BT" : "WiFi");
     s_lastRadioMode = currentRadioMode;
     s_nextBtActivationMs = 0;
   }
@@ -131,7 +131,7 @@ void update() {
 
   if (!s_mqttEnabled) {
     if (s_mqttInitialized) {
-      Serial.println("[NetworkOrchestrator] MQTT disabled in settings -> stopping service");
+      LOG_I(TAG, "MQTT disabled in settings stopping_service=true");
       MQTTSync::stopCore1Task();
       s_mqttInitialized = false;
     }
@@ -143,7 +143,7 @@ void update() {
     if (s_lastWifiCheckMs == 0 || nowMs - s_lastWifiCheckMs >= s_config.wifiStatusCheckMs) {
       s_lastWifiCheckMs = nowMs;
       if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[NetworkOrchestrator] WiFi connected -> starting MQTT service");
+        LOG_I(TAG, "WiFi connected starting_mqtt_service=true");
         MQTTSync::begin(s_config.wifiSsid, s_config.wifiPass);
         MQTTSync::startCore1Task();
         s_mqttInitialized = true;

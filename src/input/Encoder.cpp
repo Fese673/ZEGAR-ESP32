@@ -6,6 +6,14 @@
 #include <freertos/task.h>
 #endif
 
+#include "AppLog.h"
+
+namespace {
+
+constexpr char TAG[] = "ENCODER";
+
+}  // namespace
+
 // ============================================================================
 // KONFIGURACJA PINÓW
 // ============================================================================
@@ -137,7 +145,7 @@ void encoder_reinit_pins() {
     s_sequenceStep     = 0;
     s_sequenceDirection = 0;
 
-    Serial.println("[Encoder] Piny przywrocone (INPUT_PULLUP)");
+    LOG_I(TAG, "Pins restored mode=INPUT_PULLUP");
   }
 }
 

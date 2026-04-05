@@ -1,11 +1,15 @@
 #include "RuntimeTelemetry.h"
 
+#include "AppLog.h"
+
 #if ENABLE_RUNTIME_TELEMETRY
 
 #include <cstdio>
 
 namespace RuntimeTelemetry {
 namespace {
+constexpr char TAG[] = "TEL";
+
 Counters gCounters;
 unsigned long gLastPrintMs = 0;
 bool gHasPrinted = false;
@@ -42,17 +46,16 @@ void print(Stream& out) {
 }
 
 void print(Stream& out, const Snapshot& values) {
-  char line[192];
-  snprintf(line,
-           sizeof(line),
-           "[TEL] i2c timeouts=%lu queue_full=%lu errors=%lu | audio underruns=%lu overflows=%lu drops=%lu",
-           static_cast<unsigned long>(values.i2c_timeouts),
-           static_cast<unsigned long>(values.i2c_queue_full),
-           static_cast<unsigned long>(values.i2c_errors),
-           static_cast<unsigned long>(values.audio_underruns),
-           static_cast<unsigned long>(values.audio_overflows),
-           static_cast<unsigned long>(values.audio_drops));
-  out.println(line);
+  LOG_TO(out,
+         TAG,
+         'I',
+         "I2C timeouts=%lu queue_full=%lu errors=%lu audio_underruns=%lu audio_overflows=%lu audio_drops=%lu",
+         static_cast<unsigned long>(values.i2c_timeouts),
+         static_cast<unsigned long>(values.i2c_queue_full),
+         static_cast<unsigned long>(values.i2c_errors),
+         static_cast<unsigned long>(values.audio_underruns),
+         static_cast<unsigned long>(values.audio_overflows),
+         static_cast<unsigned long>(values.audio_drops));
 }
 
 bool service(Stream& out, unsigned long nowMs, unsigned long intervalMs) {

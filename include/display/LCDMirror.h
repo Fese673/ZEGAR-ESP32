@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
 
+#include "AppLog.h"
+
 extern LiquidCrystal_I2C lcd;
 
 constexpr uint8_t LCD_COLS = 20;
@@ -130,12 +132,13 @@ public:
   }
 
   void reportTiming(const char* tag) const {
-    Serial.printf("[lcd] %s last=%lu us avg=%lu us max=%lu us commits=%lu\n",
-                  tag,
-                  (unsigned long)lastCommitUs,
-                  (unsigned long)averageCommitTimeUs(),
-                  (unsigned long)maxCommitUs,
-                  (unsigned long)commitCount);
+    LOG_I("LCD",
+          "%s render last_us=%lu avg_us=%lu max_us=%lu commits=%lu",
+          tag,
+          (unsigned long)lastCommitUs,
+          (unsigned long)averageCommitTimeUs(),
+          (unsigned long)maxCommitUs,
+          (unsigned long)commitCount);
   }
 
   uint32_t lastCommitTimeUs() const { return lastCommitUs; }

@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <Esp.h>
 
+#include "AppLog.h"
+
 #include "Encoder.h"
 #include "RadioModeSwitch.h"
 #include "RamTelemetry.h"
@@ -11,8 +13,7 @@
 
 namespace ModeManager {
 namespace {
-
-constexpr char kLogPrefix[] = "[ModeManager]";
+constexpr char TAG[] = "MODE";
 
 bool s_wifiActive = false;
 bool s_btActive = false;
@@ -46,7 +47,7 @@ void stopBluetoothStack() {
 
 bool startBluetoothStack() {
   if (!audioBT_init()) {
-    Serial.println("[ModeManager] BT init failed (BT mode retained, no WiFi fallback)");
+    LOG_E(TAG, "BT init failed bt_mode_retained=true no_wifi_fallback=true");
     s_btActive = false;
     setRadioMode(BT_ONLY);
     RadioModeSwitch::forceMode(RADIO_STATE_BT, RADIO_NEXT_BT);
@@ -67,13 +68,13 @@ void logHeapSnapshot(const char* label) {
     return;
   }
 
-  Serial.printf("%s %s heap=%lu wifi=%s bt=%s mode=%u\n",
-                kLogPrefix,
-                label,
-                (unsigned long)ESP.getFreeHeap(),
-                s_wifiActive ? "ON" : "OFF",
-                s_btActive ? "ON" : "OFF",
-                (unsigned int)radioMode);
+  LOG_I(TAG,
+        "Heap snapshot checkpoint=%s heap_b=%lu wifi=%s bt=%s mode=%u",
+        label,
+        (unsigned long)ESP.getFreeHeap(),
+        s_wifiActive ? "ON" : "OFF",
+        s_btActive ? "ON" : "OFF",
+        (unsigned int)radioMode);
 }
 
 }  // namespace

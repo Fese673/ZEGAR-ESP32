@@ -5,62 +5,16 @@
 // Nieblokujący automat stanów wzorowany na przykładzie producenta:
 //   Idle → WaitingAtmosphericFrame → WaitingFactoryDelay
 //   → WaitingFactoryFrame → CoolingDown
-// Dane trafiają do zmiennych extern zadeklarowanych w main.cpp.
+// Dane są przechowywane wewnątrz modułu i udostępniane jako snapshoty
+// za pomocą publicznego API PMS5003Sensor::getAtmospheric()/getFactory()/getParticleCounts()/getStats().
 // ============================================================================
 
 #include "PMS_Czujnik.h"
 #include "BoardPins.h"
+#include "AppLog.h"
 
 // Biblioteka PMserial — nagłówek jest już w include/
 #include <PMserial.h>
-
-// ============================================================================
-// EXTERN – zmienne z main.cpp, do których wpisujemy odczyty
-// ============================================================================
-
-// Telemetria
-extern uint16_t pms5003_errorCount_current;
-extern uint16_t pms5003_errorCount_total;
-extern uint16_t pms5003_bytesReceived;
-extern uint32_t pms5003_lastFrameTime;
-extern uint32_t pms5003_latency_ms;
-extern bool pms5003Enabled;
-
-// Dane bieżące — CF=1
-extern uint16_t pms5003_PM1_0_CF1;
-extern uint16_t pms5003_PM2_5_CF1;
-extern uint16_t pms5003_PM10_CF1;
-
-// Dane bieżące — ATM
-extern uint16_t pms5003_PM1_0_ATM;
-extern uint16_t pms5003_PM2_5_ATM;
-extern uint16_t pms5003_PM10_ATM;
-
-// Dane bieżące — cząstki
-extern uint16_t pms5003_particleCount_0_3;
-extern uint16_t pms5003_particleCount_0_5;
-extern uint16_t pms5003_particleCount_1_0;
-extern uint16_t pms5003_particleCount_2_5;
-extern uint16_t pms5003_particleCount_5_0;
-extern uint16_t pms5003_particleCount_10_0;
-
-// Min/Max — CF=1
-extern uint16_t pms5003_PM1_0_CF1_MIN;  extern uint16_t pms5003_PM1_0_CF1_MAX;
-extern uint16_t pms5003_PM2_5_CF1_MIN;  extern uint16_t pms5003_PM2_5_CF1_MAX;
-extern uint16_t pms5003_PM10_CF1_MIN;   extern uint16_t pms5003_PM10_CF1_MAX;
-
-// Min/Max — ATM
-extern uint16_t pms5003_PM1_0_ATM_MIN;  extern uint16_t pms5003_PM1_0_ATM_MAX;
-extern uint16_t pms5003_PM2_5_ATM_MIN;  extern uint16_t pms5003_PM2_5_ATM_MAX;
-extern uint16_t pms5003_PM10_ATM_MIN;   extern uint16_t pms5003_PM10_ATM_MAX;
-
-// Min/Max — cząstki
-extern uint16_t pms5003_particleCount_0_3_MIN;  extern uint16_t pms5003_particleCount_0_3_MAX;
-extern uint16_t pms5003_particleCount_0_5_MIN;  extern uint16_t pms5003_particleCount_0_5_MAX;
-extern uint16_t pms5003_particleCount_1_0_MIN;  extern uint16_t pms5003_particleCount_1_0_MAX;
-extern uint16_t pms5003_particleCount_2_5_MIN;  extern uint16_t pms5003_particleCount_2_5_MAX;
-extern uint16_t pms5003_particleCount_5_0_MIN;  extern uint16_t pms5003_particleCount_5_0_MAX;
-extern uint16_t pms5003_particleCount_10_0_MIN; extern uint16_t pms5003_particleCount_10_0_MAX;
 
 // ============================================================================
 // WEWNĘTRZNE ZMIENNE MODUŁU (static - widoczne tylko w tym pliku)
@@ -70,6 +24,8 @@ extern uint16_t pms5003_particleCount_10_0_MIN; extern uint16_t pms5003_particle
 static SerialPM pms(PMSx003, BoardPins::kPms5003Rx, BoardPins::kPms5003Tx);
 
 namespace {
+
+constexpr const char* TAG = "PMS5003";
 
 constexpr unsigned long kFactoryRequestDelayMs = 2000UL;
 constexpr unsigned long kCycleDelayMs = 8000UL;
@@ -113,18 +69,12 @@ enum class Phase : uint8_t {
 
 struct SampleData {
   bool valid = false;
-  uint16_t pm01 = 0;
-  uint16_t pm25 = 0;
-  uint16_t pm10 = 0;
-  uint16_t n0p3 = 0;
-  uint16_t n0p5 = 0;
-  uint16_t n1p0 = 0;
-  uint16_t n2p5 = 0;
-  uint16_t n5p0 = 0;
-  uint16_t n10p0 = 0;
+  PMS5003Sensor::MassReadings mass;
+  PMS5003Sensor::ParticleCounts particles;
 };
 
 struct RuntimeState {
+  bool enabled = true;
   Phase phase = Phase::Idle;
   unsigned long phaseStartedMs = 0;
   unsigned long requestStartedMs = 0;
@@ -133,7 +83,11 @@ struct RuntimeState {
   SampleData atmospheric;
   SampleData factory;
   SampleData latest;
-  uint16_t totalErrors = 0;
+  PMS5003Sensor::MassReadings publishedAtmospheric;
+  PMS5003Sensor::MassReadings publishedFactory;
+  PMS5003Sensor::ParticleCounts publishedParticles;
+  PMS5003Sensor::Stats stats;
+  uint32_t totalErrors = 0;
   bool lastCycleOk = false;
   uint32_t lastUpdateTime = 0;
   uint16_t cycleBytesReceived = 0;
@@ -143,10 +97,9 @@ struct RuntimeState {
 
 static RuntimeState s;
 
-static inline void updateVal(uint16_t& cur, uint16_t& mn, uint16_t& mx, uint16_t v) {
-  cur = v;
-  if (v < mn) mn = v;
-  if (v > mx) mx = v;
+static inline void updateRange(PMS5003Sensor::ValueRange& range, uint16_t value) {
+  if (value < range.min) range.min = value;
+  if (value > range.max) range.max = value;
 }
 
 static uint16_t readWord(const uint8_t* frame, uint8_t offset) {
@@ -250,15 +203,8 @@ static void recordSuccess(bool factoryRead, unsigned long now) {
 
   SampleData& sample = factoryRead ? s.factory : s.atmospheric;
   sample.valid = true;
-  sample.pm01 = pm01;
-  sample.pm25 = pm25;
-  sample.pm10 = pm10;
-  sample.n0p3 = count0p3;
-  sample.n0p5 = count0p5;
-  sample.n1p0 = count1p0;
-  sample.n2p5 = count2p5;
-  sample.n5p0 = count5p0;
-  sample.n10p0 = count10p0;
+  sample.mass = {pm01, pm25, pm10};
+  sample.particles = {count0p3, count0p5, count1p0, count2p5, count5p0, count10p0};
 
   s.latest = sample;
 
@@ -274,9 +220,9 @@ static void recordSuccess(bool factoryRead, unsigned long now) {
   pms.n10p0 = count10p0;
 
   s.cycleHasSuccess = true;
-  s.cycleBytesReceived = kFrameLength;
+  s.cycleBytesReceived += kFrameLength;
   s.cycleLatencyMs = now - s.requestStartedMs;
-  pms5003_lastFrameTime = now;
+  s.stats.lastFrameTime = now;
 }
 
 static FramePollResult pumpFrame(bool factoryRead, unsigned long now) {
@@ -338,37 +284,39 @@ static void finalizeCycle(unsigned long now) {
   s.lastCycleOk = s.atmospheric.valid || s.factory.valid;
   s.lastUpdateTime = now;
 
-  pms5003_errorCount_current = (s.atmospheric.valid ? 0 : 1) + (s.factory.valid ? 0 : 1);
-  pms5003_errorCount_total = s.totalErrors;
+  s.stats.errorCountCurrent = (s.atmospheric.valid ? 0 : 1) + (s.factory.valid ? 0 : 1);
+  s.stats.errorCountTotal = s.totalErrors;
 
   if (s.cycleHasSuccess) {
-    pms5003_bytesReceived = s.cycleBytesReceived;
-    pms5003_latency_ms = s.cycleLatencyMs;
-    pms5003_lastFrameTime = now;
+    s.stats.bytesReceived = s.cycleBytesReceived;
+    s.stats.latencyMs = s.cycleLatencyMs;
   } else {
-    pms5003_bytesReceived = 0;
-    pms5003_latency_ms = 0;
+    s.stats.bytesReceived = 0;
+    s.stats.latencyMs = 0;
   }
 
   if (s.factory.valid) {
-    updateVal(pms5003_PM1_0_CF1, pms5003_PM1_0_CF1_MIN, pms5003_PM1_0_CF1_MAX, s.factory.pm01);
-    updateVal(pms5003_PM2_5_CF1, pms5003_PM2_5_CF1_MIN, pms5003_PM2_5_CF1_MAX, s.factory.pm25);
-    updateVal(pms5003_PM10_CF1, pms5003_PM10_CF1_MIN, pms5003_PM10_CF1_MAX, s.factory.pm10);
+    s.publishedFactory = s.factory.mass;
+    updateRange(s.stats.factoryPm01, s.factory.mass.pm01);
+    updateRange(s.stats.factoryPm25, s.factory.mass.pm25);
+    updateRange(s.stats.factoryPm10, s.factory.mass.pm10);
   }
 
   if (s.atmospheric.valid) {
-    updateVal(pms5003_PM1_0_ATM, pms5003_PM1_0_ATM_MIN, pms5003_PM1_0_ATM_MAX, s.atmospheric.pm01);
-    updateVal(pms5003_PM2_5_ATM, pms5003_PM2_5_ATM_MIN, pms5003_PM2_5_ATM_MAX, s.atmospheric.pm25);
-    updateVal(pms5003_PM10_ATM, pms5003_PM10_ATM_MIN, pms5003_PM10_ATM_MAX, s.atmospheric.pm10);
+    s.publishedAtmospheric = s.atmospheric.mass;
+    updateRange(s.stats.atmosphericPm01, s.atmospheric.mass.pm01);
+    updateRange(s.stats.atmosphericPm25, s.atmospheric.mass.pm25);
+    updateRange(s.stats.atmosphericPm10, s.atmospheric.mass.pm10);
   }
 
   if (s.latest.valid) {
-    updateVal(pms5003_particleCount_0_3, pms5003_particleCount_0_3_MIN, pms5003_particleCount_0_3_MAX, s.latest.n0p3);
-    updateVal(pms5003_particleCount_0_5, pms5003_particleCount_0_5_MIN, pms5003_particleCount_0_5_MAX, s.latest.n0p5);
-    updateVal(pms5003_particleCount_1_0, pms5003_particleCount_1_0_MIN, pms5003_particleCount_1_0_MAX, s.latest.n1p0);
-    updateVal(pms5003_particleCount_2_5, pms5003_particleCount_2_5_MIN, pms5003_particleCount_2_5_MAX, s.latest.n2p5);
-    updateVal(pms5003_particleCount_5_0, pms5003_particleCount_5_0_MIN, pms5003_particleCount_5_0_MAX, s.latest.n5p0);
-    updateVal(pms5003_particleCount_10_0, pms5003_particleCount_10_0_MIN, pms5003_particleCount_10_0_MAX, s.latest.n10p0);
+    s.publishedParticles = s.latest.particles;
+    updateRange(s.stats.particle0p3, s.latest.particles.count0p3);
+    updateRange(s.stats.particle0p5, s.latest.particles.count0p5);
+    updateRange(s.stats.particle1p0, s.latest.particles.count1p0);
+    updateRange(s.stats.particle2p5, s.latest.particles.count2p5);
+    updateRange(s.stats.particle5p0, s.latest.particles.count5p0);
+    updateRange(s.stats.particle10p0, s.latest.particles.count10p0);
   }
 }
 
@@ -382,10 +330,43 @@ uint32_t PMS5003Sensor::getLastUpdateTime() {
   return s.lastUpdateTime;
 }
 
+bool PMS5003Sensor::isEnabled() {
+  return s.enabled;
+}
+
+void PMS5003Sensor::setEnabled(bool enabled) {
+  if (s.enabled == enabled) {
+    return;
+  }
+
+  s.enabled = enabled;
+  s.lastCycleOk = false;
+  s.phase = Phase::Idle;
+  s.phaseStartedMs = millis();
+  resetRequestParser();
+  resetCycleMetrics();
+}
+
+PMS5003Sensor::MassReadings PMS5003Sensor::getAtmospheric() {
+  return s.publishedAtmospheric;
+}
+
+PMS5003Sensor::MassReadings PMS5003Sensor::getFactory() {
+  return s.publishedFactory;
+}
+
+PMS5003Sensor::ParticleCounts PMS5003Sensor::getParticleCounts() {
+  return s.publishedParticles;
+}
+
+PMS5003Sensor::Stats PMS5003Sensor::getStats() {
+  return s.stats;
+}
+
 // Wymuś natychmiastowy cykl odczytu. Zaczynamy od ATM i dajemy update()
 // szansę od razu odebrać dane, jeśli frame już czeka w buforze.
 void PMS5003Sensor::requestImmediateRead() {
-  if (!pms5003Enabled) {
+  if (!s.enabled) {
     return;
   }
 
@@ -398,13 +379,9 @@ void PMS5003Sensor::requestImmediateRead() {
 // ============================================================================
 
 void PMS5003Sensor::begin() {
-  Serial.print(F("[PMS5003] Initializing on Serial1 (RX="));
-  Serial.print(BoardPins::kPms5003Rx);
-  Serial.print(F(", TX="));
-  Serial.print(BoardPins::kPms5003Tx);
-  Serial.println(F(")..."));
+  LOG_I(TAG, "action=init port=Serial1 rx=%u tx=%u", (unsigned)BoardPins::kPms5003Rx, (unsigned)BoardPins::kPms5003Tx);
   pms.init();
-  Serial.println(F("[PMS5003] Initialized!"));
+  LOG_I(TAG, "status=ready");
 
   s = RuntimeState{};
   s.phase = Phase::Idle;
@@ -419,20 +396,20 @@ void PMS5003Sensor::begin() {
 
 void PMS5003Sensor::resetMinMax() {
   // CF=1
-  pms5003_PM1_0_CF1_MIN = 9999;  pms5003_PM1_0_CF1_MAX = 0;
-  pms5003_PM2_5_CF1_MIN = 9999;  pms5003_PM2_5_CF1_MAX = 0;
-  pms5003_PM10_CF1_MIN = 9999;   pms5003_PM10_CF1_MAX = 0;
+  s.stats.factoryPm01 = {};
+  s.stats.factoryPm25 = {};
+  s.stats.factoryPm10 = {};
   // ATM
-  pms5003_PM1_0_ATM_MIN = 9999;  pms5003_PM1_0_ATM_MAX = 0;
-  pms5003_PM2_5_ATM_MIN = 9999;  pms5003_PM2_5_ATM_MAX = 0;
-  pms5003_PM10_ATM_MIN = 9999;   pms5003_PM10_ATM_MAX = 0;
+  s.stats.atmosphericPm01 = {};
+  s.stats.atmosphericPm25 = {};
+  s.stats.atmosphericPm10 = {};
   // Cząstki
-  pms5003_particleCount_0_3_MIN = 9999;  pms5003_particleCount_0_3_MAX = 0;
-  pms5003_particleCount_0_5_MIN = 9999;  pms5003_particleCount_0_5_MAX = 0;
-  pms5003_particleCount_1_0_MIN = 9999;  pms5003_particleCount_1_0_MAX = 0;
-  pms5003_particleCount_2_5_MIN = 9999;  pms5003_particleCount_2_5_MAX = 0;
-  pms5003_particleCount_5_0_MIN = 9999;  pms5003_particleCount_5_0_MAX = 0;
-  pms5003_particleCount_10_0_MIN = 9999; pms5003_particleCount_10_0_MAX = 0;
+  s.stats.particle0p3 = {};
+  s.stats.particle0p5 = {};
+  s.stats.particle1p0 = {};
+  s.stats.particle2p5 = {};
+  s.stats.particle5p0 = {};
+  s.stats.particle10p0 = {};
 }
 
 // ============================================================================
@@ -440,7 +417,7 @@ void PMS5003Sensor::resetMinMax() {
 // ============================================================================
 
 bool PMS5003Sensor::isOk() {
-  return pms5003Enabled && s.lastCycleOk;
+  return s.enabled && s.lastCycleOk;
 }
 
 // ============================================================================
@@ -450,11 +427,12 @@ bool PMS5003Sensor::isOk() {
 void PMS5003Sensor::update() {
   const unsigned long now = millis();
 
-  if (!pms5003Enabled) {
+  if (!s.enabled) {
     if (s.phase != Phase::Idle) {
       s.phase = Phase::Idle;
       s.phaseStartedMs = now;
       resetRequestParser();
+      resetCycleMetrics();
     }
     return;
   }

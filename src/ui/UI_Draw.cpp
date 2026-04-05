@@ -9,6 +9,7 @@
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <SPI.h>
 #endif
 #include <math.h>
 #include "TelemetryComposer.h"
@@ -29,11 +30,6 @@ extern LcdMirror20x4 lcdMirror;
 // ============================================================================
 
 static bool s_sevenSegReady = false;
-
-// --- Menu ---
-extern int menuIndex;
-extern const char* menuItems[];
-extern int menuCount;
 
 // --- Statystyki ---
 extern int statsMenuIndex;
@@ -64,49 +60,6 @@ extern int ens160MenuCount;
 extern int bmp280MenuIndex;
 extern const char* bmp280MenuItems[];
 extern int bmp280MenuCount;
-
-// --- Dane PMS5003 ---
-extern uint16_t pms5003_PM1_0_CF1;
-extern uint16_t pms5003_PM2_5_CF1;
-extern uint16_t pms5003_PM10_CF1;
-extern uint16_t pms5003_PM1_0_ATM;
-extern uint16_t pms5003_PM2_5_ATM;
-extern uint16_t pms5003_PM10_ATM;
-extern uint16_t pms5003_PM1_0_CF1_MIN;
-extern uint16_t pms5003_PM1_0_CF1_MAX;
-extern uint16_t pms5003_PM2_5_CF1_MIN;
-extern uint16_t pms5003_PM2_5_CF1_MAX;
-extern uint16_t pms5003_PM10_CF1_MIN;
-extern uint16_t pms5003_PM10_CF1_MAX;
-extern uint16_t pms5003_PM1_0_ATM_MIN;
-extern uint16_t pms5003_PM1_0_ATM_MAX;
-extern uint16_t pms5003_PM2_5_ATM_MIN;
-extern uint16_t pms5003_PM2_5_ATM_MAX;
-extern uint16_t pms5003_PM10_ATM_MIN;
-extern uint16_t pms5003_PM10_ATM_MAX;
-extern uint16_t pms5003_particleCount_0_3;
-extern uint16_t pms5003_particleCount_0_5;
-extern uint16_t pms5003_particleCount_1_0;
-extern uint16_t pms5003_particleCount_2_5;
-extern uint16_t pms5003_particleCount_5_0;
-extern uint16_t pms5003_particleCount_10_0;
-extern uint16_t pms5003_particleCount_0_3_MIN;
-extern uint16_t pms5003_particleCount_0_3_MAX;
-extern uint16_t pms5003_particleCount_0_5_MIN;
-extern uint16_t pms5003_particleCount_0_5_MAX;
-extern uint16_t pms5003_particleCount_1_0_MIN;
-extern uint16_t pms5003_particleCount_1_0_MAX;
-extern uint16_t pms5003_particleCount_2_5_MIN;
-extern uint16_t pms5003_particleCount_2_5_MAX;
-extern uint16_t pms5003_particleCount_5_0_MIN;
-extern uint16_t pms5003_particleCount_5_0_MAX;
-extern uint16_t pms5003_particleCount_10_0_MIN;
-extern uint16_t pms5003_particleCount_10_0_MAX;
-extern uint16_t pms5003_errorCount_current;
-extern uint16_t pms5003_errorCount_total;
-extern uint16_t pms5003_bytesReceived;
-extern uint32_t pms5003_lastFrameTime;
-extern uint32_t pms5003_latency_ms;
 
 // --- Stan aplikacji ---
 extern enum AppState appState;
@@ -148,7 +101,6 @@ extern uint32_t ramDmaFreeBytes;
 extern uint32_t flashFreeBytes;
 
 // --- Settings (z main.cpp / UI_Controller.cpp) ---
-extern bool pms5003Enabled;
 extern int settingsMqttMenuIndex;
 extern int settingsAlarmMelodyIndex;
 extern int settingsEpicIntroIndex;
@@ -167,6 +119,7 @@ uint8_t swapNibbles(uint8_t v) {
   return (v << 4) | (v >> 4);
 }
 
+#ifndef ARDUINO_ARCH_ESP32
 static void pulse(int pin) {
   digitalWrite(pin, HIGH);
   delayMicroseconds(5);
@@ -174,7 +127,7 @@ static void pulse(int pin) {
   delayMicroseconds(5);
 }
 
-void slowShiftOut(uint8_t v) {
+static void shiftOutByte(uint8_t v) {
   for (int i = 7; i >= 0; i--) {
     digitalWrite(DATA_PIN, (v >> i) & 1);
     delayMicroseconds(5);
@@ -182,10 +135,30 @@ void slowShiftOut(uint8_t v) {
   }
 }
 
+#endif
+
+static void writeSevenSegFrame(uint8_t first, uint8_t second, uint8_t third) {
+#ifdef ARDUINO_ARCH_ESP32
+  SPI.beginTransaction(SPISettings(4000000UL, MSBFIRST, SPI_MODE0));
+  SPI.transfer(first);
+  SPI.transfer(second);
+  SPI.transfer(third);
+  SPI.endTransaction();
+#else
+  shiftOutByte(first);
+  shiftOutByte(second);
+  shiftOutByte(third);
+#endif
+}
+
 void initSevenSeg() {
   pinMode(DATA_PIN, OUTPUT);
   pinMode(CLOCK_PIN, OUTPUT);
   pinMode(LATCH_PIN, OUTPUT);
+
+#ifdef ARDUINO_ARCH_ESP32
+  SPI.begin(BoardPins::kSevenSegClock, -1, BoardPins::kSevenSegData, -1);
+#endif
 
   digitalWrite(DATA_PIN, LOW);
   digitalWrite(CLOCK_PIN, LOW);
@@ -201,9 +174,7 @@ void initSevenSeg() {
 
   // Wyzeruj wyświetlacz
   digitalWrite(LATCH_PIN, LOW);
-  slowShiftOut(0);
-  slowShiftOut(0);
-  slowShiftOut(0);
+  writeSevenSegFrame(0, 0, 0);
   digitalWrite(LATCH_PIN, HIGH);
   s_sevenSegReady = true;
 }
@@ -233,9 +204,7 @@ void updateSevenSeg() {
   }
 
   digitalWrite(LATCH_PIN, LOW);
-  slowShiftOut(swapNibbles(SS));
-  slowShiftOut(swapNibbles(MM));
-  slowShiftOut(swapNibbles(HH));
+  writeSevenSegFrame(swapNibbles(SS), swapNibbles(MM), swapNibbles(HH));
   digitalWrite(LATCH_PIN, HIGH);
 }
 
@@ -249,9 +218,7 @@ void updateSevenSegStoper(int mins, int secs, int centisec) {
   const uint8_t CS = ((centisec / 10) << 4) | (centisec % 10);
 
   digitalWrite(LATCH_PIN, LOW);
-  slowShiftOut(swapNibbles(CS));
-  slowShiftOut(swapNibbles(SS));
-  slowShiftOut(swapNibbles(MM));
+  writeSevenSegFrame(swapNibbles(CS), swapNibbles(SS), swapNibbles(MM));
   digitalWrite(LATCH_PIN, HIGH);
 }
 
@@ -476,8 +443,9 @@ void drawAirScreen() {
   const uint16_t eco2 = ensGasValid ? ENS160AHT21Screen::runtimeData.eco2 : 0;
 
   // PM2.5: bierzemy ATM (bardziej „ambient”), a gdy PMS wyłączony, pokażemy kreski.
-  const bool pmValid = pms5003Enabled && pms5003_PM2_5_ATM > 0;
-  const uint16_t pm25 = pmValid ? pms5003_PM2_5_ATM : 0;
+  const PMS5003Sensor::MassReadings atmospheric = PMS5003Sensor::getAtmospheric();
+  const bool pmValid = PMS5003Sensor::isEnabled() && atmospheric.pm25 > 0;
+  const uint16_t pm25 = pmValid ? atmospheric.pm25 : 0;
 
   // Decide header: if we have at least one of PM or ENS gas/climate, attempt header.
   const bool haveAny = pmValid || ensGasValid || ensClimateValid;
@@ -606,7 +574,7 @@ void drawExtremeEnvironmentScreen() {
   const bool ensGasValid = ENS160AHT21Screen::runtimeData.hasGasSample;
   const bool ensClimateValid = ENS160AHT21Screen::runtimeData.hasClimateSample;
   const bool bmpValid = BMP280Screen::runtimeData.hasSample;
-  const bool pmValid = pms5003Enabled && PMS5003Sensor::getLastUpdateTime() != 0;
+  const bool pmValid = PMS5003Sensor::isEnabled() && PMS5003Sensor::getLastUpdateTime() != 0;
 
   if (ensGasValid) {
     snprintf(line, sizeof(line), "AQI:%u TVOC:%u", (unsigned)ENS160AHT21Screen::runtimeData.aqi, (unsigned)ENS160AHT21Screen::runtimeData.tvoc);
@@ -969,9 +937,7 @@ void drawStoper() {
     uint8_t MMb = ((rm / 10) << 4) | (rm % 10);
     uint8_t SSb = ((rs / 10) << 4) | (rs % 10);
     digitalWrite(LATCH_PIN, LOW);
-    slowShiftOut(swapNibbles(SSb));
-    slowShiftOut(swapNibbles(MMb));
-    slowShiftOut(swapNibbles(HHb));
+    writeSevenSegFrame(swapNibbles(SSb), swapNibbles(MMb), swapNibbles(HHb));
     digitalWrite(LATCH_PIN, HIGH);
     LCD_DUMP();
     return;
@@ -1195,7 +1161,7 @@ static void drawPmsMassDetail(const __FlashStringHelper* title,
   LCD_PRINT(F(" \xE4g/m3"));
   LCD_SET(0, 2);
   LCD_PRINT(F("Min:"));
-  LCD_PRINT(minValue < 9999 ? minValue : 0);
+  LCD_PRINT(minValue != kPms5003UnsetMinValue ? minValue : 0);
   LCD_PRINT(F(" Max:"));
   LCD_PRINT(maxValue);
   drawLongBackFooter();
@@ -1212,7 +1178,7 @@ static void drawPmsParticleDetail(const __FlashStringHelper* title,
   LCD_PRINT(current);
   LCD_SET(0, 2);
   LCD_PRINT(F("Min:"));
-  LCD_PRINT(minValue < 9999 ? minValue : 0);
+  LCD_PRINT(minValue != kPms5003UnsetMinValue ? minValue : 0);
   LCD_PRINT(F(" Max:"));
   LCD_PRINT(maxValue);
   drawLongBackFooter();
@@ -1223,13 +1189,14 @@ static void drawPmsParticlesMenu() {
       "0.3um", "0.5um", "1.0um", "2.5um", "5.0um", "10um",
   };
 
+  const PMS5003Sensor::ParticleCounts particleCounts = PMS5003Sensor::getParticleCounts();
   const uint16_t particleValues[] = {
-      pms5003_particleCount_0_3,
-      pms5003_particleCount_0_5,
-      pms5003_particleCount_1_0,
-      pms5003_particleCount_2_5,
-      pms5003_particleCount_5_0,
-      pms5003_particleCount_10_0,
+      particleCounts.count0p3,
+      particleCounts.count0p5,
+      particleCounts.count1p0,
+      particleCounts.count2p5,
+      particleCounts.count5p0,
+      particleCounts.count10p0,
   };
 
   LCD_SET(0, 0);
@@ -1448,6 +1415,10 @@ void drawStats() {
   const AppStats stats = statsManager.getStats();
   updateEns160UiHistory(ENS160AHT21Screen::runtimeData);
   updateBmp280UiHistory(BMP280Screen::runtimeData);
+  const PMS5003Sensor::MassReadings pmsAtmospheric = PMS5003Sensor::getAtmospheric();
+  const PMS5003Sensor::MassReadings pmsFactory = PMS5003Sensor::getFactory();
+  const PMS5003Sensor::ParticleCounts pmsParticles = PMS5003Sensor::getParticleCounts();
+  const PMS5003Sensor::Stats pmsStats = PMS5003Sensor::getStats();
 
   switch (appState) {
   // === 1. MENU STATYSTYK (LISTA Z LICZBAMI) ===
@@ -2019,48 +1990,48 @@ void drawStats() {
   case STATE_PMS5003_CF1: {
     drawPmsMassMenu(F("PMS5003 CF=1"),
                     pms5003CF1MenuIndex,
-                    pms5003_PM1_0_CF1,
-                    pms5003_PM2_5_CF1,
-                    pms5003_PM10_CF1);
+                    pmsFactory.pm01,
+                    pmsFactory.pm25,
+                    pmsFactory.pm10);
     break;
   }
   // === 6a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB CF=1 (MIN/MAX) ===
   case STATE_PMS5003_CF1_PM1: {
-    drawPmsMassDetail(F("PM1.0 CF=1"), pms5003_PM1_0_CF1, pms5003_PM1_0_CF1_MIN, pms5003_PM1_0_CF1_MAX);
+    drawPmsMassDetail(F("PM1.0 CF=1"), pmsFactory.pm01, pmsStats.factoryPm01.min, pmsStats.factoryPm01.max);
     break;
   }
   // === 6b. WIDOK SZCZEGÓŁÓW PM2.5 TRYB CF=1 (MIN/MAX) ===
   case STATE_PMS5003_CF1_PM25: {
-    drawPmsMassDetail(F("PM2.5 CF=1"), pms5003_PM2_5_CF1, pms5003_PM2_5_CF1_MIN, pms5003_PM2_5_CF1_MAX);
+    drawPmsMassDetail(F("PM2.5 CF=1"), pmsFactory.pm25, pmsStats.factoryPm25.min, pmsStats.factoryPm25.max);
     break;
   }
   // === 6c. WIDOK SZCZEGÓŁÓW PM10 TRYB CF=1 (MIN/MAX) ===
   case STATE_PMS5003_CF1_PM10: {
-    drawPmsMassDetail(F("PM10 CF=1"), pms5003_PM10_CF1, pms5003_PM10_CF1_MIN, pms5003_PM10_CF1_MAX);
+    drawPmsMassDetail(F("PM10 CF=1"), pmsFactory.pm10, pmsStats.factoryPm10.min, pmsStats.factoryPm10.max);
     break;
   }
   // === 7. WIDOK PMS5003 TRYB ATMOSFERYCZNY (BIEŻĄCE DANE Z WYBOREM) ===
   case STATE_PMS5003_ATM: {
     drawPmsMassMenu(F("PMS5003 ATM"),
                     pms5003ATMMenuIndex,
-                    pms5003_PM1_0_ATM,
-                    pms5003_PM2_5_ATM,
-                    pms5003_PM10_ATM);
+                    pmsAtmospheric.pm01,
+                    pmsAtmospheric.pm25,
+                    pmsAtmospheric.pm10);
     break;
   }
   // === 7a. WIDOK SZCZEGÓŁÓW PM1.0 TRYB ATM (MIN/MAX) ===
   case STATE_PMS5003_ATM_PM1: {
-    drawPmsMassDetail(F("PM1.0 ATM"), pms5003_PM1_0_ATM, pms5003_PM1_0_ATM_MIN, pms5003_PM1_0_ATM_MAX);
+    drawPmsMassDetail(F("PM1.0 ATM"), pmsAtmospheric.pm01, pmsStats.atmosphericPm01.min, pmsStats.atmosphericPm01.max);
     break;
   }
   // === 7b. WIDOK SZCZEGÓŁÓW PM2.5 TRYB ATM (MIN/MAX) ===
   case STATE_PMS5003_ATM_PM25: {
-    drawPmsMassDetail(F("PM2.5 ATM"), pms5003_PM2_5_ATM, pms5003_PM2_5_ATM_MIN, pms5003_PM2_5_ATM_MAX);
+    drawPmsMassDetail(F("PM2.5 ATM"), pmsAtmospheric.pm25, pmsStats.atmosphericPm25.min, pmsStats.atmosphericPm25.max);
     break;
   }
   // === 7c. WIDOK SZCZEGÓŁÓW PM10 TRYB ATM (MIN/MAX) ===
   case STATE_PMS5003_ATM_PM10: {
-    drawPmsMassDetail(F("PM10 ATM"), pms5003_PM10_ATM, pms5003_PM10_ATM_MIN, pms5003_PM10_ATM_MAX);
+    drawPmsMassDetail(F("PM10 ATM"), pmsAtmospheric.pm10, pmsStats.atmosphericPm10.min, pmsStats.atmosphericPm10.max);
     break;
   }
 
@@ -2071,32 +2042,32 @@ void drawStats() {
   }
 
   case STATE_PMS5003_PARTICLES_0_3: {
-    drawPmsParticleDetail(F("0.3um"), pms5003_particleCount_0_3, pms5003_particleCount_0_3_MIN, pms5003_particleCount_0_3_MAX);
+    drawPmsParticleDetail(F("0.3um"), pmsParticles.count0p3, pmsStats.particle0p3.min, pmsStats.particle0p3.max);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_0_5: {
-    drawPmsParticleDetail(F("0.5um"), pms5003_particleCount_0_5, pms5003_particleCount_0_5_MIN, pms5003_particleCount_0_5_MAX);
+    drawPmsParticleDetail(F("0.5um"), pmsParticles.count0p5, pmsStats.particle0p5.min, pmsStats.particle0p5.max);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_1_0: {
-    drawPmsParticleDetail(F("1.0um"), pms5003_particleCount_1_0, pms5003_particleCount_1_0_MIN, pms5003_particleCount_1_0_MAX);
+    drawPmsParticleDetail(F("1.0um"), pmsParticles.count1p0, pmsStats.particle1p0.min, pmsStats.particle1p0.max);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_2_5: {
-    drawPmsParticleDetail(F("2.5um"), pms5003_particleCount_2_5, pms5003_particleCount_2_5_MIN, pms5003_particleCount_2_5_MAX);
+    drawPmsParticleDetail(F("2.5um"), pmsParticles.count2p5, pmsStats.particle2p5.min, pmsStats.particle2p5.max);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_5_0: {
-    drawPmsParticleDetail(F("5.0um"), pms5003_particleCount_5_0, pms5003_particleCount_5_0_MIN, pms5003_particleCount_5_0_MAX);
+    drawPmsParticleDetail(F("5.0um"), pmsParticles.count5p0, pmsStats.particle5p0.min, pmsStats.particle5p0.max);
     break;
   }
 
   case STATE_PMS5003_PARTICLES_10_0: {
-    drawPmsParticleDetail(F("10um"), pms5003_particleCount_10_0, pms5003_particleCount_10_0_MIN, pms5003_particleCount_10_0_MAX);
+    drawPmsParticleDetail(F("10um"), pmsParticles.count10p0, pmsStats.particle10p0.min, pmsStats.particle10p0.max);
     break;
   }
 
@@ -2107,20 +2078,20 @@ void drawStats() {
     
     LCD_SET(0, 1);
     LCD_PRINT(F("Bledy: "));
-    LCD_PRINT(pms5003_errorCount_current);
+    LCD_PRINT(pmsStats.errorCountCurrent);
     LCD_PRINT(F("/"));
-    LCD_PRINT(pms5003_errorCount_total);
+    LCD_PRINT(pmsStats.errorCountTotal);
     
     LCD_SET(0, 2);
     LCD_PRINT(F("Bajty: "));
-    if (pms5003_bytesReceived < 10) LCD_PRINT(F("0"));
-    LCD_PRINT(pms5003_bytesReceived);
+    if (pmsStats.bytesReceived < 10) LCD_PRINT(F("0"));
+    LCD_PRINT(pmsStats.bytesReceived);
     
     LCD_SET(0, 3);
     LCD_PRINT(F("Latencja: "));
-    if (pms5003_latency_ms < 10) LCD_PRINT(F("0"));
-    if (pms5003_latency_ms < 100) LCD_PRINT(F("0"));
-    LCD_PRINT(pms5003_latency_ms);
+    if (pmsStats.latencyMs < 10) LCD_PRINT(F("0"));
+    if (pmsStats.latencyMs < 100) LCD_PRINT(F("0"));
+    LCD_PRINT(pmsStats.latencyMs);
     LCD_PRINT(F(" ms"));
     break;
   }

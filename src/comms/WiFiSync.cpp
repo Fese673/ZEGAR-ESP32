@@ -1,14 +1,20 @@
 #include "WiFiSync.h"
 #include <WiFi.h>
 #include <esp_system.h>
+#include <atomic>
 #include <stdlib.h>
 #include <string.h>
+
+#include "AppLog.h"
 #include "ModeManager.h"
 #include "RamTelemetry.h"
 
 namespace WiFiSync {
 
 namespace {
+
+constexpr char TAG[] = "WIFI";
+
 
 constexpr char kDefaultNtpServer[] = "pool.ntp.org";
 constexpr char kPolandTimezone[] = "CET-1CEST,M3.5.0,M10.5.0/3";
@@ -35,9 +41,9 @@ static char passCopy[kPassCopySize] = {0};
 static char ntpServerCopy[kNtpServerCopySize] = {0};
 
 // Background-task and sync tracking.
-static volatile bool wifiConnectedByTask = false;
-static volatile bool wifiFailedByTask = false;
-static volatile uint16_t wifiDisconnectReason = 0;
+static std::atomic<bool> wifiConnectedByTask{false};
+static std::atomic<bool> wifiFailedByTask{false};
+static std::atomic<uint16_t> wifiDisconnectReason{0};
 static unsigned long lastNtpSyncMillis = 0;
 static bool ntpSynced = false;
 
@@ -63,7 +69,7 @@ static void ensureTzSet() {
   if (setenv("TZ", kPolandTimezone, 1) == 0) {
     tzset();
   } else {
-    Serial.println("[WiFiSync] WARNING: failed to set TZ, localtime may be incorrect");
+    LOG_W(TAG, "Failed to set TZ localtime_may_be_incorrect=true");
   }
 }
 
@@ -73,15 +79,15 @@ static void (*onDoneCb)() = nullptr;
 static void handleWiFiEvent(arduino_event_id_t event, arduino_event_info_t info) {
   switch (event) {
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-      wifiConnectedByTask = true;
-      wifiFailedByTask = false;
-      wifiDisconnectReason = 0;
+      wifiConnectedByTask.store(true);
+      wifiFailedByTask.store(false);
+      wifiDisconnectReason.store(0);
       break;
 
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      wifiDisconnectReason = info.wifi_sta_disconnected.reason;
-      wifiConnectedByTask = false;
-      wifiFailedByTask = true;
+      wifiDisconnectReason.store(info.wifi_sta_disconnected.reason);
+      wifiConnectedByTask.store(false);
+      wifiFailedByTask.store(true);
       break;
 
     default:
@@ -99,9 +105,9 @@ static void ensureWiFiEventHandler() {
 }
 
 static void resetConnectionTracking() {
-  wifiConnectedByTask = false;
-  wifiFailedByTask = false;
-  wifiDisconnectReason = 0;
+  wifiConnectedByTask.store(false);
+  wifiFailedByTask.store(false);
+  wifiDisconnectReason.store(0);
   wifiConnectStartMillis = 0;
 }
 
@@ -150,20 +156,20 @@ static TaskHandle_t wifiBeginTaskHandle = NULL;
 // Complete WiFi init task — runs ALL WiFi hardware on Core 1
 // WiFi.mode(), WiFi.begin(), and connection wait — fully non-blocking for Core 0
 static void wifiInitTask(void* param) {
-  Serial.println("[WiFiSync] wifiInitTask: started on Core 1");
+  LOG_I(TAG, "WiFi init task started core=1");
 
   // Step 1: WiFi driver init (this is the 2-8s blocker on Core 0 — now safe here)
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
-  Serial.println("[WiFiSync] wifiInitTask: WiFi.mode(STA) done");
+  LOG_I(TAG, "WiFi init task mode=STA done=true");
   RAM_CHECKPOINT("WIFI_DRIVER_ON");
 
   vTaskDelay(50 / portTICK_PERIOD_MS);
 
   // Step 2: Start connection
   WiFi.begin(ssidCopy, passCopy);
-  Serial.println("[WiFiSync] wifiInitTask: WiFi.begin() called, waiting for WiFi events");
+  LOG_I(TAG, "WiFi begin called waiting_for_events=true");
 
   wifiBeginTaskHandle = NULL;
   vTaskDelete(NULL);
@@ -180,7 +186,7 @@ static bool startWifiConnectionTask(unsigned long now) {
   wifiConnectStartMillis = now;
 
   if (xTaskCreatePinnedToCore(wifiInitTask, "wifiInit", 4096, NULL, 5, &wifiBeginTaskHandle, 1) != pdPASS) {
-    Serial.println("[WiFiSync] ERROR: failed to spawn WiFi init task");
+    LOG_E(TAG, "Failed to spawn WiFi init task");
     wifiBeginTaskHandle = NULL;
     lastError = SyncError::Wifi;
     wifiFailureCount++;
@@ -193,7 +199,7 @@ static bool startWifiConnectionTask(unsigned long now) {
     onStartCb();
   }
 
-  Serial.println("[WiFiSync] update: WiFi init task spawned to Core 1");
+  LOG_I(TAG, "WiFi init task spawned core=1");
   return true;
 }
 
@@ -260,7 +266,7 @@ static void requestWifiConnect() {
 }
 
 void startSync() {
-  Serial.println("[WiFiSync] startSync() called");
+  LOG_I(TAG, "startSync request_wifi=true request_time_sync=true");
   // Backwards compatible: request both WiFi connect and time sync.
   requestWifiConnect();
   requestTimeSync();
@@ -307,7 +313,7 @@ SyncError getLastError() {
 static void ensureSntpConfigured() {
   if (sntpConfigured) return;
   ensureTzSet();
-  Serial.println("[WiFiSync] Configuring SNTP via configTzTime()");
+  LOG_I(TAG, "action=configTzTime server=%s", ntpServerCopy[0] != '\0' ? ntpServerCopy : kDefaultNtpServer);
   configTzTime(kPolandTimezone, ntpServerCopy[0] != '\0' ? ntpServerCopy : kDefaultNtpServer);
   sntpConfigured = true;
 }
@@ -322,8 +328,7 @@ void update() {
   // Periodic sync: if device is in WiFi mode, connected and idle, run sync every interval
   if (ModeManager::isWifiOn() && WiFi.status() == WL_CONNECTED && state == SyncState::Idle) {
     if (now - lastPeriodicSync >= periodicSyncIntervalMs) {
-      Serial.printf("[WiFiSync] Periodic time sync requested (interval=%lu min)\n",
-                    periodicSyncIntervalMs / 60000UL);
+      LOG_I(TAG, "Periodic time sync requested interval_min=%lu", periodicSyncIntervalMs / 60000UL);
       lastPeriodicSync = now;
       requestTimeSync();
     }
@@ -372,7 +377,7 @@ void update() {
       state = SyncState::TimeSyncing;
       syncStartMillis = now;
       ensureSntpConfigured();
-      Serial.println("[WiFiSync] update: Time syncing started");
+      LOG_I(TAG, "Time syncing started");
       return;
     }
 
@@ -380,12 +385,12 @@ void update() {
   }
 
   if (state == SyncState::WifiConnecting) {
-    if (wifiConnectedByTask || WiFi.status() == WL_CONNECTED) {
+    if (wifiConnectedByTask.load() || WiFi.status() == WL_CONNECTED) {
       resetConnectionTracking();
       wifiConnectRequested = false;
       wifiFailureCount = 0;
       lastError = SyncError::None;
-      Serial.println("[WiFiSync] update: WiFi connected");
+      LOG_I(TAG, "WiFi connected");
 
       // If time sync is requested, go straight to time sync.
       if (timeSyncRequested) {
@@ -400,13 +405,12 @@ void update() {
       return;
     }
 
-    if (wifiFailedByTask) {
-      const uint16_t reason = wifiDisconnectReason;
+    if (wifiFailedByTask.load()) {
+      const uint16_t reason = wifiDisconnectReason.load();
       resetConnectionTracking();
       lastError = SyncError::Wifi;
       wifiFailureCount++;
-      Serial.printf("[WiFiSync] update: WiFi connect failed (reason=%u, failures=%u)\n",
-                    reason, wifiFailureCount);
+      LOG_W(TAG, "WiFi connect failed reason=%u failures=%u", reason, wifiFailureCount);
       scheduleBackoff(now, wifiFailureCount);
       return;
     }
@@ -414,7 +418,7 @@ void update() {
     if (wifiConnectStartMillis != 0 && now - wifiConnectStartMillis >= kWifiConnectTimeoutMs) {
       lastError = SyncError::Wifi;
       wifiFailureCount++;
-      Serial.printf("[WiFiSync] update: WiFi connect timeout (failures=%u)\n", wifiFailureCount);
+      LOG_W(TAG, "WiFi connect timeout failures=%u", wifiFailureCount);
       resetConnectionTracking();
       WiFi.disconnect(true);
       scheduleBackoff(now, wifiFailureCount);
@@ -441,8 +445,12 @@ void update() {
       timeSyncRequested = false;
       lastPeriodicSync = now;
 
-      Serial.printf("[WiFiSync] NTP synced: %02d:%02d:%02d (DST=%d)\n",
-                    timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, timeinfo.tm_isdst);
+      LOG_I(TAG,
+        "NTP synced time=%02d:%02d:%02d dst=%d",
+        timeinfo.tm_hour,
+        timeinfo.tm_min,
+        timeinfo.tm_sec,
+        timeinfo.tm_isdst);
 
       state = SyncState::Idle;
       if (onDoneCb) onDoneCb();
@@ -452,7 +460,7 @@ void update() {
     if (now - syncStartMillis >= kNtpTimeoutMs) {
       lastError = SyncError::Ntp;
       ntpFailureCount++;
-      Serial.printf("[WiFiSync] NTP sync timeout (failures=%u)\n", ntpFailureCount);
+      LOG_W(TAG, "NTP sync timeout failures=%u", ntpFailureCount);
       scheduleBackoff(now, ntpFailureCount);
       // Keep timeSyncRequested=true to retry later.
       timeSyncRequested = true;

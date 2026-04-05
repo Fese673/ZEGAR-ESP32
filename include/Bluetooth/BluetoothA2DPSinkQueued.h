@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "BluetoothA2DPSink.h"
 
 #if IS_VALID_PLATFORM
@@ -78,8 +80,10 @@ class BluetoothA2DPSinkQueued : public BluetoothA2DPSink {
   int i2s_stack_size = 2048;
   int i2s_ringbuffer_size = RINGBUF_HIGHEST_WATER_LEVEL;
   UBaseType_t i2s_task_priority = configMAX_PRIORITIES - 3;
-  volatile A2DPRingBufferMode ringbuffer_mode = RINGBUFFER_MODE_PROCESSING;
-  volatile bool is_starting = true;
+  std::atomic<A2DPRingBufferMode> ringbuffer_mode{RINGBUFFER_MODE_PROCESSING};
+  std::atomic_bool is_starting{true};
+  std::atomic_bool bt_audio_active{false};
+  std::atomic_bool needs_ringbuffer_reset{false};
   size_t i2s_write_size_upto = 240 * 6;
   int i2s_ticks = 20;
   int ringbuffer_prefetch_percent = RINGBUF_PREFETCH_PERCENT;
@@ -91,9 +95,14 @@ class BluetoothA2DPSinkQueued : public BluetoothA2DPSink {
 
   void set_i2s_active(bool active) override {
     BluetoothA2DPSink::set_i2s_active(active);
-    if (active) {
-      ringbuffer_mode = RINGBUFFER_MODE_PREFETCHING;
-      is_starting = true;
+    bt_audio_active.store(active);
+    ringbuffer_mode.store(RINGBUFFER_MODE_PREFETCHING);
+    is_starting.store(true);
+    if (!active) {
+      needs_ringbuffer_reset.store(true);
+    }
+    if (s_bt_i2s_task_handle != nullptr) {
+      xTaskNotifyGive(s_bt_i2s_task_handle);
     }
   }
 
@@ -101,6 +110,8 @@ class BluetoothA2DPSinkQueued : public BluetoothA2DPSink {
     int bytes = i2s_ringbuffer_size * ringbuffer_prefetch_percent / 100;
     return (bytes / 4 * 4);
   }
+
+  void drain_ringbuffer(void);
 };
 
 #endif // platform

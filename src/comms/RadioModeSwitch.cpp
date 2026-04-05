@@ -4,6 +4,8 @@
 #include <esp_attr.h>
 #include <esp_system.h>
 
+#include "AppLog.h"
+
 #include "NetworkOrchestrator.h"
 #include "StatsManager.h"
 
@@ -12,6 +14,8 @@ extern int minutes;
 extern int seconds;
 
 namespace {
+
+constexpr char TAG[] = "RADIO";
 
 constexpr uint32_t kRtcFlagWifi = 0x1234UL;
 constexpr uint32_t kRtcFlagBt = 0x5678UL;
@@ -83,11 +87,12 @@ void scheduleRestart() {
 void loadBootModeFromRtc() {
   const uint32_t rtcFlag = rtc_state.mode_flag;
 
-  Serial.printf("[RadioModeSwitch] RTC flag: 0x%04lX | time: %02u:%02u:%02u\n",
-                (unsigned long)rtcFlag,
-                (unsigned int)rtc_state.hours,
-                (unsigned int)rtc_state.minutes,
-                (unsigned int)rtc_state.seconds);
+    LOG_I(TAG,
+      "Rtc flag=0x%04lX time=%02u:%02u:%02u",
+      (unsigned long)rtcFlag,
+      (unsigned int)rtc_state.hours,
+      (unsigned int)rtc_state.minutes,
+      (unsigned int)rtc_state.seconds);
 
   s_boot_handoff_detected = isValidRtcModeFlag(rtcFlag);
   if (s_boot_handoff_detected) {
@@ -106,11 +111,12 @@ void requestModeSwitch(uint32_t modeFlag,
                        const char* logLabel) {
   storeRtcSnapshot(modeFlag);
 
-  Serial.printf("[RadioModeSwitch] %s scheduled at %02u:%02u:%02u, restarting...\n",
-                logLabel,
-                (unsigned int)rtc_state.hours,
-                (unsigned int)rtc_state.minutes,
-                (unsigned int)rtc_state.seconds);
+    LOG_I(TAG,
+      "Mode switch scheduled target=%s time=%02u:%02u:%02u restart=true",
+      logLabel,
+      (unsigned int)rtc_state.hours,
+      (unsigned int)rtc_state.minutes,
+      (unsigned int)rtc_state.seconds);
 
   statsManager.saveStats();
   NetworkOrchestrator::quiesceForModeSwitch(nextMode);
@@ -136,7 +142,7 @@ void begin() {
   s_restart_pending = false;
   s_restart_deadline_ms = 0;
 
-  Serial.println("[RadioModeSwitch] init complete");
+  LOG_I(TAG, "Init complete");
   printDiagnostics();
 }
 
@@ -166,7 +172,7 @@ void cancelModeSwitch() {
   s_restart_pending = false;
   s_restart_deadline_ms = 0;
 
-  Serial.println("[RadioModeSwitch] switch canceled");
+  LOG_I(TAG, "Switch canceled");
 }
 
 void update() {
@@ -183,10 +189,10 @@ void update() {
     s_start_mode_ready = true;
     if (s_next_mode == RADIO_NEXT_BT) {
       s_current_state = RADIO_STATE_BT;
-      Serial.println("[RadioModeSwitch] startup armed: Bluetooth");
+      LOG_I(TAG, "Startup armed target=Bluetooth");
     } else {
       s_current_state = RADIO_STATE_WIFI;
-      Serial.println("[RadioModeSwitch] startup armed: WiFi");
+      LOG_I(TAG, "Startup armed target=WiFi");
     }
   }
 }
@@ -197,9 +203,9 @@ void initializeStartMode() {
   }
 
   if (s_next_mode == RADIO_NEXT_BT) {
-    Serial.println("[RadioModeSwitch] startup mode: Bluetooth");
+    LOG_I(TAG, "Startup mode=Bluetooth");
   } else {
-    Serial.println("[RadioModeSwitch] startup mode: WiFi (default)");
+    LOG_I(TAG, "Startup mode=WiFi default=true");
     rtc_state.mode_flag = kRtcFlagNone;
     s_next_mode = RADIO_NEXT_NONE;
   }
@@ -224,30 +230,22 @@ void forceMode(RadioModeSwitchState state, RadioModeSwitchNextMode nextMode) {
     rtc_state.mode_flag = kRtcFlagNone;
   }
 
-  Serial.printf("[RadioModeSwitch] force mode: %s\n", stateToText(state));
+  LOG_I(TAG, "Force mode state=%s", stateToText(state));
 }
 
 void printDiagnostics() {
-  Serial.println("\n=== RadioModeSwitch Diagnostics ===");
-  Serial.print("RTC flag: 0x");
-  Serial.println((unsigned long)rtc_state.mode_flag, HEX);
-  Serial.printf("RTC time: %02u:%02u:%02u\n",
-                (unsigned int)rtc_state.hours,
-                (unsigned int)rtc_state.minutes,
-                (unsigned int)rtc_state.seconds);
-
-  Serial.print("Current state: ");
-  Serial.println(stateToText(s_current_state));
-
-  Serial.print("Next mode: ");
-  Serial.println(nextModeToText(s_next_mode));
-
-  Serial.print("Boot handoff: ");
-  Serial.println(s_boot_handoff_detected ? "yes" : "no");
-
-  Serial.print("Initialized: ");
-  Serial.println(s_initialized ? "yes" : "no");
-  Serial.println("===================================\n");
+  LOG_I(TAG, "Diagnostics begin");
+  LOG_I(TAG, "Rtc flag=0x%04lX", (unsigned long)rtc_state.mode_flag);
+  LOG_I(TAG,
+        "Rtc time=%02u:%02u:%02u",
+        (unsigned int)rtc_state.hours,
+        (unsigned int)rtc_state.minutes,
+        (unsigned int)rtc_state.seconds);
+  LOG_I(TAG, "Current state=%s", stateToText(s_current_state));
+  LOG_I(TAG, "Next mode=%s", nextModeToText(s_next_mode));
+  LOG_I(TAG, "Boot handoff=%s", s_boot_handoff_detected ? "yes" : "no");
+  LOG_I(TAG, "Initialized=%s", s_initialized ? "yes" : "no");
+  LOG_I(TAG, "Diagnostics end");
 }
 
 uint8_t getRTCHours() {

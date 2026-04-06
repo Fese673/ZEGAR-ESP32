@@ -2,9 +2,15 @@
 
 The map is organized by functional domains, not by implementation detail. It is intended to be easy to extend as the firmware grows.
 
-platformio.ini            # build config, lib_deps, build_flags
-README                    # high-level project overview for humans
-Project-Map.md            # this file
+Top-level files
+- platformio.ini            # build config, lib_deps, build_flags
+- README                    # high-level project overview for humans
+- Project-Map.md            # this file
+- TODO                      # task list and outstanding work
+- .gitignore                # git ignore rules
+- .vscode/                  # workspace editor settings
+  ├── settings.json
+  └── extensions.json
 
 docs/
 ├── index.md              # docs index and navigation guidance
@@ -17,45 +23,63 @@ docs/
 hardware/
 ├── overview.md           # hardware directory guide
 ├── datasheets/           # component datasheets and sensor references
-├── GPIO/                 # GPIO reference materials
+│   ├── plantower-pms5003-manual_v2-3.pdf
+│   ├── esp32-wroom-32d_datasheet.pdf
+│   └── dht11.pdf
+├── GPIO/                 # GPIO reference materials and pinouts
+│   ├── GPIO-PIN-ESP32.xlsx
+│   └── ESP32-DevBoard-Pinout.jpg
 └── kicad/                # KiCad project files and PCB design outputs
     ├── Datasheety/
-    ├── ESP32C3-CC1101/
-    ├── Główny projekt/
+    ├── ESP32C3-CC1101/   # CC1101/ESP32 board project
+    │   ├── ESP32C3-CC1101.kicad_pro
+    │   ├── ESP32C3-CC1101.kicad_pcb
+    │   └── Outputs/       # compiled outputs (BOM, fabrication files)
+    ├── Główny projekt/   # main PCB project and versions/backups
     └── ZEGAR ESP32-backups/
 
 include/
-├── headers.md           # public header guidance for cross-module integration
-├── AppLog.h             # shared logging API for application diagnostics
-├── config.h             # shared compile-time config aliases and board selection
-├── LiquidCrystal_I2C.h  # external LCD driver public header
-├── config/              # board pins, secrets, temperature config
+├── headers.md            # public header guidance for cross-module integration
+├── config/               # board pins, secrets, temperature config
 │   ├── BoardPins.h
+│   ├── a2dp_config.h     # shared compile-time config aliases and board selection
 │   ├── SecretsConfig.h
 │   └── TemperatureConfig.h
-├── core/                # core application interfaces
-│   ├── AlarmTypes.h
-│   ├── AppSettings.h
-│   ├── AppState.h
-│   ├── ClockAlarmService.h
-│   ├── ModeManager.h
-│   ├── RamTelemetry.h
-│   ├── RtcSyncService.h
-│   ├── RuntimeTelemetry.h
-│   ├── StatsManager.h
-│   └── STM32_Data.h
-├── display/             # display driver and screen interfaces
+├── core/                 # core application interfaces
+│   ├── app/
+│   │   ├── AppBoot.h
+│   │   ├── AppLoop.h
+│   │   ├── AppRuntime.h
+│   │   ├── AppSettings.h
+│   │   └── AppState.h
+│   ├── services/
+│   │   ├── BootIntroService.h
+│   │   ├── ClockAlarmService.h
+│   │   ├── ModeManager.h
+│   │   ├── RtcSyncService.h
+│   │   └── SystemResourcesService.h
+│   └── telemetry/
+│       ├── LoopBaselineTelemetry.h
+│       ├── RamTelemetry.h
+│       ├── RuntimeTelemetry.h
+│       ├── StatsManager.h
+│       └── STM32_Data.h
+├── display/              # display driver and screen interfaces
+│   ├── LiquidCrystal_I2C.h
 │   ├── BMP280Screen.h
 │   ├── ENS160AHT21Screen.h
 │   ├── LCDIcons.h
 │   └── LCDMirror.h
-├── drivers/             # low-level hardware driver headers
-│   ├── ErriezDS3231.h
+├── drivers/              # low-level hardware driver headers
 │   ├── I2C_bus_shared.h
+│   ├── ErriezDS3231.h
 │   ├── gpio/
+│   │   └── README.md
 │   ├── i2c/
+│   │   └── SharedBus.h
 │   └── spi/
-├── bluetooth/           # Bluetooth API headers
+│       └── README.md
+├── bluetooth/
 │   ├── A2DPVolumeControl.h
 │   ├── AudioBT.h
 │   ├── BluetoothA2DP.h
@@ -64,25 +88,28 @@ include/
 │   ├── BluetoothA2DPSink.h
 │   ├── BluetoothA2DPSinkQueued.h
 │   └── BluetoothA2DPSource.h
-├── comms/               # networking and telemetry composer headers
+├── comms/
 │   ├── MQTTSync.h
 │   ├── NetworkOrchestrator.h
 │   ├── RadioModeSwitch.h
 │   ├── TelemetryComposer.h
 │   └── WiFiSync.h
-├── audio/               # audio playback and melody definitions
+├── audio/
 │   ├── AlarmMelodies.h
-│   └── AlarmMelodyPrefs.h
-├── input/               # input controller headers
+│   ├── AlarmMelodyPrefs.h
+│   ├── AlarmMelodyPreview.h
+│   ├── AlarmRuntime.h
+│   └── AlarmTypes.h
+├── input/
 │   └── Encoder.h
-├── sensors/             # sensor abstraction headers
+├── sensors/
 │   ├── AHTxx.h
 │   ├── BMP280Sensor.h
 │   ├── ENS160AHT21Sensor.h
 │   ├── PMserial.h
 │   ├── PMS_Czujnik.h
 │   └── RTCService.h
-└── ui/                  # UI and menu headers
+└── ui/
     ├── HomeRuntime.h
     ├── UIState.h
     ├── UI_Controller.h
@@ -91,7 +118,7 @@ include/
 scripts/
 ├── generate_alarm_melodies.py    # build-time melody generation
 ├── mqtt_firebase_bridge.py       # bridge/utility script for MQTT diagnostics
-└── scan_project_map.py           # workspace inventory generator
+└── scan_project_map.py           # workspace inventory generator / checks
 
 src/
 ├── main.cpp              # application entrypoint, setup() + loop()
@@ -100,6 +127,8 @@ src/
 │   ├── AlarmMelodies.cpp
 │   ├── AlarmMelodies.generated.inc
 │   ├── AlarmMelodyPrefs.cpp
+│   ├── AlarmMelodyPreview.cpp
+│   ├── AlarmRuntime.cpp
 │   └── README.md
 ├── bluetooth/
 │   ├── AudioBT.cpp
@@ -112,20 +141,29 @@ src/
 │   ├── MQTTSync.cpp
 │   ├── NetworkOrchestrator.cpp
 │   ├── RadioModeSwitch.cpp
-│   ├── README.md
 │   ├── TelemetryComposer.cpp
-│   └── WiFiSync.cpp
+│   ├── WiFiSync.cpp
+│   └── README.md
 ├── core/
-│   ├── AppSettings.cpp
-│   ├── AppState.cpp
-│   ├── ClockAlarmService.cpp
-│   ├── ModeManager.cpp
-│   ├── RamTelemetry.cpp
-│   ├── README.md
-│   ├── RtcSyncService.cpp
-│   ├── RuntimeTelemetry.cpp
-│   ├── StatsManager.cpp
-│   └── STM32_Data.cpp
+│   ├── app/
+│   │   ├── AppBoot.cpp
+│   │   ├── AppLoop.cpp
+│   │   ├── AppRuntime.cpp
+│   │   ├── AppSettings.cpp
+│   │   └── AppState.cpp
+│   ├── services/
+│   │   ├── BootIntroService.cpp
+│   │   ├── ClockAlarmService.cpp
+│   │   ├── ModeManager.cpp
+│   │   ├── RtcSyncService.cpp
+│   │   └── SystemResourcesService.cpp
+│   ├── telemetry/
+│   │   ├── LoopBaselineTelemetry.cpp
+│   │   ├── RamTelemetry.cpp
+│   │   ├── RuntimeTelemetry.cpp
+│   │   ├── StatsManager.cpp
+│   │   └── STM32_Data.cpp
+│   └── README.md
 ├── display/
 │   ├── BMP280Screen.cpp
 │   ├── ENS160AHT21Screen.cpp
@@ -142,31 +180,34 @@ src/
 │   ├── AHTxx.cpp
 │   ├── BMP280Sensor.cpp
 │   ├── ENS160AHT21Sensor.cpp
-│   ├── PMS_Czujnik.cpp
+│   ├── ErriezDS3231.cpp
 │   ├── PMserial.cpp
+│   ├── PMS_Czujnik.cpp
 │   ├── README.md
 │   └── RTCService.cpp
-├── ui/
-│   ├── HomeRuntime.cpp
-│   ├── README.md
-│   ├── UI_Controller.cpp
-│   ├── UI_Draw.cpp
-│   └── UIState.cpp
-└── ZEGAR-ESP32.code-workspace
+└── ui/
+    ├── HomeRuntime.cpp
+    ├── README.md
+    ├── UIState.cpp
+    ├── UI_Controller.cpp
+    └── UI_Draw.cpp
 
 test/
-├── test.md               # test directory usage notes
-├── logi.txt              # collected serial/log artifacts
-├── verify_bt_no_wifi_mqtt.py  # diagnostic script for Bluetooth/MQTT behavior
+├── test.md
+├── logi.txt
+└── verify_bt_no_wifi_mqtt.py
 
 third_party/
-├── third_party.md        # vendor code and archival notes
-├── archive/              # archived third-party sources
-└── vendor/               # external vendor libraries or patches
+├── third_party.md
+├── archive/
+│   └── library_snapshot/
+└── vendor/
 
-lib/                      # optional PlatformIO library dependencies and local libs
+lib/
+└── README
 
-# Notes
-- The primary division is between portable interfaces (`include/`), implementation (`src/`), and docs/supporting artifacts (`docs/`, `hardware/`, `test/`).
-- New source modules should be added under `include/` and `src/` together, with one header in `include/` and matching implementation in `src/`.
-- Generated or temporary build artifacts should remain out of source control and under module-specific directories only when necessary.
+Notes:
+- This map lists public headers and primary source modules for quick navigation.
+- Use `scripts/scan_project_map.py` to verify `include/` and `src/` sections automatically.
+
+

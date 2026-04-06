@@ -5,12 +5,26 @@ Ten plik zawiera proste zadania opisujące oczywiste problemy w projekcie. Każd
 Do tego pliku należy dodawać zawsze todo jeśli sie tylko zauważy problem.
 
 
+## Ulepszenie architektury
+
+- [ ] Sprawdzić, czy obecne foldery domenowe nadal pokrywają odpowiedzialności bez nakładania się.
+- [x] Ocenić, czy `core` powinien pozostać miejscem dla boot/runtime/loop, czy wymaga dalszego podziału.  # zweryfikowane i wdrożono nową strukturę `core/app`, `core/services`, `core/telemetry`
+- [ ] Zweryfikować, czy `drivers` potrzebuje podfolderu dla RTC / czasu, czy lepiej zostawić jeden prosty katalog.
+- [ ] Utrzymać `comms` jako warstwę orkiestracji WiFi / MQTT / BT, bez dokładania kolejnego managera.
+- [ ] Ograniczyć `extern` w `UI_Draw.cpp` i `UI_Controller.cpp` tylko do rzeczywiście potrzebnych danych.
+- [ ] Zamienić rozproszony stan menu na jeden prosty model UI zamiast wielu globalnych indeksów.
+- [x] Uporządkować dokumenty `README`, `Project-Map.md` i raporty po ostatnim wydzieleniu core.
+- [ ] Ocenić, czy legacy source `src/ErriezDS3231.cpp` powinien zostać przy `src/` czy trafić do `src/drivers/`.
+- [ ] Utrzymać nowe pliki w lowercase i bez nowych top-level folderów, dopóki nie ma twardego powodu na zmianę.
+- [x] Weryfikować każdą większą zmianę architektury buildem `esp32dev`, żeby nie zbierać ukrytych regresji.
+
+
 ## Jak używać
 - `[ ]` oznacza problem, który jeszcze trzeba rozwiązać lub sprawdzić.
 - `[x]` oznacza problem rozwiązany lub zweryfikowany.
 - Możesz dodawać kolejne sekcje lub wpisy do tego pliku bez zmiany formatu.
 
-## Zadania
+## Przegląd kodu
 
 - [ ] Przejrzeć i ograniczyć globalne `extern` w `src/ui/UI_Draw.cpp` i `src/ui/UI_Controller.cpp`.
 - [ ] Zamienić rozproszony stan menu PMS5003/ustawień na jeden ustrukturyzowany model UI.

@@ -11,6 +11,7 @@
 #include "AlarmMelodyPrefs.h"
 #include "AlarmRuntime.h"
 #include "AlarmMelodyPreview.h"
+#include "SafeCracker.h"
 #include <Preferences.h>
 #include "HomeRuntime.h"
 #include "WiFiSync.h"
@@ -37,9 +38,14 @@ constexpr const char* const kMainMenuItems[] = {
     "PMS5003",
     "AHT21 + ENS160",
     "BMP280",
+  "GRY",
     "Ustawienia",
     "Wyjscie",
     "Tryb radia",
+};
+
+constexpr const char* const kGamesMenuItems[] = {
+  "Safe Cracker",
 };
 
 constexpr const char* const kPms5003MenuItems[] = {
@@ -108,6 +114,9 @@ int& bmp280MenuCount = ui.bmp280Menu.count;
 int& settingsMenuIndex = ui.settingsMenu.index;
 int& settingsMenuCount = ui.settingsMenu.count;
 const char* const*& settingsMenuItems = ui.settingsMenu.items;
+
+int& gamesMenuIndex = ui.gamesMenu.index;
+int& gamesMenuCount = ui.gamesMenu.count;
 
 int& settingsPmsMenuIndex = ui.settingsPmsMenu.index;
 int& settingsPmsMenuCount = ui.settingsPmsMenu.count;
@@ -477,6 +486,24 @@ static void requestPmsReadAndDraw() {
   markPmsDirtyAndDrawStats();
 }
 
+static bool handleGamesMenuClick() {
+  if (appState != STATE_GAMES_MENU) {
+    return false;
+  }
+
+  switch (gamesMenuIndex) {
+    case 0:
+      appState = STATE_SAFE_CRACKER;
+      SafeCracker::begin();
+      SafeCracker::draw();
+      break;
+    default:
+      break;
+  }
+
+  return true;
+}
+
 static bool handleMainMenuClick() {
   if (appState != STATE_MENU) {
     return false;
@@ -544,19 +571,25 @@ static bool handleMainMenuClick() {
       drawStatsSafe();
       return true;
 
-    case 9:  // Ustawienia
+    case 9:  // GRY
+      appState = STATE_GAMES_MENU;
+      gamesMenuIndex = 0;
+      drawMenuSafe();
+      return true;
+
+    case 10:  // Ustawienia
       appState        = STATE_SETTINGS;
       settingsMenuIndex = 0;
       drawStatsSafe();
       return true;
 
-    case 10:  // Wyjście
+    case 11:  // Wyjście
       appState = STATE_HOME;
       updateSevenSegSafe();
       drawHomeSafe();
       return true;
 
-    case 11:  // Radio Mode (WiFi/Bluetooth)
+    case 12:  // Radio Mode (WiFi/Bluetooth)
       if (RadioModeSwitch::getCurrentState() == RADIO_STATE_TRANSITIONING) {
         return true;
       }
@@ -921,6 +954,7 @@ void ui_begin(const UI_Callbacks& callbacks) {
   UIState::reset();
 
   bindMenu(ui.mainMenu, kMainMenuItems, arrayCount(kMainMenuItems));
+  bindMenu(ui.gamesMenu, kGamesMenuItems, arrayCount(kGamesMenuItems));
   bindMenu(ui.pmsMenu, kPms5003MenuItems, arrayCount(kPms5003MenuItems));
   bindMenu(ui.resourcesMenu, kResourcesMenuItems, arrayCount(kResourcesMenuItems));
   bindMenu(ui.settingsMenu, kSettingsMenuItems, arrayCount(kSettingsMenuItems));
@@ -1004,6 +1038,11 @@ void ui_handleEvent(EncoderEvent e) {
     switch (appState) {
       case STATE_MENU:
         rotateMenuIndexByDir(menuIndex, menuCount, dir);
+        drawMenuSafe();
+        break;
+
+      case STATE_GAMES_MENU:
+        rotateMenuIndexByDir(gamesMenuIndex, gamesMenuCount, dir);
         drawMenuSafe();
         break;
 
@@ -1132,6 +1171,10 @@ void ui_handleEvent(EncoderEvent e) {
         drawTimerSafe();
         break;
 
+      case STATE_SAFE_CRACKER:
+        SafeCracker::handleEvent(e);
+        break;
+
       default:
         break;
     }
@@ -1159,8 +1202,14 @@ void ui_handleEvent(EncoderEvent e) {
     if (handleEnsMenuClick()) return;
     if (handleBmp280MenuClick()) return;
     if (handleSettingsMenuClick()) return;
+    if (handleGamesMenuClick()) return;
 
     if (handleSettingsConfirmClick()) {
+      return;
+    }
+
+    if (appState == STATE_SAFE_CRACKER) {
+      SafeCracker::handleEvent(e);
       return;
     }
 
@@ -1461,6 +1510,17 @@ void ui_handleEvent(EncoderEvent e) {
 
       case STATE_BMP280:
         appState = STATE_MENU;
+        drawMenuSafe();
+        return;
+
+      case STATE_GAMES_MENU:
+        appState = STATE_MENU;
+        drawMenuSafe();
+        return;
+
+      case STATE_SAFE_CRACKER:
+        SafeCracker::stop();
+        appState = STATE_GAMES_MENU;
         drawMenuSafe();
         return;
 

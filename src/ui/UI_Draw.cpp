@@ -39,10 +39,6 @@ const AppSettings::State& appSettings = AppSettings::state();
 const int& statsMenuIndex = ui.statsMenu.index;
 const int& statsMenuCount = ui.statsMenu.count;
 
-const int& menuIndex = ui.mainMenu.index;
-const int& menuCount = ui.mainMenu.count;
-const char* const*& menuItems = ui.mainMenu.items;
-
 const int& resourcesMenuIndex = ui.resourcesMenu.index;
 const int& resourcesMenuCount = ui.resourcesMenu.count;
 const char* const*& resourcesMenuItems = ui.resourcesMenu.items;
@@ -772,16 +768,21 @@ void drawExtremeAlgorithmScreen() {
 // --- Ekran menu ---
 void drawMenu() {
   LCD_CLEAR();
-  const int first = (menuIndex / SCREEN_HEIGHT) * SCREEN_HEIGHT;
+  const UIState::MenuState* activeMenu = (appState == STATE_GAMES_MENU) ? &ui.gamesMenu : &ui.mainMenu;
+  const int activeIndex = activeMenu->index;
+  const int activeCount = activeMenu->count;
+  const char* const* activeItems = activeMenu->items;
+
+  const int first = (activeIndex / SCREEN_HEIGHT) * SCREEN_HEIGHT;
 
   for (int i = 0; i < SCREEN_HEIGHT; i++) {
     const int item = first + i;
-    if (item >= menuCount) break;
+    if (item >= activeCount) break;
 
     LCD_SET(0, i);
-    LCD_PRINT(item == menuIndex ? F("> ") : F("  "));
+    LCD_PRINT(item == activeIndex ? F("> ") : F("  "));
 
-    if (item == 11) {
+    if (appState == STATE_MENU && item == activeCount - 1) {
       RadioModeSwitchState mode = RadioModeSwitch::getCurrentState();
       switch (mode) {
         case RADIO_STATE_WIFI:
@@ -796,7 +797,7 @@ void drawMenu() {
           break;
       }
     } else {
-      LCD_PRINT(menuItems[item]);
+      LCD_PRINT(activeItems[item]);
     }
   }
   LCD_DUMP();

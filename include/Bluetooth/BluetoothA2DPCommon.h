@@ -37,7 +37,7 @@
 // Continue only for ESP32
 #if IS_VALID_PLATFORM
 
-#include "config.h"
+#include "a2dp_config.h"
 // If you use #include "I2S.h" the i2s functionality is hidden in a namespace
 // this hack prevents any error messages
 #ifdef _I2S_H_INCLUDED

@@ -14,6 +14,7 @@ struct MenuState {
 
 struct State {
   MenuState mainMenu;
+  MenuState gamesMenu;
   MenuState statsMenu;
   MenuState resourcesMenu;
   MenuState pmsMenu;

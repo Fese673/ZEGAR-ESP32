@@ -8,6 +8,8 @@ enum AppState {
   // --- Główne tryby ---
   STATE_HOME,
   STATE_MENU,
+  STATE_GAMES_MENU,      // Menu gier (lista z >)
+  STATE_SAFE_CRACKER,    // Gra Safe Cracker
   STATE_SET_TIME,
   STATE_TIMER,
   STATE_ALARM,

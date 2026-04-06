@@ -76,6 +76,11 @@ Telemetry is intentionally lightweight and designed for debug sessions without s
 - `docs/telemetry/index.md` describes the telemetry design, build flags, and interpretation of output
 
 ## Architecture overview
+### Core / bootstrap
+- `src/core/AppRuntime.cpp` owns the shared runtime values that used to live in `main.cpp`
+- `src/core/AppBoot.cpp` keeps the startup sequence in one place
+- `src/core/AppLoop.cpp` keeps periodic loop services in one place
+
 ### Bluetooth / audio
 - `src/bluetooth/AudioBT.cpp` configures the A2DP queued sink and I2S output
 - `BluetoothA2DPSinkQueued` provides a ringbuffer + dedicated I2S task for audio stability

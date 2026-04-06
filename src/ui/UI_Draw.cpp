@@ -143,13 +143,13 @@ void initSevenSeg() {
   pinMode(CLOCK_PIN, OUTPUT);
   pinMode(LATCH_PIN, OUTPUT);
 
-#ifdef ARDUINO_ARCH_ESP32
-  SPI.begin(BoardPins::kSevenSegClock, -1, BoardPins::kSevenSegData, -1);
-#endif
-
   digitalWrite(DATA_PIN, LOW);
   digitalWrite(CLOCK_PIN, LOW);
   digitalWrite(LATCH_PIN, LOW);
+
+#ifdef ARDUINO_ARCH_ESP32
+  SPI.begin(BoardPins::kSevenSegClock, -1, BoardPins::kSevenSegData, -1);
+#endif
 #ifdef ARDUINO_ARCH_ESP32
   vTaskDelay(pdMS_TO_TICKS(50));
 #else
@@ -313,21 +313,105 @@ static bool isAnyAlarmArmed() {
   return false;
 }
 
+
+  static void writeMenuRow(uint8_t row, const char* text) {
+    char line[SCREEN_WIDTH + 1];
+    memset(line, ' ', SCREEN_WIDTH);
+    line[SCREEN_WIDTH] = '\0';
+
+    if (text != nullptr) {
+      const size_t len = strlen(text);
+      const size_t copyLen = (len > SCREEN_WIDTH) ? SCREEN_WIDTH : len;
+      memcpy(line, text, copyLen);
+    }
+
+    LCD_SET(0, row);
+    LCD_PRINT(line);
+  }
+
+  static void buildGamesBanner(char* out) {
+    static const char kBannerText[] = "A teraz gramy w gierki ?";
+    static const char kGlitchChars[] = "#@$%*&!?+-/";
+
+    memset(out, ' ', SCREEN_WIDTH);
+    out[SCREEN_WIDTH] = '\0';
+
+    const unsigned long nowMs = millis();
+    const size_t bannerLen = sizeof(kBannerText) - 1;
+    const size_t cycleLen = bannerLen + SCREEN_WIDTH;
+    const size_t scroll = (nowMs / 140UL) % cycleLen;
+    const uint32_t glitchPhase = static_cast<uint32_t>(nowMs / 67UL);
+
+    for (uint8_t col = 0; col < SCREEN_WIDTH; ++col) {
+      const size_t src = scroll + col;
+      if (src >= bannerLen) {
+        continue;
+      }
+
+      char ch = kBannerText[src];
+      if (ch != ' ' && ((glitchPhase + static_cast<uint32_t>(col) * 3UL) % 11UL == 0UL)) {
+        ch = kGlitchChars[(glitchPhase + col) % (sizeof(kGlitchChars) - 1)];
+      }
+
+      out[col] = ch;
+    }
+  }
 // --- Ekran główny ---
 static const char* const polishMonths[] PROGMEM = {
     "STY", "LUT", "MAR", "KWI", "MAJ", "CZE",
-  "LIP", "SIE", "WRZ", "PAZ", "LIS", "GRU"
 };
 
-void drawHome() {
-  LCD_CLEAR();
-  LCDIcons::loadPalette(lcd, LCDIcons::Palette::Home);
+static void padRightTo20(char* line) {
+  const int len = (int)strlen(line);
+  if (len >= SCREEN_WIDTH) {
+    line[SCREEN_WIDTH] = '\0';
+    return;
+  }
+  for (int i = len; i < SCREEN_WIDTH; ++i) {
+    line[i] = ' ';
+  }
+  line[SCREEN_WIDTH] = '\0';
+}
 
-  // Header
-  char titleBuf[21];
-  snprintf(titleBuf, sizeof(titleBuf), "WEJHEROWO");
-  const bool ntpFresh = WiFiSync::hasNtpSynced() && (millis() - WiFiSync::getLastNtpSyncTime() <= 3600000UL);
-  const bool alarmArmed = isAnyAlarmArmed();
+struct HomeRenderCache {
+  bool valid = false;
+  LCDIcons::Palette palette = LCDIcons::Palette::Home;
+  bool ntpFresh = false;
+  bool alarmArmed = false;
+  bool showWifiIcon = false;
+  char row1[SCREEN_WIDTH + 1] = {};
+  char row2[SCREEN_WIDTH + 1] = {};
+  char row3[SCREEN_WIDTH + 1] = {};
+};
+
+HomeRenderCache s_homeRenderCache;
+
+static void cacheRow(char* target, const char* source) {
+  strncpy(target, source, SCREEN_WIDTH);
+  target[SCREEN_WIDTH] = '\0';
+}
+
+static bool rowMatchesCache(const char* cached, const char* current) {
+  return strcmp(cached, current) == 0;
+}
+
+static void renderHomeHeader(bool ntpFresh, bool alarmArmed, bool showWifiIcon, LCDIcons::Palette palette) {
+  const bool paletteChanged = !s_homeRenderCache.valid || s_homeRenderCache.palette != palette;
+  const bool headerChanged = !s_homeRenderCache.valid ||
+                             s_homeRenderCache.ntpFresh != ntpFresh ||
+                             s_homeRenderCache.alarmArmed != alarmArmed ||
+                             s_homeRenderCache.showWifiIcon != showWifiIcon;
+
+  if (paletteChanged) {
+    LCDIcons::loadPalette(lcd, palette);
+    s_homeRenderCache.palette = palette;
+  }
+
+  if (!headerChanged) {
+    return;
+  }
+
+  const char* title = "WEJHEROWO";
   uint8_t icons[2];
   uint8_t iconCount = 0;
   if (ntpFresh) {
@@ -337,45 +421,65 @@ void drawHome() {
     icons[iconCount++] = LCDIcons::BellSlot;
   }
 
-  const bool showWifiIcon = ModeManager::isBtOn();
-  LCDIcons::loadPalette(lcd, showWifiIcon ? LCDIcons::Palette::HomeWifi : LCDIcons::Palette::Home);
-
   if (iconCount > 0 || showWifiIcon) {
-    lcdPrintCenteredWithIconsAndSuffix(0, titleBuf, icons, iconCount, showWifiIcon ? LCDIcons::WifiSlot : -1);
+    lcdPrintCenteredWithIconsAndSuffix(0, title, icons, iconCount, showWifiIcon ? LCDIcons::WifiSlot : -1);
   } else {
-    lcdPrintCentered(0, titleBuf);
+    lcdPrintCentered(0, title);
   }
+
+  s_homeRenderCache.ntpFresh = ntpFresh;
+  s_homeRenderCache.alarmArmed = alarmArmed;
+  s_homeRenderCache.showWifiIcon = showWifiIcon;
+}
+
+static void renderHomeRowIfChanged(uint8_t row, const char* text, char* cache) {
+  if (s_homeRenderCache.valid && rowMatchesCache(cache, text)) {
+    return;
+  }
+
+  cacheRow(cache, text);
+  lcdPrintCentered(row, text);
+}
+
+void invalidateHomeRenderCache() {
+  s_homeRenderCache.valid = false;
+}
+
+void requestUiFullRedraw() {
+  invalidateHomeRenderCache();
+  LCDIcons::resetPaletteCache();
+  lcdFrame.forceFullRedrawOnce();
+}
+
+void drawHome() {
+  const bool ntpFresh = WiFiSync::hasNtpSynced() && (millis() - WiFiSync::getLastNtpSyncTime() <= 3600000UL);
+  const bool alarmArmed = isAnyAlarmArmed();
+  const bool showWifiIcon = ModeManager::isBtOn();
+  const LCDIcons::Palette palette = showWifiIcon ? LCDIcons::Palette::HomeWifi : LCDIcons::Palette::Home;
+
+  renderHomeHeader(ntpFresh, alarmArmed, showWifiIcon, palette);
 
   const bool clockSeeded = RtcSyncService::isClockSeeded();
   const bool systemTimeValid = RtcSyncService::isSystemTimeValid();
 
+  char row1[SCREEN_WIDTH + 1];
+  char row2[SCREEN_WIDTH + 1];
+  char row3[SCREEN_WIDTH + 1];
+
   if (systemTimeValid) {
-    // Date (centered)
     time_t now = time(nullptr);
     struct tm timeinfo;
     localtime_r(&now, &timeinfo);
-    char dateBuf[21];
-    snprintf(dateBuf, sizeof(dateBuf), "%02d %s %04d", timeinfo.tm_mday, polishMonths[timeinfo.tm_mon], 1900 + timeinfo.tm_year);
-    lcdPrintCentered(1, dateBuf);
-
-    // Row 2: centered time with symmetric arrows
-    char timeLine[21];
-    snprintf(timeLine, sizeof(timeLine), ">> %02d:%02d:%02d <<", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-    lcdPrintCentered(2, timeLine);
+    snprintf(row1, sizeof(row1), "%02d %s %04d", timeinfo.tm_mday, polishMonths[timeinfo.tm_mon], 1900 + timeinfo.tm_year);
+    snprintf(row2, sizeof(row2), ">> %02d:%02d:%02d <<", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   } else if (clockSeeded) {
-    lcdPrintCentered(1, F("BRAK DATY RTC/NTP"));
-
-    // Row 2: centered time with symmetric arrows
-    char timeLine[21];
-    snprintf(timeLine, sizeof(timeLine), ">> %02d:%02d:%02d <<", hours, minutes, seconds);
-    lcdPrintCentered(2, timeLine);
+    snprintf(row1, sizeof(row1), "%s", "BRAK DATY RTC/NTP");
+    snprintf(row2, sizeof(row2), ">> %02d:%02d:%02d <<", hours, minutes, seconds);
   } else {
-    lcdPrintCentered(1, F("OCZEKIWANIE NA CZAS"));
-    lcdPrintCentered(2, F(">> --:--:-- <<"));
+    snprintf(row1, sizeof(row1), "%s", "OCZEKIWANIE NA CZAS");
+    snprintf(row2, sizeof(row2), "%s", ">> --:--:-- <<");
   }
 
-  // Row 3: indoor summary from BMP280 temperature/pressure + AHT21 humidity.
-  char lineBuf[21];
   const bool bmpValid = BMP280Screen::runtimeData.hasSample;
   const bool ahtValid = ENS160AHT21Screen::runtimeData.hasClimateSample;
 
@@ -383,16 +487,21 @@ void drawHome() {
     const float tempC = BMP280Screen::runtimeData.temperatureC;
     const int humidity = (int)(ENS160AHT21Screen::runtimeData.humidityPct + 0.5f);
     const float pressure = BMP280Screen::runtimeData.pressureHpa;
-    snprintf(lineBuf, sizeof(lineBuf), "IN:%4.1fC %2d%% %4.0fhPa", tempC, humidity, pressure);
+    snprintf(row3, sizeof(row3), "IN:%4.1fC %2d%% %4.0fhPa", tempC, humidity, pressure);
   } else if (bmpValid) {
-    snprintf(lineBuf, sizeof(lineBuf), "IN:%4.1fC --%% %4.0fhPa", BMP280Screen::runtimeData.temperatureC, BMP280Screen::runtimeData.pressureHpa);
+    snprintf(row3, sizeof(row3), "IN:%4.1fC --%% %4.0fhPa", BMP280Screen::runtimeData.temperatureC, BMP280Screen::runtimeData.pressureHpa);
   } else if (ahtValid) {
     const int humidity = (int)(ENS160AHT21Screen::runtimeData.humidityPct + 0.5f);
-    snprintf(lineBuf, sizeof(lineBuf), "IN: --.-C %2d%% ----hPa", humidity);
+    snprintf(row3, sizeof(row3), "IN: --.-C %2d%% ----hPa", humidity);
   } else {
-    snprintf(lineBuf, sizeof(lineBuf), "IN: --.-C --%% ----hPa");
+    snprintf(row3, sizeof(row3), "IN: --.-C --%% ----hPa");
   }
-  lcdPrintCentered(3, lineBuf);
+
+  renderHomeRowIfChanged(1, row1, s_homeRenderCache.row1);
+  renderHomeRowIfChanged(2, row2, s_homeRenderCache.row2);
+  renderHomeRowIfChanged(3, row3, s_homeRenderCache.row3);
+
+  s_homeRenderCache.valid = true;
 
   LCD_DUMP();
 }
@@ -435,16 +544,6 @@ static const __FlashStringHelper* airHeaderFor(uint16_t pm25, uint16_t eco2, uin
 
   // Jeśli nie wpasowuje się idealnie w powyższe progi
   return F("POWIETRZE: ---");
-}
-
-static void padRightTo20(char* line) {
-  const int len = (int)strlen(line);
-  if (len >= SCREEN_WIDTH) {
-    line[SCREEN_WIDTH] = '\0';
-    return;
-  }
-  for (int i = len; i < SCREEN_WIDTH; ++i) line[i] = ' ';
-  line[SCREEN_WIDTH] = '\0';
 }
 
 void drawAirScreen() {
@@ -505,25 +604,87 @@ void drawAirScreen() {
     if (ensGasValid) {
       char right[21];
       snprintf(right, sizeof(right), "eCO2:%4u", (unsigned)eco2);
-      // Build left part (AQI) then right-justify the right part into remaining space so total is 20 cols.
       int left = snprintf(line, sizeof(line), " AQI:%-2u  |", (unsigned)aqi);
       int rem = SCREEN_WIDTH - left;
       int rlen = (int)strlen(right);
       int pad = rem - rlen;
       if (pad < 0) pad = 0;
-      // append pad spaces then right text
       int pos = left;
       for (int i = 0; i < pad && pos < SCREEN_WIDTH; ++i) line[pos++] = ' ';
       for (int i = 0; i < rlen && pos < SCREEN_WIDTH; ++i) line[pos++] = right[i];
       for (; pos < SCREEN_WIDTH; ++pos) line[pos] = ' ';
       line[SCREEN_WIDTH] = '\0';
     } else {
-      // No gas data — show placeholder but keep alignment
       snprintf(line, sizeof(line), " AQI:--  | eCO2:----");
       padRightTo20(line);
     }
     LCD_SET(0, 3);
     LCD_PRINT(line);
+  }
+
+  LCD_DUMP();
+}
+
+void drawMenu() {
+  const UIState::MenuState* activeMenu = (appState == STATE_GAMES_MENU) ? &ui.gamesMenu : &ui.mainMenu;
+  const int activeIndex = activeMenu->index;
+  const int activeCount = activeMenu->count;
+  const char* const* activeItems = activeMenu->items;
+  const bool gamesMenu = (appState == STATE_GAMES_MENU);
+  const int visibleRows = gamesMenu ? (SCREEN_HEIGHT - 1) : SCREEN_HEIGHT;
+  const int first = (visibleRows > 0) ? ((activeIndex / visibleRows) * visibleRows) : 0;
+
+  if (gamesMenu) {
+    char banner[SCREEN_WIDTH + 1];
+    buildGamesBanner(banner);
+    writeMenuRow(0, banner);
+  }
+
+  for (int row = 0; row < SCREEN_HEIGHT; ++row) {
+    if (gamesMenu && row == 0) {
+      continue;
+    }
+
+    const int item = gamesMenu ? (first + row - 1) : (first + row);
+    if (item < 0 || item >= activeCount || activeItems == nullptr) {
+      writeMenuRow(static_cast<uint8_t>(row), "");
+      continue;
+    }
+
+    char line[SCREEN_WIDTH + 1];
+    memset(line, ' ', SCREEN_WIDTH);
+    line[SCREEN_WIDTH] = '\0';
+
+    line[0] = (item == activeIndex) ? '>' : ' ';
+    line[1] = ' ';
+
+    if (appState == STATE_MENU && item == activeCount - 1) {
+      RadioModeSwitchState mode = RadioModeSwitch::getCurrentState();
+      const char* text = nullptr;
+      switch (mode) {
+        case RADIO_STATE_WIFI:
+          text = "Tryb: WIFI";
+          break;
+        case RADIO_STATE_BT:
+          text = "Tryb: BT";
+          break;
+        case RADIO_STATE_TRANSITIONING:
+        default:
+          text = "Tryb: TRANS";
+          break;
+      }
+
+      const size_t len = strlen(text);
+      const size_t copyLen = (len > (SCREEN_WIDTH - 2)) ? (SCREEN_WIDTH - 2) : len;
+      memcpy(line + 2, text, copyLen);
+    } else {
+      const char* text = activeItems[item];
+      const size_t len = strlen(text);
+      const size_t copyLen = (len > (SCREEN_WIDTH - 2)) ? (SCREEN_WIDTH - 2) : len;
+      memcpy(line + 2, text, copyLen);
+    }
+
+    writeMenuRow(static_cast<uint8_t>(row), line);
   }
 
   LCD_DUMP();
@@ -762,44 +923,6 @@ void drawExtremeAlgorithmScreen() {
     LCD_PRINT(line);
   }
 
-  LCD_DUMP();
-}
-
-// --- Ekran menu ---
-void drawMenu() {
-  LCD_CLEAR();
-  const UIState::MenuState* activeMenu = (appState == STATE_GAMES_MENU) ? &ui.gamesMenu : &ui.mainMenu;
-  const int activeIndex = activeMenu->index;
-  const int activeCount = activeMenu->count;
-  const char* const* activeItems = activeMenu->items;
-
-  const int first = (activeIndex / SCREEN_HEIGHT) * SCREEN_HEIGHT;
-
-  for (int i = 0; i < SCREEN_HEIGHT; i++) {
-    const int item = first + i;
-    if (item >= activeCount) break;
-
-    LCD_SET(0, i);
-    LCD_PRINT(item == activeIndex ? F("> ") : F("  "));
-
-    if (appState == STATE_MENU && item == activeCount - 1) {
-      RadioModeSwitchState mode = RadioModeSwitch::getCurrentState();
-      switch (mode) {
-        case RADIO_STATE_WIFI:
-          LCD_PRINT(F("Tryb: WIFI   "));
-          break;
-        case RADIO_STATE_BT:
-          LCD_PRINT(F("Tryb: BT     "));
-          break;
-        case RADIO_STATE_TRANSITIONING:
-        default:
-          LCD_PRINT(F("Tryb: TRANS    "));
-          break;
-      }
-    } else {
-      LCD_PRINT(activeItems[item]);
-    }
-  }
   LCD_DUMP();
 }
 

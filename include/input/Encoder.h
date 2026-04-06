@@ -25,3 +25,7 @@ void encoder_reinit_pins();
 // Aktualizuje enkodera i zwraca aktywne zdarzenie
 // Wywoływać w loop() - zwraca ENC_NONE jeśli nic się nie dzieje
 EncoderEvent encoder_update();
+
+// Zwraca czas trzymania przycisku enkodera w ms.
+// 0 oznacza, że przycisk nie jest aktualnie wciśnięty.
+unsigned long encoder_button_hold_ms();

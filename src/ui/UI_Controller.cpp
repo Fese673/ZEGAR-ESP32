@@ -12,6 +12,7 @@
 #include "AlarmRuntime.h"
 #include "AlarmMelodyPreview.h"
 #include "SafeCracker.h"
+#include "TANK-GAMES/TankGame.h"
 #include <Preferences.h>
 #include "HomeRuntime.h"
 #include "WiFiSync.h"
@@ -46,6 +47,7 @@ constexpr const char* const kMainMenuItems[] = {
 
 constexpr const char* const kGamesMenuItems[] = {
   "Safe Cracker",
+  "Tank Game",
 };
 
 constexpr const char* const kPms5003MenuItems[] = {
@@ -497,6 +499,13 @@ static bool handleGamesMenuClick() {
       SafeCracker::begin();
       SafeCracker::draw();
       break;
+
+    case 1:
+      appState = STATE_TANK_GAME;
+      TankGame::begin();
+      TankGame::draw();
+      break;
+
     default:
       break;
   }
@@ -1175,6 +1184,10 @@ void ui_handleEvent(EncoderEvent e) {
         SafeCracker::handleEvent(e);
         break;
 
+      case STATE_TANK_GAME:
+        TankGame::handleEvent(e);
+        break;
+
       default:
         break;
     }
@@ -1205,6 +1218,11 @@ void ui_handleEvent(EncoderEvent e) {
     if (handleGamesMenuClick()) return;
 
     if (handleSettingsConfirmClick()) {
+      return;
+    }
+
+    if (appState == STATE_TANK_GAME) {
+      TankGame::handleEvent(e);
       return;
     }
 
@@ -1386,6 +1404,11 @@ void ui_handleEvent(EncoderEvent e) {
   // 3. DŁUGIE KLIKNIĘCIE (back/escape)
   // ==========================================================================
   if (e == ENC_LONG) {
+    if (appState == STATE_TANK_GAME) {
+      TankGame::handleEvent(e);
+      return;
+    }
+
     // Pomocnicza funkcja do powrotu do menu statystyk
     auto returnToStatsMenu = [](int menuIdx) {
       appState       = STATE_STATS;

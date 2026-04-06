@@ -9,6 +9,7 @@ namespace LCDIcons {
 namespace {
 
 constexpr uint32_t kLcdI2cLockTimeoutMs = 1;
+constexpr uint8_t kInvalidPaletteId = 0xFF;
 
 constexpr uint8_t kGlyphs[][8] = {
   {0x00,0x0E,0x15,0x17,0x11,0x0E,0x00,0x00}, // Alarm
@@ -150,6 +151,8 @@ uint8_t s_loadedIconBySlot[kCgramSlots] = {
   0xFF, 0xFF, 0xFF, 0xFF,
 };
 
+uint8_t s_lastLoadedPaletteId = kInvalidPaletteId;
+
 bool loadIconUnlocked(LiquidCrystal_I2C& lcd, uint8_t slot, IconId iconId) {
   const uint8_t id = static_cast<uint8_t>(iconId);
   if (slot >= kCgramSlots || id >= glyphCount()) {
@@ -183,6 +186,13 @@ void loadIconsUnlocked(LiquidCrystal_I2C& lcd, const IconId* iconIds, uint8_t co
 
 }  // namespace
 
+void resetPaletteCache() {
+  s_lastLoadedPaletteId = kInvalidPaletteId;
+  for (uint8_t i = 0; i < kCgramSlots; ++i) {
+    s_loadedIconBySlot[i] = 0xFF;
+  }
+}
+
 void loadIcon(LiquidCrystal_I2C& lcd, uint8_t slot, IconId iconId) {
   if (!I2cShared::lock(kLcdI2cLockTimeoutMs)) {
     return;
@@ -206,6 +216,11 @@ void loadIcons(LiquidCrystal_I2C& lcd, const IconId* iconIds, uint8_t count, uin
 }
 
 void loadPalette(LiquidCrystal_I2C& lcd, Palette palette) {
+  const uint8_t paletteId = static_cast<uint8_t>(palette);
+  if (paletteId == s_lastLoadedPaletteId) {
+    return;
+  }
+
   const IconId* iconIds = nullptr;
   uint8_t count = 0;
 
@@ -241,6 +256,7 @@ void loadPalette(LiquidCrystal_I2C& lcd, Palette palette) {
   }
 
   loadIconsUnlocked(lcd, iconIds, count, 0);
+  s_lastLoadedPaletteId = paletteId;
   I2cShared::unlock();
 }
 

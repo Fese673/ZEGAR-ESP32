@@ -29,6 +29,7 @@
 #include "SystemResourcesService.h"
 #include "TelemetryComposer.h"
 #include "SafeCracker.h"
+#include "TANK-GAMES/TankGame.h"
 #include "UI_Controller.h"
 #include "UI_Draw.h"
 
@@ -37,6 +38,16 @@ namespace {
 
 static constexpr char TAG_MAIN[] = "MAIN";
 static constexpr char TAG_BT[] = "BT";
+
+void syncUiStateTransition() {
+  static AppState lastUiState = STATE_HOME;
+  if (appState == lastUiState) {
+    return;
+  }
+
+  requestUiFullRedraw();
+  lastUiState = appState;
+}
 
 void serviceBootDiagnostics(RuntimeContext& ctx, unsigned long nowMs) {
   if (!ctx.state.bootDiagReprinted && nowMs >= 5000UL) {
@@ -57,7 +68,7 @@ void serviceInputAndUiEvents() {
       break;
     }
 
-    if (evt == ENC_CLICK || evt == ENC_LONG) {
+    if (evt == ENC_CLICK || (evt == ENC_LONG && appState != STATE_TANK_GAME)) {
       statsManager.registerClick();
     } else if (evt == ENC_LEFT) {
       statsManager.registerStepLeft();
@@ -70,6 +81,7 @@ void serviceInputAndUiEvents() {
     }
   }
 
+  HomeRuntime::handleHomeEntryIfStateChanged(appState);
   statsManager.update();
 }
 
@@ -91,6 +103,7 @@ void serviceUiRefresh(unsigned long nowMs) {
   const uint32_t refreshStartUs = micros();
 
   static unsigned long lastStatsRedraw = 0;
+  static unsigned long lastGamesMenuRedraw = 0;
   if ((appState == STATE_STATS_RESOURCES_CPU || appState == STATE_STATS_RESOURCES_RAM ||
        appState == STATE_STATS_RESOURCES_FLASH || appState == STATE_STATS_RESOURCES ||
        appState == STATE_PMS5003_CF1 || appState == STATE_PMS5003_CF1_PM1 || appState == STATE_PMS5003_CF1_PM25 || appState == STATE_PMS5003_CF1_PM10 ||
@@ -119,6 +132,37 @@ void serviceUiRefresh(unsigned long nowMs) {
   if (appState == STATE_SAFE_CRACKER && SafeCracker::service(nowMs)) {
     SafeCracker::stop();
     appState = STATE_GAMES_MENU;
+    lastGamesMenuRedraw = nowMs;
+    drawMenu();
+  }
+
+  if (appState == STATE_TANK_GAME && TankGame::service(nowMs)) {
+    TankGame::stop();
+    appState = STATE_GAMES_MENU;
+    lastGamesMenuRedraw = nowMs;
+    drawMenu();
+  }
+
+  static bool menuMusicInitialized = false;
+  static AppState lastMenuState = STATE_HOME;
+  if (!menuMusicInitialized) {
+    lastMenuState = appState;
+    menuMusicInitialized = true;
+  } else if (appState != lastMenuState) {
+    if (lastMenuState == STATE_GAMES_MENU) {
+      ClockAlarmService::stopMenuMusic(BUZZER_PIN);
+    }
+
+    if (appState == STATE_GAMES_MENU) {
+      ClockAlarmService::startMenuMusic(BUZZER_PIN);
+      lastGamesMenuRedraw = nowMs;
+    }
+
+    lastMenuState = appState;
+  }
+
+  if (appState == STATE_GAMES_MENU && (nowMs - lastGamesMenuRedraw >= 120UL)) {
+    lastGamesMenuRedraw = nowMs;
     drawMenu();
   }
 
@@ -248,8 +292,11 @@ void runLoop() {
   const uint32_t loopStartUs = micros();
   LoopBaselineTelemetry::onLoopStart(nowMs, loopStartUs);
 
+  syncUiStateTransition();
+
   serviceBootDiagnostics(ctx, nowMs);
   serviceInputAndUiEvents();
+  syncUiStateTransition();
   serviceUiRefreshPreSensors();
   serviceSensors();
   serviceUiRefresh(nowMs);

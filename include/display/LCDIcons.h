@@ -93,6 +93,7 @@ enum class IconId : uint8_t {
 
 void loadIcon(LiquidCrystal_I2C& lcd, uint8_t slot, IconId iconId);
 void loadIcons(LiquidCrystal_I2C& lcd, const IconId* iconIds, uint8_t count, uint8_t firstSlot = 0);
+void resetPaletteCache();
 
 enum class Palette : uint8_t {
   Home,

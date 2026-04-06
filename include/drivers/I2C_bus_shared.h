@@ -11,8 +11,8 @@ struct I2cSharedStats {
 
 namespace I2cShared {
 
-bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz);
-bool initMaster(int sdaPin, int sclPin, uint32_t clockHz);
+bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz, bool wireAlreadyStarted = false);
+bool initMaster(int sdaPin, int sclPin, uint32_t clockHz, bool wireAlreadyStarted = false);
 
 void setDiagnosticsEnabled(bool enabled);
 bool diagnosticsEnabled();

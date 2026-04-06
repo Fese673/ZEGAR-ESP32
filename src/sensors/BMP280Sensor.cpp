@@ -31,6 +31,11 @@ constexpr unsigned long BMP280_REQUEST_INTERVAL_MS = 1000UL;
 constexpr unsigned long BMP280_CONVERSION_TIMEOUT_MS = 50UL;
 constexpr unsigned long BMP280_STALE_AFTER_MS = 5000UL;
 constexpr unsigned long BMP280_RETRY_COOLDOWN_MS = 5000UL;
+constexpr uint8_t BMP280_WARMUP_DISCARD_COUNT = 1;
+constexpr float BMP280_VALID_TEMP_MIN_C = -40.0f;
+constexpr float BMP280_VALID_TEMP_MAX_C = 85.0f;
+constexpr float BMP280_VALID_PRESSURE_MIN_HPA = 800.0f;
+constexpr float BMP280_VALID_PRESSURE_MAX_HPA = 1100.0f;
 constexpr unsigned long BMP280_I2C_TIMEOUT_MS = 10UL;
 constexpr uint8_t BMP280_I2C_RETRIES = 2;
 constexpr float BMP280_TEMP_THRESHOLD_C = 0.05f;
@@ -75,6 +80,10 @@ struct SensorRuntime {
   unsigned long lastRecoveryAttemptMs = 0;
   int32_t tFine = 0;
   CalibrationData calib = {};
+  uint8_t warmupDiscardRemaining = 0;
+  bool hasPendingStableSample = false;
+  float pendingTemperatureC = 0.0f;
+  float pendingPressureHpa = 0.0f;
   float lastTemperatureC = 0.0f;
   float lastPressureHpa = 0.0f;
   float lastAltitudeM = 0.0f;
@@ -225,6 +234,22 @@ bool significantChange(float oldValue, float newValue, float threshold) {
   return fabsf(oldValue - newValue) >= threshold;
 }
 
+bool isMeasurementValid(float temperatureC, float pressureHpa) {
+  if (!isfinite(temperatureC) || !isfinite(pressureHpa)) {
+    return false;
+  }
+
+  if (temperatureC < BMP280_VALID_TEMP_MIN_C || temperatureC > BMP280_VALID_TEMP_MAX_C) {
+    return false;
+  }
+
+  if (pressureHpa < BMP280_VALID_PRESSURE_MIN_HPA || pressureHpa > BMP280_VALID_PRESSURE_MAX_HPA) {
+    return false;
+  }
+
+  return true;
+}
+
 void publishMeasurement(float temperatureC, float pressureHpa, bool altitudeEnabled, bool forceDirty) {
   BMP280Screen::RuntimeData &runtime = BMP280Screen::runtimeData;
   const float altitudeM = altitudeEnabled ? computeAltitude(pressureHpa) : 0.0f;
@@ -326,6 +351,8 @@ bool initializeAtAddress(uint8_t address) {
   s_runtime.hasCalibration = true;
   s_runtime.driverState = DriverState::Idle;
   s_runtime.measurementPending = false;
+  s_runtime.warmupDiscardRemaining = BMP280_WARMUP_DISCARD_COUNT;
+  s_runtime.hasPendingStableSample = false;
   return true;
 }
 
@@ -501,7 +528,31 @@ void update() {
 
   s_runtime.driverState = DriverState::Idle;
   s_runtime.measurementPending = false;
-  publishMeasurement(temperatureC, pressureHpa, s_runtime.altitudeEnabled, false);
+  s_runtime.lastRequestMs = now;
+
+  if (!isMeasurementValid(temperatureC, pressureHpa)) {
+    s_runtime.hasPendingStableSample = false;
+    s_runtime.warmupDiscardRemaining = 0;
+    return;
+  }
+
+  if (s_runtime.warmupDiscardRemaining > 0) {
+    --s_runtime.warmupDiscardRemaining;
+    s_runtime.hasPendingStableSample = false;
+    return;
+  }
+
+  if (!s_runtime.hasPendingStableSample) {
+    s_runtime.pendingTemperatureC = temperatureC;
+    s_runtime.pendingPressureHpa = pressureHpa;
+    s_runtime.hasPendingStableSample = true;
+    return;
+  }
+
+  const float averagedTemperatureC = (s_runtime.pendingTemperatureC + temperatureC) * 0.5f;
+  const float averagedPressureHpa = (s_runtime.pendingPressureHpa + pressureHpa) * 0.5f;
+  s_runtime.hasPendingStableSample = false;
+  publishMeasurement(averagedTemperatureC, averagedPressureHpa, s_runtime.altitudeEnabled, false);
 }
 
 uint8_t menuItemCount() {

@@ -19,6 +19,8 @@ constexpr char TAG[] = "I2C";
 SemaphoreHandle_t gI2cMutex = nullptr;
 QueueHandle_t gI2cRequestQueue = nullptr;
 TaskHandle_t gI2cWorkerTask = nullptr;
+TaskHandle_t gI2cOwnerTask = nullptr;
+uint32_t gI2cOwnerDepth = 0;
 #endif
 
 bool gDiagEnabled = false;
@@ -287,6 +289,17 @@ bool ensureMutex()
 #endif
 }
 
+bool isHeldByCurrentTask()
+{
+#ifdef ARDUINO_ARCH_ESP32
+    return gI2cMutex != nullptr &&
+           gI2cOwnerDepth > 0 &&
+           gI2cOwnerTask == xTaskGetCurrentTaskHandle();
+#else
+    return false;
+#endif
+}
+
 bool applyClockAndVerify(TwoWire *wire, uint32_t clockHz, uint32_t *actualClockHz)
 {
     if (wire == nullptr) {
@@ -467,16 +480,23 @@ bool executeWriteRead(TwoWire *wire,
 
 namespace I2cShared {
 
-bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
+bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz, bool wireAlreadyStarted)
 {
     if (wire == nullptr) {
         return false;
     }
 
+#ifdef ARDUINO_ARCH_ESP32
+    gI2cOwnerTask = nullptr;
+    gI2cOwnerDepth = 0;
+#endif
+
     bool applied = false;
     uint32_t actualClockHz = 0;
 
-    wire->begin(sdaPin, sclPin);
+    if (!wireAlreadyStarted) {
+        wire->begin(sdaPin, sclPin);
+    }
     applied = applyClockAndVerify(wire, clockHz, &actualClockHz);
 
 #ifdef ARDUINO_ARCH_ESP32
@@ -486,7 +506,7 @@ bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
 #endif
 
 #ifdef ARDUINO_ARCH_ESP32
-    if (!applied) {
+    if (!applied && !wireAlreadyStarted) {
         LOG_W(TAG,
               "Clock mismatch after begin requested_hz=%lu actual_hz=%lu sda=%d scl=%d retrying=true",
               (unsigned long)clockHz,
@@ -502,6 +522,13 @@ bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
         vTaskDelay(settleTicks);
         wire->begin(sdaPin, sclPin);
         applied = applyClockAndVerify(wire, clockHz, &actualClockHz);
+    } else if (!applied) {
+        LOG_W(TAG,
+              "Clock mismatch on prestarted bus requested_hz=%lu actual_hz=%lu sda=%d scl=%d status=KEEPING_EXISTING_BUS",
+              (unsigned long)clockHz,
+              (unsigned long)actualClockHz,
+              sdaPin,
+              sclPin);
     }
 
         LOG_I(TAG,
@@ -516,9 +543,9 @@ bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz)
     return applied;
 }
 
-bool initMaster(int sdaPin, int sclPin, uint32_t clockHz)
+bool initMaster(int sdaPin, int sclPin, uint32_t clockHz, bool wireAlreadyStarted)
 {
-    return initMaster(&Wire, sdaPin, sclPin, clockHz);
+    return initMaster(&Wire, sdaPin, sclPin, clockHz, wireAlreadyStarted);
 }
 
 void setDiagnosticsEnabled(bool enabled)
@@ -566,6 +593,11 @@ bool lock(uint32_t timeoutMs)
         TELEMETRY_INC(i2c_timeouts);
         return false;
     }
+
+    if (gI2cOwnerDepth == 0) {
+        gI2cOwnerTask = xTaskGetCurrentTaskHandle();
+    }
+    ++gI2cOwnerDepth;
 #endif
     return true;
 }
@@ -574,6 +606,12 @@ void unlock()
 {
 #ifdef ARDUINO_ARCH_ESP32
     if (gI2cMutex != nullptr) {
+        if (gI2cOwnerDepth > 0) {
+            --gI2cOwnerDepth;
+            if (gI2cOwnerDepth == 0) {
+                gI2cOwnerTask = nullptr;
+            }
+        }
         xSemaphoreGiveRecursive(gI2cMutex);
     }
 #endif
@@ -584,7 +622,7 @@ bool probe(TwoWire *wire, uint8_t address7bit, uint32_t timeoutMs, uint8_t retri
     if (wire == nullptr) return false;
 
 #ifdef ARDUINO_ARCH_ESP32
-    if (gI2cWorkerTask != nullptr && gI2cRequestQueue != nullptr) {
+    if (gI2cWorkerTask != nullptr && gI2cRequestQueue != nullptr && !isHeldByCurrentTask()) {
         I2cRequest *request = acquireRequest();
         if (request != nullptr) {
             request->op = I2cRequest::Op::Probe;
@@ -616,7 +654,7 @@ bool write(TwoWire *wire,
     if (wire == nullptr || (len > 0 && data == nullptr)) return false;
 
 #ifdef ARDUINO_ARCH_ESP32
-    if (gI2cWorkerTask != nullptr && gI2cRequestQueue != nullptr) {
+    if (gI2cWorkerTask != nullptr && gI2cRequestQueue != nullptr && !isHeldByCurrentTask()) {
         I2cRequest *request = acquireRequest();
         if (request != nullptr) {
             request->op = I2cRequest::Op::Write;
@@ -649,7 +687,7 @@ bool writeRead(TwoWire *wire,
     if (readLen > 0 && readData == nullptr) return false;
 
 #ifdef ARDUINO_ARCH_ESP32
-    if (gI2cWorkerTask != nullptr && gI2cRequestQueue != nullptr) {
+    if (gI2cWorkerTask != nullptr && gI2cRequestQueue != nullptr && !isHeldByCurrentTask()) {
         I2cRequest *request = acquireRequest();
         if (request != nullptr) {
             request->op = I2cRequest::Op::WriteRead;

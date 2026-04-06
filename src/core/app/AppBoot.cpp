@@ -196,10 +196,15 @@ void initUiAndInput() {
 #endif
   lcdFrame.begin();
 
+  lcd.setExecTimes(37, 1520);
+  lcd.init();
+  LCDIcons::resetPaletteCache();
+
   const bool i2cClockApplied = I2cShared::initMaster(&Wire,
                                                      BoardPins::kI2cSda,
                                                      BoardPins::kI2cScl,
-                                                     BoardPins::kI2cClockHz);
+                                                     BoardPins::kI2cClockHz,
+                                                     true);
   LOG_I(TAG_I2C,
         "Clock readback requested_hz=%lu actual_hz=%lu status=%s",
         static_cast<unsigned long>(BoardPins::kI2cClockHz),
@@ -209,8 +214,6 @@ void initUiAndInput() {
 
   RtcSyncService::tryRestoreSystemTimeFromDs3231(hours, minutes, seconds, lastTick);
 
-  lcd.setExecTimes(37, 1520);
-  lcd.init();
   lcdBacklightSafe();
   lcdClearSafe();
   lcdFrame.syncToCurrentFrame();

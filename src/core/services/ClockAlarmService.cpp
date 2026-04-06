@@ -40,8 +40,40 @@ extern void updateSevenSeg();
 namespace ClockAlarmService {
 namespace {
 
-bool s_alarmMelodyDemoActive = false;
-unsigned long s_alarmMelodyDemoEndMs = 0;
+enum class BackgroundMelodyMode : uint8_t {
+  None,
+  Demo,
+  Menu,
+};
+
+BackgroundMelodyMode s_backgroundMelodyMode = BackgroundMelodyMode::None;
+unsigned long s_backgroundMelodyEndMs = 0;
+
+static int cantinaBandIndex() {
+  static const int index = AlarmMelodies::indexOfId("cantinaband");
+  return index;
+}
+
+static void stopBackgroundMelody(uint8_t buzzerPin) {
+  if (s_backgroundMelodyMode == BackgroundMelodyMode::None) {
+    return;
+  }
+
+  AlarmMelodies::stop(buzzerPin);
+  s_backgroundMelodyMode = BackgroundMelodyMode::None;
+  s_backgroundMelodyEndMs = 0;
+}
+
+static void startBackgroundMelody(uint8_t melodyIndex,
+                                  uint8_t buzzerPin,
+                                  BackgroundMelodyMode mode,
+                                  unsigned long autoStopMs) {
+  stopBackgroundMelody(buzzerPin);
+
+  AlarmMelodies::start(melodyIndex, buzzerPin);
+  s_backgroundMelodyMode = mode;
+  s_backgroundMelodyEndMs = autoStopMs;
+}
 
 }  // namespace
 
@@ -133,19 +165,38 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
 }
 
 void startAlarmMelodyDemo(uint8_t melodyIndex, uint8_t buzzerPin) {
-  AlarmMelodies::start(melodyIndex, buzzerPin);
-  s_alarmMelodyDemoActive = true;
-  s_alarmMelodyDemoEndMs = millis() + 10000UL;
+  startBackgroundMelody(melodyIndex,
+                         buzzerPin,
+                         BackgroundMelodyMode::Demo,
+                         millis() + 10000UL);
 }
 
 void stopAlarmMelodyDemo(uint8_t buzzerPin) {
-  if (!s_alarmMelodyDemoActive) {
+  if (s_backgroundMelodyMode != BackgroundMelodyMode::Demo) {
     return;
   }
 
-  AlarmMelodies::stop(buzzerPin);
-  s_alarmMelodyDemoActive = false;
-  s_alarmMelodyDemoEndMs = 0;
+  stopBackgroundMelody(buzzerPin);
+}
+
+void startMenuMusic(uint8_t buzzerPin) {
+  const int index = cantinaBandIndex();
+  if (index < 0) {
+    return;
+  }
+
+  startBackgroundMelody(static_cast<uint8_t>(index),
+                        buzzerPin,
+                        BackgroundMelodyMode::Menu,
+                        0);
+}
+
+void stopMenuMusic(uint8_t buzzerPin) {
+  if (s_backgroundMelodyMode != BackgroundMelodyMode::Menu) {
+    return;
+  }
+
+  stopBackgroundMelody(buzzerPin);
 }
 
 void serviceAlarmPlayback(uint8_t buzzerPin, unsigned long alarmDurationMs) {
@@ -159,13 +210,14 @@ void serviceAlarmPlayback(uint8_t buzzerPin, unsigned long alarmDurationMs) {
     return;
   }
 
-  if (!s_alarmMelodyDemoActive) {
+  if (s_backgroundMelodyMode == BackgroundMelodyMode::None) {
     return;
   }
 
   AlarmMelodies::service(buzzerPin, millis());
-  if ((long)(millis() - s_alarmMelodyDemoEndMs) >= 0) {
-    stopAlarmMelodyDemo(buzzerPin);
+  if (s_backgroundMelodyMode == BackgroundMelodyMode::Demo &&
+      (long)(millis() - s_backgroundMelodyEndMs) >= 0) {
+    stopBackgroundMelody(buzzerPin);
   }
 }
 

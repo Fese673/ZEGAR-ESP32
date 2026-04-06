@@ -346,3 +346,15 @@ EncoderEvent encoder_update() {
 
   return encoderSampleOnce();
 }
+
+unsigned long encoder_button_hold_ms() {
+  if (s_swPin == 255) {
+    return 0;
+  }
+
+  if (digitalRead(s_swPin) != LOW || s_buttonPressStart == 0) {
+    return 0;
+  }
+
+  return millis() - s_buttonPressStart;
+}

@@ -1,5 +1,7 @@
 #include "HomeRuntime.h"
 
+#include "UI_Draw.h"
+
 namespace HomeRuntime {
 namespace {
 
@@ -116,6 +118,7 @@ void setProfile(uint8_t profileIndex) {
 
   s_homeUiProfile = static_cast<HomeUiProfile>(profileIndex);
   syncHomeOverlayToProfile(true);
+  requestUiFullRedraw();
 }
 
 uint8_t getProfile() {
@@ -206,6 +209,7 @@ void serviceOverlayRotation(AppState appState) {
     s_homeOverlayIndex = 0;
     s_homeOverlay = homeOverlayPageFor(s_homeUiProfile, s_homeOverlayIndex);
     s_homeOverlaySinceMs = nowMs;
+    requestUiFullRedraw();
     markHomeDirty();
     return;
   }
@@ -214,6 +218,7 @@ void serviceOverlayRotation(AppState appState) {
     s_homeOverlaySinceMs = nowMs;
     s_homeOverlayIndex = (uint8_t)((s_homeOverlayIndex + 1) % overlayCount);
     s_homeOverlay = homeOverlayPageFor(s_homeUiProfile, s_homeOverlayIndex);
+    requestUiFullRedraw();
     markHomeDirty();
   }
 }
@@ -227,6 +232,7 @@ void handleHomeEntryIfStateChanged(AppState appState) {
   if (appState == STATE_HOME) {
     s_homeOverlayIndex = 0;
     syncHomeOverlayToProfile(true);
+    requestUiFullRedraw();
   }
 
   lastState = appState;

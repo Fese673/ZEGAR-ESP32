@@ -87,6 +87,7 @@ void printVal(int v, bool sel);
 void drawStats();  // UI statystyk
 void drawSystemResources(); // UI zasobów systemu (RAM/FLASH)
 void drawModeTransition(); // UI przejścia trybu (WiFi ↔ Bluetooth)
+void drawBtMusicControl(); // UI sterowania muzyką BT
 
 
 

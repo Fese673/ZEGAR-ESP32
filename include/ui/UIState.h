@@ -26,11 +26,14 @@ struct State {
   MenuState settingsMenu;
   MenuState settingsPmsMenu;
   MenuState settingsBuzzerMenu;
+  MenuState settingsBackgroundMusicMenu;
   MenuState settingsMqttMenu;
   MenuState settingsAlarmMelodyMenu;
   MenuState settingsBootIntroMenu;
   MenuState settingsUiScreenMenu;
   MenuState alarmsMenu;
+
+  MenuState btMusicMenu;
 
   int selectedAlarmIndex = 0;
   int alarmEditCursor = 0;

@@ -6,6 +6,7 @@ namespace AppSettings {
 
 struct State {
   bool buzzerEnabled = true;
+  bool backgroundMusicEnabled = true;
   bool mqttEnabled = true;
   bool showEpicIntro = true;
   int homeOverlaySeconds = 7;

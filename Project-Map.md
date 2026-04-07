@@ -9,8 +9,16 @@ Top-level files
 - TODO                      # task list and outstanding work
 - .gitignore                # git ignore rules
 - .vscode/                  # workspace editor settings
-  ├── settings.json
-  └── extensions.json
+    ├── settings.json
+    ├── extensions.json
+    ├── c_cpp_properties.json
+    └── launch.json
+- .pio/                     # PlatformIO build environment and cache
+- .venv/                    # local Python virtual environment
+- __pycache__/              # temporary Python bytecode cache
+- .analysis/                # local analysis/tooling artifacts
+- .git/                     # Git repository metadata
+- _baseline/                # baseline/reference artifacts
 
 docs/
 ├── index.md              # docs index and navigation guidance

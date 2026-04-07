@@ -6,6 +6,7 @@
 
 #include "AppLog.h"
 #include "AppRuntime.h"
+#include "AppSettings.h"
 #include "AppState.h"
 #include "AudioBT.h"
 #include "BMP280Sensor.h"
@@ -30,6 +31,7 @@
 #include "TelemetryComposer.h"
 #include "SafeCracker.h"
 #include "TANK-GAMES/TankGame.h"
+#include "UIState.h"
 #include "UI_Controller.h"
 #include "UI_Draw.h"
 
@@ -47,6 +49,28 @@ void syncUiStateTransition() {
 
   requestUiFullRedraw();
   lastUiState = appState;
+}
+
+void serviceBtMusicHoldGesture() {
+  static bool btMusicHoldLatched = false;
+
+  if (appState != STATE_HOME || !ModeManager::isBtOn()) {
+    btMusicHoldLatched = false;
+    return;
+  }
+
+  const unsigned long holdMs = encoder_button_hold_ms();
+  if (holdMs == 0) {
+    btMusicHoldLatched = false;
+    return;
+  }
+
+  if (!btMusicHoldLatched && holdMs >= 4000UL) {
+    btMusicHoldLatched = true;
+    UIState::mutableState().btMusicMenu.index = 0;
+    appState = STATE_BT_MUSIC_CONTROL;
+    drawBtMusicControl();
+  }
 }
 
 void serviceBootDiagnostics(RuntimeContext& ctx, unsigned long nowMs) {
@@ -68,7 +92,9 @@ void serviceInputAndUiEvents() {
       break;
     }
 
-    if (evt == ENC_CLICK || (evt == ENC_LONG && appState != STATE_TANK_GAME)) {
+    const bool suppressHomeBtLongPress = (evt == ENC_LONG && appState == STATE_HOME && ModeManager::isBtOn());
+
+    if (evt == ENC_CLICK || (evt == ENC_LONG && appState != STATE_TANK_GAME && !suppressHomeBtLongPress)) {
       statsManager.registerClick();
     } else if (evt == ENC_LEFT) {
       statsManager.registerStepLeft();
@@ -76,12 +102,13 @@ void serviceInputAndUiEvents() {
       statsManager.registerStepRight();
     }
 
-    if (!RadioModeSwitch::isInitializing()) {
+    if (!RadioModeSwitch::isInitializing() && !suppressHomeBtLongPress) {
       ui_handleEvent(evt);
     }
   }
 
   HomeRuntime::handleHomeEntryIfStateChanged(appState);
+  serviceBtMusicHoldGesture();
   statsManager.update();
 }
 
@@ -143,27 +170,29 @@ void serviceUiRefresh(unsigned long nowMs) {
     drawMenu();
   }
 
-  static bool menuMusicInitialized = false;
-  static AppState lastMenuState = STATE_HOME;
-  if (!menuMusicInitialized) {
-    lastMenuState = appState;
-    menuMusicInitialized = true;
-  } else if (appState != lastMenuState) {
-    if (lastMenuState == STATE_GAMES_MENU) {
+  static bool menuMusicPlaying = false;
+  const bool backgroundMusicEnabled = AppSettings::state().backgroundMusicEnabled;
+  const bool shouldPlayMenuMusic = (appState == STATE_GAMES_MENU && backgroundMusicEnabled);
+  if (shouldPlayMenuMusic != menuMusicPlaying) {
+    if (shouldPlayMenuMusic) {
+      ClockAlarmService::startMenuMusic(BUZZER_PIN);
+      lastGamesMenuRedraw = nowMs;
+    } else {
       ClockAlarmService::stopMenuMusic(BUZZER_PIN);
     }
 
-    if (appState == STATE_GAMES_MENU) {
-      ClockAlarmService::startMenuMusic(BUZZER_PIN);
-      lastGamesMenuRedraw = nowMs;
-    }
-
-    lastMenuState = appState;
+    menuMusicPlaying = shouldPlayMenuMusic;
   }
 
   if (appState == STATE_GAMES_MENU && (nowMs - lastGamesMenuRedraw >= 120UL)) {
     lastGamesMenuRedraw = nowMs;
     drawMenu();
+  }
+
+  static unsigned long lastBtMusicControlRedraw = 0;
+  if (appState == STATE_BT_MUSIC_CONTROL && (nowMs - lastBtMusicControlRedraw >= 1000UL)) {
+    lastBtMusicControlRedraw = nowMs;
+    drawBtMusicControl();
   }
 
   LoopBaselineTelemetry::recordUiRefreshUs(static_cast<uint32_t>(micros() - refreshStartUs));

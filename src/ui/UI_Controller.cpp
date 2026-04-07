@@ -3,6 +3,7 @@
 #include "AppSettings.h"
 #include "AppState.h"
 #include "ModeManager.h"
+#include "AudioBT.h"
 #include "RadioModeSwitch.h"
 #include "PMS_Czujnik.h"
 #include "ENS160AHT21Screen.h"
@@ -66,6 +67,7 @@ constexpr const char* const kResourcesMenuItems[] = {
 constexpr const char* const kSettingsMenuItems[] = {
     "PMS5003",
     "Buzzer",
+  "Muzyka w tle",
     "MQTT",
     "Alarmy",
     "Synchronizacja",
@@ -73,6 +75,15 @@ constexpr const char* const kSettingsMenuItems[] = {
     "UI ekran",
     "Boot Intro",
     "Wyjscie",
+};
+
+constexpr const char* const kBtMusicItems[] = {
+  "PLAY",
+  "PAUSE",
+  "PREV",
+  "NEXT",
+  "VOL-",
+  "VOL+",
 };
 
 constexpr const char* const kToggleItems[] = {"Wlaczony", "Wylaczony"};
@@ -128,6 +139,10 @@ int& settingsBuzzerMenuIndex = ui.settingsBuzzerMenu.index;
 int& settingsBuzzerMenuCount = ui.settingsBuzzerMenu.count;
 const char* const*& settingsBuzzerMenuItems = ui.settingsBuzzerMenu.items;
 
+int& settingsBgMusicMenuIndex = ui.settingsBackgroundMusicMenu.index;
+int& settingsBgMusicMenuCount = ui.settingsBackgroundMusicMenu.count;
+const char* const*& settingsBgMusicMenuItems = ui.settingsBackgroundMusicMenu.items;
+
 int& settingsMqttMenuIndex = ui.settingsMqttMenu.index;
 int& settingsMqttMenuCount = ui.settingsMqttMenu.count;
 const char* const*& settingsMqttMenuItems = ui.settingsMqttMenu.items;
@@ -145,6 +160,10 @@ const char* const*& settingsUiScreenItems = ui.settingsUiScreenMenu.items;
 
 int& alarmsMenuIndex = ui.alarmsMenu.index;
 int& alarmsMenuCount = ui.alarmsMenu.count;
+
+int& btMusicMenuIndex = ui.btMusicMenu.index;
+int& btMusicMenuCount = ui.btMusicMenu.count;
+const char* const*& btMusicMenuItems = ui.btMusicMenu.items;
 
 int& selectedAlarmIndex = ui.selectedAlarmIndex;
 int& alarmEditCursor = ui.alarmEditCursor;
@@ -166,6 +185,7 @@ int& s_prevSettingsUiScreenIndex = ui.prevSettingsUiScreenIndex;
 AppState& s_alarmReturnState = ui.alarmReturnState;
 
 bool& buzzerEnabled = settings.buzzerEnabled;
+bool& backgroundMusicEnabled = settings.backgroundMusicEnabled;
 bool& mqttEnabled = settings.mqttEnabled;
 bool& showEpicIntro = settings.showEpicIntro;
 int& settingsRotationSec = settings.homeOverlaySeconds;
@@ -192,6 +212,14 @@ static bool getBuzzerEnabled() {
 
 static void setBuzzerEnabled(bool enabled) {
   buzzerEnabled = enabled;
+}
+
+static bool getBackgroundMusicEnabled() {
+  return backgroundMusicEnabled;
+}
+
+static void setBackgroundMusicEnabled(bool enabled) {
+  backgroundMusicEnabled = enabled;
 }
 
 static bool getMqttEnabled() {
@@ -314,6 +342,7 @@ static ToggleSettingBinding* findToggleSettingBinding(AppState state) {
   static ToggleSettingBinding kBindings[] = {
       {STATE_SETTINGS_PMS5003, &settingsPmsMenuIndex, &settingsPmsMenuCount, &setPms5003Enabled, nullptr},
       {STATE_SETTINGS_BUZZER, &settingsBuzzerMenuIndex, &settingsBuzzerMenuCount, &setBuzzerEnabled, nullptr},
+      {STATE_SETTINGS_BACKGROUND_MUSIC, &settingsBgMusicMenuIndex, &settingsBgMusicMenuCount, &setBackgroundMusicEnabled, "menuMusic"},
       {STATE_SETTINGS_MQTT, &settingsMqttMenuIndex, &settingsMqttMenuCount, &setMqttEnabled, "mqttEnabled"},
       {STATE_SETTINGS_BOOT_INTRO, &settingsEpicIntroIndex, &settingsEpicIntroMenuCount, &setShowEpicIntro, "epicIntro"},
   };
@@ -438,6 +467,38 @@ static bool handleSettingsConfirmClick() {
   }
 
   return false;
+}
+
+static bool handleBtMusicControlClick() {
+  if (appState != STATE_BT_MUSIC_CONTROL) {
+    return false;
+  }
+
+  switch (btMusicMenuIndex) {
+    case 0:
+      audioBT_play();
+      break;
+    case 1:
+      audioBT_pause();
+      break;
+    case 2:
+      audioBT_previous();
+      break;
+    case 3:
+      audioBT_next();
+      break;
+    case 4:
+      audioBT_volumeDown();
+      break;
+    case 5:
+      audioBT_volumeUp();
+      break;
+    default:
+      break;
+  }
+
+  drawBtMusicControl();
+  return true;
 }
 
 static bool handleSettingsLongCancel() {
@@ -643,10 +704,6 @@ static bool handleStatsMenuClick() {
       appState = STATE_STATS_RESOURCES_MENU;
       resourcesMenuIndex = 0;
       drawStatsSafe();
-      break;
-    case 5:
-      appState = STATE_MENU;
-      drawMenuSafe();
       break;
     default:
       break;
@@ -912,40 +969,45 @@ static bool handleSettingsMenuClick() {
       drawStatsSafe();
       break;
     case 2:
+      appState = STATE_SETTINGS_BACKGROUND_MUSIC;
+      settingsBgMusicMenuIndex = getBackgroundMusicEnabled() ? 0 : 1;
+      drawStatsSafe();
+      break;
+    case 3:
       appState = STATE_SETTINGS_MQTT;
       settingsMqttMenuIndex = getMqttEnabled() ? 0 : 1;
       drawStatsSafe();
       break;
-    case 3:
+    case 4:
       settingsAlarmMelodyPersistedIndex = clampMenuIndexSafe(AlarmMelodyPrefs::loadIndex(s_prefs), AlarmMelodies::kCount);
       settingsAlarmMelodyIndex = settingsAlarmMelodyPersistedIndex;
       s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
       appState = STATE_SETTINGS_ALARM_MELODY;
       drawStatsSafe();
       break;
-    case 4:
+    case 5:
       appState = STATE_SETTINGS_SYNC;
       s_prevSettingsSyncMin = settingsSyncMinutes;
       drawStatsSafe();
       break;
-    case 5:
+    case 6:
       appState = STATE_SETTINGS_ROTATION;
       s_prevSettingsRotationSec = settingsRotationSec;
       drawStatsSafe();
       break;
-    case 6:
+    case 7:
       settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenIndex, settingsUiScreenCount);
       appState = STATE_SETTINGS_UI_SCREEN;
       settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenPersistedIndex, settingsUiScreenCount);
       s_prevSettingsUiScreenIndex = settingsUiScreenIndex;
       drawStatsSafe();
       break;
-    case 7:
+    case 8:
       settingsEpicIntroIndex = getShowEpicIntro() ? 0 : 1;
       appState = STATE_SETTINGS_BOOT_INTRO;
       drawStatsSafe();
       break;
-    case 8:
+    case 9:
       appState = STATE_MENU;
       drawMenuSafe();
       break;
@@ -969,11 +1031,13 @@ void ui_begin(const UI_Callbacks& callbacks) {
   bindMenu(ui.settingsMenu, kSettingsMenuItems, arrayCount(kSettingsMenuItems));
   bindMenu(ui.settingsPmsMenu, kToggleItems, arrayCount(kToggleItems));
   bindMenu(ui.settingsBuzzerMenu, kToggleItems, arrayCount(kToggleItems));
+  bindMenu(ui.settingsBackgroundMusicMenu, kToggleItems, arrayCount(kToggleItems));
   bindMenu(ui.settingsMqttMenu, kToggleItems, arrayCount(kToggleItems));
   bindMenu(ui.settingsBootIntroMenu, kIntroItems, arrayCount(kIntroItems));
   bindMenu(ui.settingsUiScreenMenu, kUiScreenItems, arrayCount(kUiScreenItems));
+  bindMenu(ui.btMusicMenu, kBtMusicItems, arrayCount(kBtMusicItems));
 
-  ui.statsMenu.count = 6;
+  ui.statsMenu.count = 5;
   ui.statsMenu.index = 0;
   ui.statsMenu.items = nullptr;
 
@@ -1050,6 +1114,11 @@ void ui_handleEvent(EncoderEvent e) {
         drawMenuSafe();
         break;
 
+      case STATE_BT_MUSIC_CONTROL:
+        rotateMenuIndexByDir(btMusicMenuIndex, btMusicMenuCount, dir);
+        drawBtMusicControl();
+        break;
+
       case STATE_GAMES_MENU:
         rotateMenuIndexByDir(gamesMenuIndex, gamesMenuCount, dir);
         drawMenuSafe();
@@ -1107,6 +1176,7 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_SETTINGS_BOOT_INTRO:
       case STATE_SETTINGS_SYNC:
       case STATE_SETTINGS_PMS5003:
+      case STATE_SETTINGS_BACKGROUND_MUSIC:
       case STATE_SETTINGS_MQTT:
       case STATE_SETTINGS_BUZZER:
       case STATE_SETTINGS_ALARM_MELODY:
@@ -1204,6 +1274,8 @@ void ui_handleEvent(EncoderEvent e) {
       drawMenuSafe();
       return;
     }
+
+    if (handleBtMusicControlClick()) return;
 
     if (handleMainMenuClick()) return;
     if (handleStatsMenuClick()) return;
@@ -1547,6 +1619,12 @@ void ui_handleEvent(EncoderEvent e) {
         drawMenuSafe();
         return;
 
+      case STATE_BT_MUSIC_CONTROL:
+        appState = STATE_HOME;
+        updateSevenSegSafe();
+        drawHomeSafe();
+        return;
+
       case STATE_TIMER:
         // Long press in TIMER: stop timer (if running) and return to main menu
         timerRunning = false;
@@ -1593,6 +1671,14 @@ void ui_handleEvent(EncoderEvent e) {
         appState = STATE_HOME;
         updateSevenSegSafe();
         drawHomeSafe();
+        return;
+
+      case STATE_HOME:
+        if (ModeManager::isBtOn()) {
+          return;
+        }
+        appState = STATE_MENU;
+        drawMenuSafe();
         return;
 
       case STATE_STOPER:

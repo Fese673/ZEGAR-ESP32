@@ -181,6 +181,8 @@ void initPersistenceAndConfig(RuntimeContext& ctx) {
   s_prefs.begin("zegar", false);
   AlarmRuntime::reset();
   loadNetworkConfigFromPreferences();
+  appSettings.backgroundMusicEnabled = s_prefs.getBool("menuMusic", true);
+  uiState.settingsBackgroundMusicMenu.index = appSettings.backgroundMusicEnabled ? 0 : 1;
   appSettings.showEpicIntro = s_prefs.getBool("epicIntro", true);
   uiState.settingsBootIntroMenu.index = appSettings.showEpicIntro ? 0 : 1;
 

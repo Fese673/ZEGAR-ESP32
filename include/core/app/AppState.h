@@ -9,6 +9,7 @@ enum AppState {
   STATE_HOME,
   STATE_MENU,
   STATE_GAMES_MENU,      // Menu gier (lista z >)
+  STATE_BT_MUSIC_CONTROL, // Ekran sterowania muzyką BT
   STATE_SAFE_CRACKER,    // Gra Safe Cracker
   STATE_TANK_GAME,       // Gra Tank Game
   STATE_SET_TIME,
@@ -57,6 +58,7 @@ enum AppState {
   STATE_SETTINGS,              // Menu Ustawień (lista z >)
   STATE_SETTINGS_PMS5003,      // Ustawienia PMS5003 (włącz/wyłącz)
   STATE_SETTINGS_BUZZER,       // Ustawienia Buzera (włącz/wyłącz)
+  STATE_SETTINGS_BACKGROUND_MUSIC, // Muzyka w tle (włącz/wyłącz)
   STATE_SETTINGS_MQTT,         // Ustawienia MQTT (włącz/wyłącz)
   STATE_SETTINGS_ALARM_MELODY, // Wybór melodii alarmu
   STATE_SETTINGS_BOOT_INTRO,   // Ustawienia intro startowego (włącz/wyłącz)

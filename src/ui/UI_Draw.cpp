@@ -5,6 +5,7 @@
 #include "RtcSyncService.h"
 #include "WiFiSync.h"
 #include "ModeManager.h"
+#include "AudioBT.h"
 #include "RadioModeSwitch.h"
 #include <LiquidCrystal_I2C.h>
 #include <Esp.h>
@@ -66,6 +67,9 @@ const char* const*& settingsPmsMenuItems = ui.settingsPmsMenu.items;
 const int& settingsBuzzerMenuIndex = ui.settingsBuzzerMenu.index;
 const int& settingsBuzzerMenuCount = ui.settingsBuzzerMenu.count;
 const char* const*& settingsBuzzerMenuItems = ui.settingsBuzzerMenu.items;
+const int& settingsBgMusicMenuIndex = ui.settingsBackgroundMusicMenu.index;
+const int& settingsBgMusicMenuCount = ui.settingsBackgroundMusicMenu.count;
+const char* const*& settingsBgMusicMenuItems = ui.settingsBackgroundMusicMenu.items;
 const int& settingsMqttMenuIndex = ui.settingsMqttMenu.index;
 const int& settingsMqttMenuCount = ui.settingsMqttMenu.count;
 const char* const*& settingsMqttMenuItems = ui.settingsMqttMenu.items;
@@ -80,6 +84,9 @@ const char* const*& settingsUiScreenItems = ui.settingsUiScreenMenu.items;
 const int& alarmsMenuIndex = ui.alarmsMenu.index;
 const int& selectedAlarmIndex = ui.selectedAlarmIndex;
 const int& alarmEditCursor = ui.alarmEditCursor;
+const int& btMusicMenuIndex = ui.btMusicMenu.index;
+const int& btMusicMenuCount = ui.btMusicMenu.count;
+const char* const*& btMusicMenuItems = ui.btMusicMenu.items;
 
 bool& pmsScreenDirty = ui.pmsScreenDirty;
 
@@ -1225,7 +1232,7 @@ typedef void (*PagedMenuRowRenderer)(int itemIndex);
 
 static void drawLongBackFooter() {
   LCD_SET(0, 3);
-  LCD_PRINT(F("Dlugi -> Powrot"));
+  clearRow(3);
 }
 
 static void drawPagedMenu3Rows(uint8_t headerCol,
@@ -1595,9 +1602,6 @@ void drawStats() {
         case 4:
           LCD_PRINT(F("Zasoby"));
           break;
-        case 5:
-          LCD_PRINT(F("Wyjscie"));
-          break;
       }
     }
     break;
@@ -1633,7 +1637,7 @@ void drawStats() {
       LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   case STATE_ENS160_AHT21_GAS_TVOC: {
@@ -1659,7 +1663,7 @@ void drawStats() {
       LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   case STATE_ENS160_AHT21_GAS_ECO2: {
@@ -1685,7 +1689,7 @@ void drawStats() {
       LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   case STATE_ENS160_AHT21_CLIMATE_TEMP: {
@@ -1709,7 +1713,7 @@ void drawStats() {
       LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   case STATE_ENS160_AHT21_CLIMATE_HUM: {
@@ -1733,7 +1737,7 @@ void drawStats() {
       LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   case STATE_ENS160_AHT21_STATUS: {
@@ -1779,7 +1783,7 @@ void drawStats() {
       LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   case STATE_BMP280_PRESSURE: {
@@ -1803,7 +1807,7 @@ void drawStats() {
       LCD_PRINT(F("Min:-- Max:--"));
     }
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   case STATE_BMP280_STATUS: {
@@ -1861,6 +1865,11 @@ void drawStats() {
   // === 1e. USTAWIENIA BUZERA (włącz/wyłącz) ===
   case STATE_SETTINGS_BUZZER: {
     drawCenteredSettingFormatted(F("BUZZER"), "STAN:   <  %s  >", settingsBuzzerMenuIndex == 0 ? "ON" : "OFF");
+    break;
+  }
+  // === 1f1. USTAWIENIA MUZYKI W TLE (włącz/wyłącz) ===
+  case STATE_SETTINGS_BACKGROUND_MUSIC: {
+    drawCenteredSettingFormatted(F("MUZYKA W TLE"), "STAN:   <  %s  >", settingsBgMusicMenuIndex == 0 ? "ON" : "OFF");
     break;
   }
   // === 1f. USTAWIENIA MQTT (włącz/wyłącz) ===
@@ -1990,7 +1999,7 @@ void drawStats() {
     LCD_PRINT(F("Razem: "));
     LCD_PRINT(stats.totalClicks);
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   // === 3. WIDOK KROKÓW ===
@@ -2007,12 +2016,12 @@ void drawStats() {
     LCD_PRINT(F("Suma: "));
     LCD_PRINT(statsManager.getTotalSteps());
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   // === 4. WIDOK TEMPERATURY MIN/MAX ===
   case STATE_STATS_TEMP: {
-    const EnvStats e = statsManager.getEnvStats();
+    const BMP280Screen::RuntimeData& data = BMP280Screen::runtimeData;
     char buf[10];
 
     LCD_SET(0, 0);
@@ -2020,21 +2029,33 @@ void drawStats() {
 
     LCD_SET(0, 1);
     LCD_PRINT(F("MIN: "));
-    dtostrf(e.tempMin, 4, 1, buf);
-    LCD_PRINT(buf);
+    if (s_bmp280UiHistory.hasTemp) {
+      dtostrf(s_bmp280UiHistory.minTemp, 4, 1, buf);
+      LCD_PRINT(buf);
+    } else {
+      LCD_PRINT(F("--.--"));
+    }
 
     LCD_SET(0, 2);
     LCD_PRINT(F("MAX: "));
-    dtostrf(e.tempMax, 4, 1, buf);
-    LCD_PRINT(buf);
+    if (s_bmp280UiHistory.hasTemp) {
+      dtostrf(s_bmp280UiHistory.maxTemp, 4, 1, buf);
+      LCD_PRINT(buf);
+    } else {
+      LCD_PRINT(F("--.--"));
+    }
 
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    LCD_PRINT(F("Biezaca: "));
+    printBmp280FloatOrDash(data.hasTemperature, data.temperatureC, 5, 1);
+    if (data.hasTemperature) {
+      LCD_PRINT(F(" C"));
+    }
     break;
   }
   // === 5. WIDOK WILGOTNOŚCI MIN/MAX ===
   case STATE_STATS_HUM: {
-    const EnvStats e = statsManager.getEnvStats();
+    const ENS160AHT21Screen::RuntimeData& data = ENS160AHT21Screen::runtimeData;
     char buf[10];
 
     LCD_SET(0, 0);
@@ -2042,16 +2063,28 @@ void drawStats() {
 
     LCD_SET(0, 1);
     LCD_PRINT(F("MIN: "));
-    dtostrf(e.humMin, 4, 1, buf);
-    LCD_PRINT(buf);
+    if (s_ens160UiHistory.hasHum) {
+      dtostrf(s_ens160UiHistory.minHum, 4, 1, buf);
+      LCD_PRINT(buf);
+    } else {
+      LCD_PRINT(F("--.--"));
+    }
 
     LCD_SET(0, 2);
     LCD_PRINT(F("MAX: "));
-    dtostrf(e.humMax, 4, 1, buf);
-    LCD_PRINT(buf);
+    if (s_ens160UiHistory.hasHum) {
+      dtostrf(s_ens160UiHistory.maxHum, 4, 1, buf);
+      LCD_PRINT(buf);
+    } else {
+      LCD_PRINT(F("--.--"));
+    }
 
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    LCD_PRINT(F("Biezaca: "));
+    printEnsFloatOrDash(data.hasClimateSample, data.humidityPct, 3, 0);
+    if (data.hasClimateSample) {
+      LCD_PRINT(F(" %"));
+    }
     break;
   }
   // === 5b. MENU ZASOBÓW SYSTEMU ===
@@ -2125,7 +2158,7 @@ void drawStats() {
     LCD_PRINT(flashFreeBytes);
 
     LCD_SET(0, 3);
-    LCD_PRINT(F("Dlugi -> Powrot"));
+    drawLongBackFooter();
     break;
   }
   // === 6. WIDOK PMS5003 TRYB FABRYCZNY CF=1 (BIEŻĄCE DANE Z WYBOREM) ===
@@ -2296,6 +2329,44 @@ void drawModeTransition() {
     clearRow(3);
 
     LCD_DUMP();
+}
+
+void drawBtMusicControl() {
+  LCD_CLEAR();
+
+  const bool btActive = ModeManager::isBtOn();
+  const bool btConnected = audioBT_isConnected();
+  char header[21];
+  if (btActive) {
+    snprintf(header, sizeof(header), "BT MUZYKA  %s", btConnected ? "TEL:ON" : "TEL:WAIT");
+  } else {
+    snprintf(header, sizeof(header), "BT MUZYKA  BT:OFF");
+  }
+  lcdPrintCentered(0, header);
+
+  auto renderPair = [&](uint8_t row, int leftIndex, int rightIndex) {
+    char line[21];
+    const char* leftLabel = (leftIndex < btMusicMenuCount && btMusicMenuItems != nullptr) ? btMusicMenuItems[leftIndex] : "";
+    const char* rightLabel = (rightIndex < btMusicMenuCount && btMusicMenuItems != nullptr) ? btMusicMenuItems[rightIndex] : "";
+    const bool leftSelected = btMusicMenuIndex == leftIndex;
+    const bool rightSelected = btMusicMenuIndex == rightIndex;
+    snprintf(line,
+             sizeof(line),
+             "%c%-7.7s %c%-7.7s",
+             leftSelected ? '>' : ' ',
+             leftLabel,
+             rightSelected ? '>' : ' ',
+             rightLabel);
+    padRightTo20(line);
+    LCD_SET(0, row);
+    LCD_PRINT(line);
+  };
+
+  renderPair(1, 0, 1);
+  renderPair(2, 2, 3);
+  renderPair(3, 4, 5);
+
+  LCD_DUMP();
 }
 
 static void updateBmp280UiHistory(const BMP280Screen::RuntimeData& data) {

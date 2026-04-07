@@ -208,3 +208,57 @@ bool audioBT_isConnected() {
 TaskHandle_t audioBT_getI2STaskHandle() {
     return s_audioInitialized ? s_a2dp.getI2STaskHandle() : nullptr;
 }
+
+bool audioBT_play() {
+    if (!s_audioInitialized) {
+        return false;
+    }
+
+    s_a2dp.play();
+    return true;
+}
+
+bool audioBT_pause() {
+    if (!s_audioInitialized) {
+        return false;
+    }
+
+    s_a2dp.pause();
+    return true;
+}
+
+bool audioBT_previous() {
+    if (!s_audioInitialized) {
+        return false;
+    }
+
+    s_a2dp.previous();
+    return true;
+}
+
+bool audioBT_next() {
+    if (!s_audioInitialized) {
+        return false;
+    }
+
+    s_a2dp.next();
+    return true;
+}
+
+bool audioBT_volumeDown() {
+    if (!s_audioInitialized) {
+        return false;
+    }
+
+    s_a2dp.volume_down();
+    return true;
+}
+
+bool audioBT_volumeUp() {
+    if (!s_audioInitialized) {
+        return false;
+    }
+
+    s_a2dp.volume_up();
+    return true;
+}

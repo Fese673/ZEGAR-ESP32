@@ -206,7 +206,11 @@ void serviceAlarmPlayback(uint8_t buzzerPin, unsigned long alarmDurationMs) {
       AlarmMelodies::stop(buzzerPin);
       alarmRinging = false;
       alarmEnabled = false;
+      updateSevenSeg();
+      return;
     }
+
+    updateSevenSeg();
     return;
   }
 

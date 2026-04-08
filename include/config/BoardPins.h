@@ -30,7 +30,12 @@ constexpr uint8_t kBuzzer = 19;
 constexpr uint8_t kStm32UartRx = 16;
 constexpr uint8_t kStm32UartTx = 17;
 
-// --- Bluetooth I2S (AudioBT) ---
+// --- Bluetooth I2S -> zewnetrzny DAC / wzmacniacz audio ---
+// Mapowanie jest opisane z perspektywy ESP32:
+// GPIO33 (BCLK) -> DAC BCK / SCK
+// GPIO32 (WS / LRCK) -> DAC LCK / LRCK
+// GPIO14 (DOUT) -> DAC DIN
+// W tej konfiguracji nie uzywamy osobnego MCLK.
 constexpr uint8_t kBtI2sBclk = 33;
 constexpr uint8_t kBtI2sWs = 32;
 constexpr uint8_t kBtI2sData = 14;

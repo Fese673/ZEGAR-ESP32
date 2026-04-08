@@ -1,4 +1,5 @@
 #include "Encoder.h"
+#include "TaskConfig.h"
 
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
@@ -7,6 +8,7 @@
 #endif
 
 #include "AppLog.h"
+#include "RuntimeTelemetry.h"
 
 namespace {
 
@@ -68,7 +70,9 @@ static void encoderTask(void* /*param*/) {
   for (;;) {
     const EncoderEvent evt = encoderSampleOnce();
     if (evt != ENC_NONE && s_eventQueue != nullptr) {
-      (void)xQueueSendToBack(s_eventQueue, &evt, 0);
+      if (xQueueSendToBack(s_eventQueue, &evt, 0) != pdTRUE) {
+        TELEMETRY_INC(encoder_drops);
+      }
     }
     vTaskDelay(pdMS_TO_TICKS(ENCODER_TASK_DELAY_MS));
   }
@@ -117,11 +121,11 @@ void encoder_begin(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
     xTaskCreatePinnedToCore(
         encoderTask,
         "encoderTask",
-        2048,
+        TaskConfig::EncoderTask::kStackBytes,
         nullptr,
-        2,
+        TaskConfig::EncoderTask::kPriority,
         &s_encoderTaskHandle,
-        1);
+        TaskConfig::EncoderTask::kCore);
   }
 #endif
 }
@@ -148,6 +152,12 @@ void encoder_reinit_pins() {
     LOG_I(TAG, "Pins restored mode=INPUT_PULLUP");
   }
 }
+
+#ifdef ARDUINO_ARCH_ESP32
+TaskHandle_t encoder_getTaskHandle() {
+  return s_encoderTaskHandle;
+}
+#endif
 
 // ============================================================================
 // OBSŁUGA ROTACJI - GRAY-CODE STATE MACHINE

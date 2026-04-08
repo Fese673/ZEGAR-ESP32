@@ -3,6 +3,7 @@
 #include <atomic>
 
 #include "BluetoothA2DPSink.h"
+#include "TaskConfig.h"
 
 #if IS_VALID_PLATFORM
 
@@ -77,9 +78,9 @@ class BluetoothA2DPSinkQueued : public BluetoothA2DPSink {
   RingbufHandle_t s_ringbuf_i2s = nullptr;    /* handle of ringbuffer for I2S */
   SemaphoreHandle_t s_i2s_write_semaphore = nullptr;
   // I2S task
-  int i2s_stack_size = 2048;
+  int i2s_stack_size = TaskConfig::BtI2STask::kStackBytes;
   int i2s_ringbuffer_size = RINGBUF_HIGHEST_WATER_LEVEL;
-  UBaseType_t i2s_task_priority = configMAX_PRIORITIES - 3;
+  UBaseType_t i2s_task_priority = TaskConfig::BtI2STask::kPriority;
   std::atomic<A2DPRingBufferMode> ringbuffer_mode{RINGBUFFER_MODE_PROCESSING};
   std::atomic_bool is_starting{true};
   std::atomic_bool bt_audio_active{false};

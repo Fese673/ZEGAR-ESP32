@@ -1,5 +1,6 @@
 #include "BluetoothA2DPOutput.h"
 
+#include "BoardPins.h"
 #include "RuntimeTelemetry.h"
 
 #if IS_VALID_PLATFORM
@@ -33,14 +34,14 @@ BluetoothA2DPOutputLegacy::BluetoothA2DPOutputLegacy() {
   };
 
   // setup default pins
-  // NAPRAWA: piny zmienione z 26/25/22 na 33/32/14 aby uniknąć konfliktu z Encoder (GPIO 25/26)
+  // ESP32 -> DAC: BCLK/BCK/SCK, WS/LCK/LRCK, DOUT/DIN
   pin_config = {
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
       .mck_io_num = 0,
 #endif
-      .bck_io_num = 33,
-      .ws_io_num = 32,
-      .data_out_num = 14,
+      .bck_io_num = BoardPins::kBtI2sBclk,
+      .ws_io_num = BoardPins::kBtI2sWs,
+      .data_out_num = BoardPins::kBtI2sData,
       .data_in_num = I2S_PIN_NO_CHANGE};
 
 #endif

@@ -16,6 +16,7 @@
 #endif
 #include <math.h>
 #include "TelemetryComposer.h"
+#include "RuntimeTelemetry.h"
 #include "PMS_Czujnik.h"
 #include "ENS160AHT21Screen.h"
 #include "BMP280Sensor.h"
@@ -113,6 +114,36 @@ uint8_t swapNibbles(uint8_t v) {
   return (v << 4) | (v >> 4);
 }
 
+static void writeSevenSegFrame(uint8_t first, uint8_t second, uint8_t third);
+
+static uint8_t packTwoDigits(int value) {
+  return (uint8_t)(((value / 10) << 4) | (value % 10));
+}
+
+static void commitSevenSegFrame(uint8_t first, uint8_t second, uint8_t third) {
+  digitalWrite(LATCH_PIN, LOW);
+  writeSevenSegFrame(first, second, third);
+  digitalWrite(LATCH_PIN, HIGH);
+}
+
+static void updateSevenSegDebugSTM32() {
+  if (!s_sevenSegReady || !stm32Connected) {
+    return;
+  }
+
+  const int spo2 = constrain(displayedSPO2, 0, 99);
+  const int bpm = constrain(displayedBPM, 0, 255);
+
+  const uint8_t left = packTwoDigits(spo2);
+  const int bpmHundreds = bpm / 100;
+  const int bpmTens = (bpm / 10) % 10;
+  const int bpmOnes = bpm % 10;
+  const uint8_t middle = packTwoDigits((1 * 10) + bpmHundreds);
+  const uint8_t right = packTwoDigits(bpmTens * 10 + bpmOnes);
+
+  commitSevenSegFrame(swapNibbles(right), swapNibbles(middle), swapNibbles(left));
+}
+
 #ifndef ARDUINO_ARCH_ESP32
 static void pulse(int pin) {
   digitalWrite(pin, HIGH);
@@ -167,9 +198,7 @@ void initSevenSeg() {
 #endif
 
   // Wyzeruj wyświetlacz
-  digitalWrite(LATCH_PIN, LOW);
-  writeSevenSegFrame(0, 0, 0);
-  digitalWrite(LATCH_PIN, HIGH);
+  commitSevenSegFrame(0, 0, 0);
   s_sevenSegReady = true;
 }
 
@@ -180,40 +209,100 @@ void updateSevenSeg() {
 
   const bool systemTimeValid = RtcSyncService::isSystemTimeValid();
   const bool clockSeeded = RtcSyncService::isClockSeeded();
+  const bool timerPreviewVisible = (appState == STATE_TIMER && !timerRunning);
+  const bool alarmEditVisible = (appState == STATE_ALARM || appState == STATE_ALARM_EDIT);
+  const unsigned long nowMs = millis();
 
-  if (!timerRunning && appState != STATE_SET_TIME && !systemTimeValid && !clockSeeded) {
+  static bool alarmBlinkVisible = true;
+  static bool alarmBlinkInitialized = false;
+  static unsigned long alarmBlinkLastToggleMs = 0;
+
+  if (alarmRinging) {
+    if (!alarmBlinkInitialized) {
+      alarmBlinkVisible = true;
+      alarmBlinkLastToggleMs = nowMs;
+      alarmBlinkInitialized = true;
+    } else if (nowMs - alarmBlinkLastToggleMs >= 500UL) {
+      alarmBlinkLastToggleMs = nowMs;
+      alarmBlinkVisible = !alarmBlinkVisible;
+    }
+
+    if (!alarmBlinkVisible) {
+      commitSevenSegFrame(0, 0, 0);
+      return;
+    }
+  } else {
+    alarmBlinkInitialized = false;
+    alarmBlinkVisible = true;
+  }
+
+  if (appState == STATE_DEBUG_STM32 && stm32Connected) {
+    updateSevenSegDebugSTM32();
+    return;
+  }
+
+  if (!alarmRinging && !timerRunning && !timerPreviewVisible && appState != STATE_SET_TIME && !alarmEditVisible && !systemTimeValid && !clockSeeded) {
     return;
   }
 
   uint8_t HH, MM, SS;
 
-  if (timerRunning) {
-    unsigned long nowMs = millis();
+  if (alarmRinging) {
+    if (systemTimeValid) {
+      time_t now = time(nullptr);
+      struct tm timeinfo;
+      localtime_r(&now, &timeinfo);
+      HH = packTwoDigits(timeinfo.tm_hour);
+      MM = packTwoDigits(timeinfo.tm_min);
+      SS = packTwoDigits(timeinfo.tm_sec);
+    } else {
+      HH = packTwoDigits(hours);
+      MM = packTwoDigits(minutes);
+      SS = packTwoDigits(seconds);
+    }
+  } else if (timerRunning) {
     unsigned long elapsed = (nowMs >= timerStartMillis) ? (nowMs - timerStartMillis) : 0;
     long remainingMs = (long)timerDurationMs - (long)elapsed;
     if (remainingMs < 0) remainingMs = 0;
     int rh = (int)(remainingMs / 3600000L);
     int rm = (int)((remainingMs % 3600000L) / 60000L);
     int rs = (int)((remainingMs % 60000L) / 1000L);
-    HH = ((rh / 10) << 4) | (rh % 10);
-    MM = ((rm / 10) << 4) | (rm % 10);
-    SS = ((rs / 10) << 4) | (rs % 10);
+    if (rh > 99) {
+      rh = 99;
+    }
+    HH = packTwoDigits(rh);
+    MM = packTwoDigits(rm);
+    SS = packTwoDigits(rs);
+  } else if (timerPreviewVisible) {
+    HH = packTwoDigits(timerSetHours);
+    MM = packTwoDigits(timerSetMinutes);
+    SS = packTwoDigits(timerSetSeconds);
+  } else if (alarmEditVisible) {
+    int previewHours = alarmHour;
+    int previewMinutes = alarmMinute;
+
+    if (appState == STATE_ALARM_EDIT && selectedAlarmIndex >= 0 && selectedAlarmIndex < alarmsCount) {
+      previewHours = alarms[selectedAlarmIndex].hour;
+      previewMinutes = alarms[selectedAlarmIndex].minute;
+    }
+
+    HH = packTwoDigits(previewHours);
+    MM = packTwoDigits(previewMinutes);
+    SS = 0;
   } else if (appState != STATE_SET_TIME && systemTimeValid) {
-    time_t now = time(nullptr);
     struct tm timeinfo;
+    time_t now = time(nullptr);
     localtime_r(&now, &timeinfo);
-    HH = ((timeinfo.tm_hour / 10) << 4) | (timeinfo.tm_hour % 10);
-    MM = ((timeinfo.tm_min / 10) << 4) | (timeinfo.tm_min % 10);
-    SS = ((timeinfo.tm_sec / 10) << 4) | (timeinfo.tm_sec % 10);
+    HH = packTwoDigits(timeinfo.tm_hour);
+    MM = packTwoDigits(timeinfo.tm_min);
+    SS = packTwoDigits(timeinfo.tm_sec);
   } else {
-    HH = ((hours / 10) << 4) | (hours % 10);
-    MM = ((minutes / 10) << 4) | (minutes % 10);
-    SS = ((seconds / 10) << 4) | (seconds % 10);
+    HH = packTwoDigits(hours);
+    MM = packTwoDigits(minutes);
+    SS = packTwoDigits(seconds);
   }
 
-  digitalWrite(LATCH_PIN, LOW);
-  writeSevenSegFrame(swapNibbles(SS), swapNibbles(MM), swapNibbles(HH));
-  digitalWrite(LATCH_PIN, HIGH);
+  commitSevenSegFrame(swapNibbles(SS), swapNibbles(MM), swapNibbles(HH));
 }
 
 void updateSevenSegStoper(int mins, int secs, int centisec) {
@@ -221,13 +310,11 @@ void updateSevenSegStoper(int mins, int secs, int centisec) {
     return;
   }
 
-  const uint8_t MM = ((mins / 10) << 4) | (mins % 10);
-  const uint8_t SS = ((secs / 10) << 4) | (secs % 10);
-  const uint8_t CS = ((centisec / 10) << 4) | (centisec % 10);
+  const uint8_t MM = packTwoDigits(mins);
+  const uint8_t SS = packTwoDigits(secs);
+  const uint8_t CS = packTwoDigits(centisec);
 
-  digitalWrite(LATCH_PIN, LOW);
-  writeSevenSegFrame(swapNibbles(CS), swapNibbles(SS), swapNibbles(MM));
-  digitalWrite(LATCH_PIN, HIGH);
+  commitSevenSegFrame(swapNibbles(CS), swapNibbles(SS), swapNibbles(MM));
 }
 
 // ============================================================================
@@ -336,33 +423,6 @@ static bool isAnyAlarmArmed() {
     LCD_PRINT(line);
   }
 
-  static void buildGamesBanner(char* out) {
-    static const char kBannerText[] = "A teraz gramy w gierki ?";
-    static const char kGlitchChars[] = "#@$%*&!?+-/";
-
-    memset(out, ' ', SCREEN_WIDTH);
-    out[SCREEN_WIDTH] = '\0';
-
-    const unsigned long nowMs = millis();
-    const size_t bannerLen = sizeof(kBannerText) - 1;
-    const size_t cycleLen = bannerLen + SCREEN_WIDTH;
-    const size_t scroll = (nowMs / 140UL) % cycleLen;
-    const uint32_t glitchPhase = static_cast<uint32_t>(nowMs / 67UL);
-
-    for (uint8_t col = 0; col < SCREEN_WIDTH; ++col) {
-      const size_t src = scroll + col;
-      if (src >= bannerLen) {
-        continue;
-      }
-
-      char ch = kBannerText[src];
-      if (ch != ' ' && ((glitchPhase + static_cast<uint32_t>(col) * 3UL) % 11UL == 0UL)) {
-        ch = kGlitchChars[(glitchPhase + col) % (sizeof(kGlitchChars) - 1)];
-      }
-
-      out[col] = ch;
-    }
-  }
 // --- Ekran główny ---
 static const char* const polishMonths[] PROGMEM = {
     "STY", "LUT", "MAR", "KWI", "MAJ", "CZE",
@@ -511,6 +571,7 @@ void drawHome() {
   s_homeRenderCache.valid = true;
 
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 // ============================================================================
@@ -630,6 +691,7 @@ void drawAirScreen() {
   }
 
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 void drawMenu() {
@@ -642,10 +704,8 @@ void drawMenu() {
   const int first = (visibleRows > 0) ? ((activeIndex / visibleRows) * visibleRows) : 0;
 
   if (gamesMenu) {
-    char banner[SCREEN_WIDTH + 1];
-    buildGamesBanner(banner);
-    writeMenuRow(0, banner);
-  }
+    writeMenuRow(0, "RETRO GAME");
+  }                  
 
   for (int row = 0; row < SCREEN_HEIGHT; ++row) {
     if (gamesMenu && row == 0) {
@@ -695,6 +755,7 @@ void drawMenu() {
   }
 
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 void drawIndoorWeatherScreen() {
@@ -745,6 +806,7 @@ void drawIndoorWeatherScreen() {
   LCD_PRINT(line);
 
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 void drawExtremeEnvironmentScreen() {
@@ -820,6 +882,7 @@ void drawExtremeEnvironmentScreen() {
   LCD_PRINT(line);
 
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 void drawExtremeAlgorithmScreen() {
@@ -931,6 +994,7 @@ void drawExtremeAlgorithmScreen() {
   }
 
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 // --- Ekran ustawiania czasu ---
@@ -959,6 +1023,7 @@ void drawSetTime() {
   lcdPrintCentered(2, tbuf);
   clearRow(3);
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 // --- Ekran budzika ---
@@ -986,6 +1051,7 @@ void drawAlarm() {
   clearRow(3);
 
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 // --- Ekran Minutnika (Timer) ---
@@ -1050,6 +1116,7 @@ void drawTimer() {
   int pUsed = 2 + (int)strlen(pbuf);
   for (int i = pUsed; i < SCREEN_WIDTH; ++i) LCD_PRINT(F(" "));
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 // --- Ekran stopera ---
@@ -1074,6 +1141,9 @@ void drawStoper() {
   unsigned long totalMs = t;
   int hh = (int)(totalMs / 3600000UL);
   if (hh > 0) {
+    if (hh > 99) {
+      hh = 99;
+    }
     int rm = (int)((totalMs % 3600000UL) / 60000UL);
     int rs = (int)((totalMs % 60000UL) / 1000UL);
     int rcs = (int)((totalMs / 10) % 100);
@@ -1082,12 +1152,10 @@ void drawStoper() {
     clearRow(3);
 
     // Update 7-seg to HH:MM:SS (drop centisec on 7-seg)
-    uint8_t HHb = ((hh / 10) << 4) | (hh % 10);
-    uint8_t MMb = ((rm / 10) << 4) | (rm % 10);
-    uint8_t SSb = ((rs / 10) << 4) | (rs % 10);
-    digitalWrite(LATCH_PIN, LOW);
-    writeSevenSegFrame(swapNibbles(SSb), swapNibbles(MMb), swapNibbles(HHb));
-    digitalWrite(LATCH_PIN, HIGH);
+    const uint8_t HHb = packTwoDigits(hh);
+    const uint8_t MMb = packTwoDigits(rm);
+    const uint8_t SSb = packTwoDigits(rs);
+    commitSevenSegFrame(swapNibbles(SSb), swapNibbles(MMb), swapNibbles(HHb));
     LCD_DUMP();
     return;
   }
@@ -1120,6 +1188,10 @@ void drawDebugSTM32() {
     LCD_PRINT(F("Status: OFFLINE"));
   }
   LCD_DUMP();
+
+  if (stm32Connected) {
+    updateSevenSegDebugSTM32();
+  }
 }
 
 // --- Pomocnicza do rysowania czasu ---
@@ -2138,6 +2210,26 @@ void drawStats() {
     LCD_PRINT(F("%"));
     break;
   }
+  // === 5d2. WIDOK STABILNOŚCI AUDIO ===
+  case STATE_STATS_RESOURCES_AUDIO: {
+    const RuntimeTelemetry::Snapshot audioSnapshot = RuntimeTelemetry::snapshot();
+
+    LCD_SET(0, 0);
+    LCD_PRINT(F("AUDIO STABILNOSC"));
+
+    LCD_SET(0, 1);
+    LCD_PRINT(F("Underrun: "));
+    LCD_PRINT(audioSnapshot.audio_underruns);
+
+    LCD_SET(0, 2);
+    LCD_PRINT(F("Overflow: "));
+    LCD_PRINT(audioSnapshot.audio_overflows);
+
+    LCD_SET(0, 3);
+    LCD_PRINT(F("Drops: "));
+    LCD_PRINT(audioSnapshot.audio_drops);
+    break;
+  }
   // === 5e. WIDOK PAMIĘCI FLASH ===
   case STATE_STATS_RESOURCES_FLASH: {
     uint32_t flashMB = flashFreeBytes / (1024 * 1024);
@@ -2275,6 +2367,7 @@ void drawStats() {
   }
 
   LCD_DUMP();
+  updateSevenSeg();
 }
 
 
@@ -2314,6 +2407,7 @@ void drawSystemResources() {
     LCD_PRINT(buf);
 
     LCD_DUMP();
+    updateSevenSeg();
 }
 
 // ============================================================================

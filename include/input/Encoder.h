@@ -1,6 +1,11 @@
 #pragma once
 #include <Arduino.h>
 
+#ifdef ARDUINO_ARCH_ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
+
 // Możliwe zdarzenia enkodera obrotowego
 typedef enum {
   ENC_NONE = 0,   // Brak zdarzenia
@@ -21,6 +26,11 @@ void encoder_begin(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
 // Przywraca konfigurację pinów enkodera (INPUT_PULLUP)
 // Wywoływać po operacjach, które mogą zresetować GPIO (np. i2s_driver_install)
 void encoder_reinit_pins();
+
+#ifdef ARDUINO_ARCH_ESP32
+// Zwraca uchwyt taska enkodera albo nullptr, gdy background task nie działa.
+TaskHandle_t encoder_getTaskHandle();
+#endif
 
 // Aktualizuje enkodera i zwraca aktywne zdarzenie
 // Wywoływać w loop() - zwraca ENC_NONE jeśli nic się nie dzieje

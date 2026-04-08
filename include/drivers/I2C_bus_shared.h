@@ -3,6 +3,11 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+#ifdef ARDUINO_ARCH_ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
+
 struct I2cSharedStats {
     uint32_t timeout = 0;
     uint32_t nack = 0;
@@ -21,6 +26,11 @@ void resetStats();
 
 bool lock(uint32_t timeoutMs);
 void unlock();
+
+#ifdef ARDUINO_ARCH_ESP32
+// Zwraca uchwyt shared I2C worker taska albo nullptr, gdy worker nie działa.
+TaskHandle_t getWorkerTaskHandle();
+#endif
 
 bool probe(TwoWire *wire, uint8_t address7bit, uint32_t timeoutMs, uint8_t retries = 2);
 bool probeAddress(uint8_t address7bit, uint32_t timeoutMs, uint8_t retries = 2);

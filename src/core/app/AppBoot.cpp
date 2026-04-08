@@ -75,7 +75,14 @@ void lcdClearSafe() {
   if (I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
     lcd.clear();
     I2cShared::unlock();
+#if BOOT_LCD_CLEAR_TELEMETRY
+    LOG_I(TAG_MAIN, "Boot LCD clear: success");
+#endif
+    return;
   }
+#if BOOT_LCD_CLEAR_TELEMETRY
+  LOG_W(TAG_MAIN, "Boot LCD clear: i2c lock failed");
+#endif
 }
 
 void drawHomeThrottled() {

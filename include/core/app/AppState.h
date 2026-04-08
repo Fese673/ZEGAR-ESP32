@@ -28,10 +28,11 @@ enum AppState {
   STATE_STATS_HUM,      // Widok min/max wilgotności
 
   // --- Zasoby systemu ---
-  STATE_STATS_RESOURCES_MENU,   // Menu zasobów (RAM, CPU, Flash)
+  STATE_STATS_RESOURCES_MENU,   // Menu zasobów (RAM, CPU, Flash, Audio)
   STATE_STATS_RESOURCES_RAM,    // Widok pamięci RAM
   STATE_STATS_RESOURCES_CPU,    // Widok obciążenia CPU
   STATE_STATS_RESOURCES_FLASH,  // Widok pamięci Flash
+  STATE_STATS_RESOURCES_AUDIO,  // Widok stabilności audio
 
   // --- PMS5003 / ENS160 + AHT21 ---
   STATE_PMS5003,

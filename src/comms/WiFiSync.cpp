@@ -7,6 +7,7 @@
 
 #include "AppLog.h"
 #include "ModeManager.h"
+#include "TaskConfig.h"
 #include "RamTelemetry.h"
 
 namespace WiFiSync {
@@ -156,7 +157,7 @@ static TaskHandle_t wifiBeginTaskHandle = NULL;
 // Complete WiFi init task — runs ALL WiFi hardware on Core 1
 // WiFi.mode(), WiFi.begin(), and connection wait — fully non-blocking for Core 0
 static void wifiInitTask(void* param) {
-  LOG_I(TAG, "WiFi init task started core=1");
+  LOG_I(TAG, "WiFi init task started core=%d", (int)TaskConfig::WifiInitTask::kCore);
 
   // Step 1: WiFi driver init (this is the 2-8s blocker on Core 0 — now safe here)
   WiFi.mode(WIFI_STA);
@@ -185,7 +186,13 @@ static bool startWifiConnectionTask(unsigned long now) {
   state = SyncState::WifiConnecting;
   wifiConnectStartMillis = now;
 
-  if (xTaskCreatePinnedToCore(wifiInitTask, "wifiInit", 4096, NULL, 5, &wifiBeginTaskHandle, 1) != pdPASS) {
+  if (xTaskCreatePinnedToCore(wifiInitTask,
+                              "wifiInit",
+                              TaskConfig::WifiInitTask::kStackBytes,
+                              NULL,
+                              TaskConfig::WifiInitTask::kPriority,
+                              &wifiBeginTaskHandle,
+                              TaskConfig::WifiInitTask::kCore) != pdPASS) {
     LOG_E(TAG, "Failed to spawn WiFi init task");
     wifiBeginTaskHandle = NULL;
     lastError = SyncError::Wifi;
@@ -199,7 +206,7 @@ static bool startWifiConnectionTask(unsigned long now) {
     onStartCb();
   }
 
-  LOG_I(TAG, "WiFi init task spawned core=1");
+  LOG_I(TAG, "WiFi init task spawned core=%d", (int)TaskConfig::WifiInitTask::kCore);
   return true;
 }
 

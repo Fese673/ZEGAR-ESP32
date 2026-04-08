@@ -9,7 +9,16 @@ ESP32 firmware for a custom clock platform with integrated Bluetooth A2DP audio,
 - `docs/` - technical reports, architecture notes, and telemetry documentation
 - `scripts/` - helper scripts used during build and test preparation
 - `test/` - log artifacts and supporting test documentation
+- `lib/` - local helper libraries and vendor code snapshots
+- `kosz/` - miscellaneous archive artifacts and temporary work files
 - `third_party/` - external vendor code and archived sources
+- `Project-Map.md` - curated repository structure and module inventory
+- `.vscode/` - workspace editor settings and launch configurations
+- `.venv/` - local Python virtual environment for repository tooling
+- `.pio/` - PlatformIO build environment and cache artifacts
+- `.analysis/` - local analysis and tooling artifacts
+- `_baseline/` - reference artifacts and baseline outputs
+- `.github/` - repository CI/workflow and issue template support
 
 ## Core capabilities
 - Bluetooth A2DP sink for audio playback via external I2S output
@@ -53,6 +62,14 @@ The project uses `platformio.ini` to configure:
 - `-DTEST_RAM_HEAP_INFO=0` keeps heap info output off by default
 - `-DCONFIG_BT_ENABLED=1` enables Bluetooth support
 
+### PlatformIO library dependencies
+The board configuration also pulls in these libraries via `platformio.ini`:
+- `duinowitchery/hd44780 @ ^1.3.2`
+- `sciosense/ScioSense_ENS16x @ ^2.0.5`
+- `https://github.com/pschatzmann/arduino-audio-tools.git#v1.2.2`
+- `knolleary/PubSubClient@^2.8`
+- `bblanchon/ArduinoJson@^6.21`
+
 ### Secret injection
 Private credentials should be injected via build flags rather than committed in source.
 Example:
@@ -73,7 +90,8 @@ Telemetry is intentionally lightweight and designed for debug sessions without s
 - `RamTelemetry` — stage-based heap snapshots and fragmentation metrics
 
 ### Where to find docs
-- `docs/telemetry/index.md` describes the telemetry design, build flags, and interpretation of output
+- `docs/index.md` is the main documentation entrypoint for architecture and reports
+- `docs/telemetry/telemetry.md` describes the telemetry design, build flags, and interpretation of output
 
 ## Architecture overview
 ### Core / bootstrap
@@ -131,9 +149,15 @@ NetworkOrchestrator
 - Use `docs/` for architecture reports and long-form analysis rather than adding technical essays to `README.md`
 
 ## Useful paths
+- `Project-Map.md` — curated repository structure and navigation map
+- `docs/index.md` — main docs entrypoint and report index
+- `TODO` — outstanding tasks and planned work
 - `src/` — firmware source
 - `include/` — public interfaces
 - `platformio.ini` — build configuration
-- `docs/telemetry/index.md` — telemetry design and usage
+- `scripts/scan_project_map.py` — validate repository structure against `Project-Map.md`
+- `scripts/count_loc.py` — source line counting helper
+- `scripts/find_unused_static.py` — static symbol usage scanner
+- `docs/telemetry/telemetry.md` — telemetry design and usage
 - `hardware/` — PCB and schematic references
 - `scripts/` — code generation and build helper scripts

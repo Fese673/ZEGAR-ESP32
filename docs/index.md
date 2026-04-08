@@ -3,8 +3,11 @@
 Documentation area for project reports and architecture notes.
 
 ## Structure
-- `reports/` - status reports, audits, and algorithm summaries
+- `reports/` - status reports, audits, architecture notes, and task-map documentation
 - `telemetry/` - runtime telemetry and RAM snapshot guide
+
+## Reports
+- See [reports/task-map.md](reports/task-map.md) for the central task map, priorities, telemetry, and logging rules.
 
 ## Telemetry
 - See [telemetry/README.md](telemetry/README.md) for the runtime counter contract and the RAM snapshot profiler.

@@ -62,6 +62,7 @@ constexpr const char* const kResourcesMenuItems[] = {
     "RAM Free",
     "Heap",
     "Flash Free",
+    "Audio",
 };
 
 constexpr const char* const kSettingsMenuItems[] = {
@@ -728,6 +729,10 @@ static bool handleResourcesMenuClick() {
       break;
     case 2:
       appState = STATE_STATS_RESOURCES_FLASH;
+      drawStatsSafe();
+      break;
+    case 3:
+      appState = STATE_STATS_RESOURCES_AUDIO;
       drawStatsSafe();
       break;
     default:
@@ -1514,6 +1519,7 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_STATS_RESOURCES_RAM:
       case STATE_STATS_RESOURCES_CPU:
       case STATE_STATS_RESOURCES_FLASH:
+      case STATE_STATS_RESOURCES_AUDIO:
         appState = STATE_STATS_RESOURCES_MENU;
         drawStatsSafe();
         return;

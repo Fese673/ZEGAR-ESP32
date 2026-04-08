@@ -392,21 +392,31 @@ bool BluetoothA2DPSink::app_work_dispatch(app_callback_t p_cback,
   } else if (p_params && param_len > 0) {
     if ((msg.param = malloc(param_len)) != nullptr) {
       memcpy(msg.param, p_params, param_len);
-      return app_send_msg(&msg);
+      if (!app_send_msg(&msg)) {
+        free(msg.param);
+        return false;
+      }
+      return true;
     }
   }
 
   return false;
 }
 
-void BluetoothA2DPSink::app_alloc_meta_buffer(esp_avrc_ct_cb_param_t *param) {
+bool BluetoothA2DPSink::app_alloc_meta_buffer(esp_avrc_ct_cb_param_t *param) {
   ESP_LOGD(BT_AV_TAG, "%s", __func__);
   esp_avrc_ct_cb_param_t *rc = (esp_avrc_ct_cb_param_t *)(param);
   uint8_t *attr_text = (uint8_t *)malloc(rc->meta_rsp.attr_length + 1);
+  if (attr_text == nullptr) {
+    ESP_LOGE(BT_AV_TAG, "%s attr_text alloc failed len=%u", __func__,
+             (unsigned)rc->meta_rsp.attr_length);
+    return false;
+  }
   memcpy(attr_text, rc->meta_rsp.attr_text, rc->meta_rsp.attr_length);
   attr_text[rc->meta_rsp.attr_length] = 0;
 
   rc->meta_rsp.attr_text = attr_text;
+  return true;
 }
 
 void BluetoothA2DPSink::app_gap_callback(esp_bt_gap_cb_event_t event,
@@ -502,9 +512,11 @@ void BluetoothA2DPSink::app_rc_ct_callback(esp_avrc_ct_cb_event_t event,
   switch (event) {
     case ESP_AVRC_CT_METADATA_RSP_EVT:
       ESP_LOGD(BT_AV_TAG, "%s ESP_AVRC_CT_METADATA_RSP_EVT", __func__);
-      app_alloc_meta_buffer(param);
-      app_work_dispatch(ccall_av_hdl_avrc_evt, event, param,
-                        sizeof(esp_avrc_ct_cb_param_t));
+      if (app_alloc_meta_buffer(param) &&
+          !app_work_dispatch(ccall_av_hdl_avrc_evt, event, param,
+                              sizeof(esp_avrc_ct_cb_param_t))) {
+        free(param->meta_rsp.attr_text);
+      }
       break;
     case ESP_AVRC_CT_CONNECTION_STATE_EVT:
       ESP_LOGD(BT_AV_TAG, "%s ESP_AVRC_CT_CONNECTION_STATE_EVT", __func__);

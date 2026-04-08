@@ -25,7 +25,10 @@ struct TaskWatermark {
 struct TaskWatermarks {
   TaskWatermark mqttTask;
   TaskWatermark wifiInitTask;
+  TaskWatermark btAppTask;
   TaskWatermark btI2STask;
+  TaskWatermark encoderTask;
+  TaskWatermark i2cWorkerTask;
 };
 
 struct Snapshot {

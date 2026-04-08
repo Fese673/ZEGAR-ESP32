@@ -4,6 +4,7 @@
 #include "esp_bt_main.h"
 #include "esp_log.h"
 #include "BoardPins.h"
+#include "TaskConfig.h"
 #include "AppLog.h"
 #include "RamTelemetry.h"
 
@@ -24,16 +25,10 @@ constexpr int kBitsPerSample = 16;
 constexpr int kChannelCount = 2;
 constexpr int kI2sBufferCount = 8;
 constexpr int kI2sBufferSize = 256;
-constexpr int kRingbufferSizeBytes = 12 * 1024;
+constexpr int kRingbufferSizeBytes = 16 * 1024;
 constexpr int kRingbufferPrefetchPercent = 80;
-constexpr int kI2sStackSizeBytes = 3072;
 constexpr size_t kI2sWriteSizeUpto = 240 * 8;
 constexpr int kI2sTicks = 10;
-constexpr UBaseType_t kTaskCore = 0;
-constexpr UBaseType_t kTaskPriority = configMAX_PRIORITIES - 3;
-constexpr UBaseType_t kI2sTaskPriority = configMAX_PRIORITIES - 1;
-constexpr UBaseType_t kEventQueueSize = 32;
-constexpr UBaseType_t kEventStackSize = 4096;
 
 static BluetoothA2DPSinkQueued s_a2dp;
 static std::atomic<bool> s_connected{false};
@@ -94,16 +89,16 @@ void stopAudioToolsOutput() {
 void configureSink() {
     s_a2dp.set_i2s_ringbuffer_size(kRingbufferSizeBytes);
     s_a2dp.set_i2s_ringbuffer_prefetch_percent(kRingbufferPrefetchPercent);
-    s_a2dp.set_i2s_stack_size(kI2sStackSizeBytes);
+    s_a2dp.set_i2s_stack_size(TaskConfig::BtI2STask::kStackBytes);
     s_a2dp.set_i2s_write_size_upto(kI2sWriteSizeUpto);
     s_a2dp.set_i2s_ticks(kI2sTicks);
 
-    // Keep the realtime path on Core 0 and leave the rest of the app on Core 1.
-    s_a2dp.set_task_core(kTaskCore);
-    s_a2dp.set_task_priority(kTaskPriority);
-    s_a2dp.set_event_queue_size(kEventQueueSize);
-    s_a2dp.set_event_stack_size(kEventStackSize);
-    s_a2dp.set_i2s_task_priority(kI2sTaskPriority);
+    // Keep BT control and audio on Core 0; encoder, I2C, and WiFi stay on Core 1.
+    s_a2dp.set_task_core(TaskConfig::BtAppTask::kCore);
+    s_a2dp.set_task_priority(TaskConfig::BtAppTask::kPriority);
+    s_a2dp.set_event_queue_size(TaskConfig::BtAppTask::kEventQueueSize);
+    s_a2dp.set_event_stack_size(TaskConfig::BtAppTask::kStackBytes);
+    s_a2dp.set_i2s_task_priority(TaskConfig::BtI2STask::kPriority);
     s_a2dp.set_on_connection_state_changed(connection_state_callback);
 }
 
@@ -203,6 +198,10 @@ void audioBT_deinit() {
 
 bool audioBT_isConnected() {
     return s_connected.load();
+}
+
+TaskHandle_t audioBT_getAppTaskHandle() {
+    return s_audioInitialized ? s_a2dp.getAppTaskHandle() : nullptr;
 }
 
 TaskHandle_t audioBT_getI2STaskHandle() {

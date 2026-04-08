@@ -2,6 +2,7 @@
 
 #include "AppLog.h"
 #include "RuntimeTelemetry.h"
+#include "TaskConfig.h"
 
 #include <atomic>
 
@@ -31,9 +32,6 @@ uint32_t gErrorCount = 0;
 #ifdef ARDUINO_ARCH_ESP32
 constexpr uint32_t kI2cQueueSubmitTimeoutMs = 5;
 constexpr size_t kI2cRequestPoolSize = 8;
-constexpr uint32_t kI2cWorkerStackSize = 3072;
-constexpr UBaseType_t kI2cWorkerPriority = configMAX_PRIORITIES - 4;
-constexpr BaseType_t kI2cWorkerCore = 1;
 
 struct I2cRequest {
     enum class Op : uint8_t {
@@ -195,11 +193,11 @@ bool ensureWorker()
     if (gI2cWorkerTask == nullptr) {
         if (xTaskCreatePinnedToCore(i2cWorkerTask,
                                     "i2cWorker",
-                                    kI2cWorkerStackSize,
+                                    TaskConfig::I2cWorkerTask::kStackBytes,
                                     nullptr,
-                                    kI2cWorkerPriority,
+                                    TaskConfig::I2cWorkerTask::kPriority,
                                     &gI2cWorkerTask,
-                                    kI2cWorkerCore) != pdPASS) {
+                                    TaskConfig::I2cWorkerTask::kCore) != pdPASS) {
             gI2cWorkerTask = nullptr;
             return false;
         }
@@ -616,6 +614,12 @@ void unlock()
     }
 #endif
 }
+
+#ifdef ARDUINO_ARCH_ESP32
+TaskHandle_t getWorkerTaskHandle() {
+    return gI2cWorkerTask;
+}
+#endif
 
 bool probe(TwoWire *wire, uint8_t address7bit, uint32_t timeoutMs, uint8_t retries)
 {

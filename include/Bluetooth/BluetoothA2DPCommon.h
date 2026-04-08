@@ -38,6 +38,7 @@
 #if IS_VALID_PLATFORM
 
 #include "a2dp_config.h"
+#include "TaskConfig.h"
 // If you use #include "I2S.h" the i2s functionality is hidden in a namespace
 // this hack prevents any error messages
 #ifdef _I2S_H_INCLUDED
@@ -219,6 +220,9 @@ class BluetoothA2DPCommon {
     return connection_state == ESP_A2D_CONNECTION_STATE_CONNECTED;
   }
 
+  /// Returns the BT app task handle when the task is running.
+  TaskHandle_t getAppTaskHandle() const { return app_task_handle; }
+
   /// Sets the volume (range 0 - 127)
   virtual void set_volume(uint8_t volume) {
     volume_value = std::min((int)volume, 0x7F);
@@ -373,15 +377,15 @@ class BluetoothA2DPCommon {
   esp_a2d_audio_state_t audio_state = ESP_A2D_AUDIO_STATE_STOPPED;
   esp_a2d_connection_state_t connection_state =
       ESP_A2D_CONNECTION_STATE_DISCONNECTED;
-  UBaseType_t task_priority = configMAX_PRIORITIES - 10;
+  UBaseType_t task_priority = TaskConfig::BtAppTask::kPriority;
   // volume
   uint8_t volume_value = 0;
   bool is_volume_used = false;
   bool is_bluedroid_initialized = false;
-  BaseType_t task_core = 1;
+  BaseType_t task_core = TaskConfig::BtAppTask::kCore;
 
-  int event_queue_size = 20;
-  int event_stack_size = 3072;
+  int event_queue_size = TaskConfig::BtAppTask::kEventQueueSize;
+  int event_stack_size = TaskConfig::BtAppTask::kStackBytes;
   esp_bt_mode_t bt_mode = ESP_BT_MODE_CLASSIC_BT;
   std::vector<esp_avrc_rn_event_ids_t> avrc_rn_events = {
       ESP_AVRC_RN_VOLUME_CHANGE};

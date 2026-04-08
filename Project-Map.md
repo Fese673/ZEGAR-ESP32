@@ -52,6 +52,7 @@ include/
 │   ├── BoardPins.h
 │   ├── a2dp_config.h     # shared compile-time config aliases and board selection
 │   ├── SecretsConfig.h
+│   ├── TaskConfig.h
 │   └── TemperatureConfig.h
 ├── core/                 # core application interfaces
 │   ├── app/
@@ -67,6 +68,7 @@ include/
 │   │   ├── RtcSyncService.h
 │   │   └── SystemResourcesService.h
 │   └── telemetry/
+│       ├── AppLog.h
 │       ├── LoopBaselineTelemetry.h
 │       ├── RamTelemetry.h
 │       ├── RuntimeTelemetry.h
@@ -87,6 +89,10 @@ include/
 │   │   └── SharedBus.h
 │   └── spi/
 │       └── README.md
+├── games/
+│   ├── SafeCracker.h
+│   └── TANK-GAMES/
+│       └── TankGame.h
 ├── bluetooth/
 │   ├── A2DPVolumeControl.h
 │   ├── AudioBT.h
@@ -124,13 +130,14 @@ include/
     └── UI_Draw.h
 
 scripts/
+├── count_loc.py                  # source line counting helper
+├── find_unused_static.py         # static symbol usage scanner
 ├── generate_alarm_melodies.py    # build-time melody generation
 ├── mqtt_firebase_bridge.py       # bridge/utility script for MQTT diagnostics
 └── scan_project_map.py           # workspace inventory generator / checks
 
 src/
 ├── main.cpp              # application entrypoint, setup() + loop()
-├── ErriezDS3231.cpp      # RTC hardware integration
 ├── audio/
 │   ├── AlarmMelodies.cpp
 │   ├── AlarmMelodies.generated.inc
@@ -179,8 +186,13 @@ src/
 │   ├── LCDMirror.cpp
 │   └── README.md
 ├── drivers/
+│   ├── ErriezDS3231.cpp
 │   ├── I2C_bus_shared.cpp
 │   └── README.md
+├── games/
+│   ├── SafeCracker.cpp
+│   └── TANK-GAMES/
+│       └── TankGame.cpp
 ├── input/
 │   ├── Encoder.cpp
 │   └── README.md
@@ -188,7 +200,6 @@ src/
 │   ├── AHTxx.cpp
 │   ├── BMP280Sensor.cpp
 │   ├── ENS160AHT21Sensor.cpp
-│   ├── ErriezDS3231.cpp
 │   ├── PMserial.cpp
 │   ├── PMS_Czujnik.cpp
 │   ├── README.md

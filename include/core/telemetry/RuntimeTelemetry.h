@@ -25,6 +25,7 @@ struct Counters {
   std::atomic<uint32_t> audio_underruns{0};
   std::atomic<uint32_t> audio_overflows{0};
   std::atomic<uint32_t> audio_drops{0};
+  std::atomic<uint32_t> encoder_drops{0};
 };
 
 struct Snapshot {
@@ -34,6 +35,7 @@ struct Snapshot {
   uint32_t audio_underruns = 0;
   uint32_t audio_overflows = 0;
   uint32_t audio_drops = 0;
+  uint32_t encoder_drops = 0;
 };
 
 Counters& counters();
@@ -52,6 +54,7 @@ struct Snapshot {
   uint32_t audio_underruns = 0;
   uint32_t audio_overflows = 0;
   uint32_t audio_drops = 0;
+  uint32_t encoder_drops = 0;
 };
 
 inline void reset() {}

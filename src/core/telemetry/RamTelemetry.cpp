@@ -10,6 +10,8 @@
 #include <esp_heap_caps.h>
 
 #include "AudioBT.h"
+#include "Encoder.h"
+#include "I2C_bus_shared.h"
 #include "MQTTSync.h"
 #include "WiFiSync.h"
 
@@ -70,15 +72,21 @@ void printSnapshotLine(Stream& out,
 
   char mqttTaskField[24];
   char wifiInitTaskField[24];
+  char btAppTaskField[24];
   char btI2STaskField[24];
+  char encoderTaskField[24];
+  char i2cWorkerTaskField[24];
   formatTaskField(mqttTaskField, sizeof(mqttTaskField), "mqtt", now.taskWatermarks.mqttTask);
   formatTaskField(wifiInitTaskField, sizeof(wifiInitTaskField), "wifiInit", now.taskWatermarks.wifiInitTask);
+  formatTaskField(btAppTaskField, sizeof(btAppTaskField), "btApp", now.taskWatermarks.btAppTask);
   formatTaskField(btI2STaskField, sizeof(btI2STaskField), "btI2S", now.taskWatermarks.btI2STask);
+  formatTaskField(encoderTaskField, sizeof(encoderTaskField), "encoder", now.taskWatermarks.encoderTask);
+  formatTaskField(i2cWorkerTaskField, sizeof(i2cWorkerTaskField), "i2cWorker", now.taskWatermarks.i2cWorkerTask);
 
   LOG_TO(out,
          TAG,
          'I',
-         "%s #%lu checkpoint=%s free_b=%lu prev_free_b=%+ld base_free_b=%+ld largest_b=%lu prev_largest_b=%+ld base_largest_b=%+ld ratio_permille=%u frag_permille=%u dma_b=%lu prev_dma_b=%+ld base_dma_b=%+ld min_b=%lu total_b=%lu task_mqtt=%s task_wifi_init=%s task_bt_i2s=%s",
+        "%s #%lu checkpoint=%s free_b=%lu prev_free_b=%+ld base_free_b=%+ld largest_b=%lu prev_largest_b=%+ld base_largest_b=%+ld ratio_permille=%u frag_permille=%u dma_b=%lu prev_dma_b=%+ld base_dma_b=%+ld min_b=%lu total_b=%lu task_mqtt=%s task_wifi_init=%s task_bt_app=%s task_bt_i2s=%s task_encoder=%s task_i2c_worker=%s",
          messageKind,
          static_cast<unsigned long>(sequence),
          normalizeTag(tag),
@@ -97,7 +105,10 @@ void printSnapshotLine(Stream& out,
          static_cast<unsigned long>(now.totalHeap),
          mqttTaskField,
          wifiInitTaskField,
-         btI2STaskField);
+         btAppTaskField,
+         btI2STaskField,
+         encoderTaskField,
+         i2cWorkerTaskField);
 }
 }  // namespace
 
@@ -132,7 +143,10 @@ Snapshot snapshot() {
 
   values.taskWatermarks.mqttTask = captureTaskWatermark(MQTTSync::getTaskHandle());
   values.taskWatermarks.wifiInitTask = captureTaskWatermark(WiFiSync::getInitTaskHandle());
+  values.taskWatermarks.btAppTask = captureTaskWatermark(audioBT_getAppTaskHandle());
   values.taskWatermarks.btI2STask = captureTaskWatermark(audioBT_getI2STaskHandle());
+  values.taskWatermarks.encoderTask = captureTaskWatermark(encoder_getTaskHandle());
+  values.taskWatermarks.i2cWorkerTask = captureTaskWatermark(I2cShared::getWorkerTaskHandle());
   return values;
 }
 

@@ -20,7 +20,6 @@ void BluetoothA2DPSinkQueued::bt_i2s_task_start_up(void) {
         s_i2s_write_semaphore = nullptr;
         return;
     }
-    //xTaskCreate(bt_i2s_task_handler, "BtI2STask", 2048, nullptr, configMAX_PRIORITIES - 3, &s_bt_i2s_task_handle);
     BaseType_t result = xTaskCreatePinnedToCore(ccall_i2s_task_handler, "BtI2STask", i2s_stack_size, nullptr, i2s_task_priority, &s_bt_i2s_task_handle, task_core);
     if (result!=pdPASS){
         ESP_LOGE(BT_AV_TAG, "xTaskCreatePinnedToCore");

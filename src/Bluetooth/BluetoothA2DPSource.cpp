@@ -238,7 +238,11 @@ bool BluetoothA2DPSource::bt_app_work_dispatch(bt_app_cb_t p_cback,
       if (p_copy_cback) {
         p_copy_cback(&msg, msg.param, p_params);
       }
-      return app_send_msg(&msg);
+      if (!app_send_msg(&msg)) {
+        free(msg.param);
+        return false;
+      }
+      return true;
     }
   }
 

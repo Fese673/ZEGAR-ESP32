@@ -21,6 +21,7 @@ test
 # Hardware CAD backups
 hardware/kicad/ZEGAR ESP32-backups
 hardware/kicad/fp-info-cache
+hardware\kicad\Główny projekt\.history
 
 
 third_party

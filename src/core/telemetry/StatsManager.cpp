@@ -8,8 +8,8 @@ void StatsManager::begin() {
         loadEnvStats();
         prefs.end();
     } else {
-        currentStats = {};
-        envStats = {1000.0f, -1000.0f, 1000.0f, -1000.0f};
+        currentStats = AppStats{};
+        envStats = EnvStats{1000.0f, -1000.0f, 1000.0f, -1000.0f};
     }
 
     isDirty = false;
@@ -124,8 +124,8 @@ void StatsManager::saveEnvStats() {
 }
 
 void StatsManager::resetStats() {
-    currentStats = {};
-    envStats = {1000.0f, -1000.0f, 1000.0f, -1000.0f};
+    currentStats = AppStats{};
+    envStats = EnvStats{1000.0f, -1000.0f, 1000.0f, -1000.0f};
 
     if (prefs.begin(PREFS_NAMESPACE, false)) {
         prefs.clear();

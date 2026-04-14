@@ -203,8 +203,8 @@ static void recordSuccess(bool factoryRead, unsigned long now) {
 
   SampleData& sample = factoryRead ? s.factory : s.atmospheric;
   sample.valid = true;
-  sample.mass = {pm01, pm25, pm10};
-  sample.particles = {count0p3, count0p5, count1p0, count2p5, count5p0, count10p0};
+  sample.mass = PMS5003Sensor::MassReadings{pm01, pm25, pm10};
+  sample.particles = PMS5003Sensor::ParticleCounts{count0p3, count0p5, count1p0, count2p5, count5p0, count10p0};
 
   s.latest = sample;
 
@@ -396,20 +396,20 @@ void PMS5003Sensor::begin() {
 
 void PMS5003Sensor::resetMinMax() {
   // CF=1
-  s.stats.factoryPm01 = {};
-  s.stats.factoryPm25 = {};
-  s.stats.factoryPm10 = {};
+  s.stats.factoryPm01 = PMS5003Sensor::ValueRange{};
+  s.stats.factoryPm25 = PMS5003Sensor::ValueRange{};
+  s.stats.factoryPm10 = PMS5003Sensor::ValueRange{};
   // ATM
-  s.stats.atmosphericPm01 = {};
-  s.stats.atmosphericPm25 = {};
-  s.stats.atmosphericPm10 = {};
+  s.stats.atmosphericPm01 = PMS5003Sensor::ValueRange{};
+  s.stats.atmosphericPm25 = PMS5003Sensor::ValueRange{};
+  s.stats.atmosphericPm10 = PMS5003Sensor::ValueRange{};
   // Cząstki
-  s.stats.particle0p3 = {};
-  s.stats.particle0p5 = {};
-  s.stats.particle1p0 = {};
-  s.stats.particle2p5 = {};
-  s.stats.particle5p0 = {};
-  s.stats.particle10p0 = {};
+  s.stats.particle0p3 = PMS5003Sensor::ValueRange{};
+  s.stats.particle0p5 = PMS5003Sensor::ValueRange{};
+  s.stats.particle1p0 = PMS5003Sensor::ValueRange{};
+  s.stats.particle2p5 = PMS5003Sensor::ValueRange{};
+  s.stats.particle5p0 = PMS5003Sensor::ValueRange{};
+  s.stats.particle10p0 = PMS5003Sensor::ValueRange{};
 }
 
 // ============================================================================

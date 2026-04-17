@@ -6,7 +6,7 @@
 
 namespace AlarmRuntime {
 
-inline constexpr int kMaxAlarms = 8;
+static constexpr int kMaxAlarms = 8;
 
 struct State {
   int alarmHour = 7;

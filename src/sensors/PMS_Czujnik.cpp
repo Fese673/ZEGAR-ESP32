@@ -203,8 +203,15 @@ static void recordSuccess(bool factoryRead, unsigned long now) {
 
   SampleData& sample = factoryRead ? s.factory : s.atmospheric;
   sample.valid = true;
-  sample.mass = PMS5003Sensor::MassReadings{pm01, pm25, pm10};
-  sample.particles = PMS5003Sensor::ParticleCounts{count0p3, count0p5, count1p0, count2p5, count5p0, count10p0};
+  sample.mass.pm01 = pm01;
+  sample.mass.pm25 = pm25;
+  sample.mass.pm10 = pm10;
+  sample.particles.count0p3 = count0p3;
+  sample.particles.count0p5 = count0p5;
+  sample.particles.count1p0 = count1p0;
+  sample.particles.count2p5 = count2p5;
+  sample.particles.count5p0 = count5p0;
+  sample.particles.count10p0 = count10p0;
 
   s.latest = sample;
 

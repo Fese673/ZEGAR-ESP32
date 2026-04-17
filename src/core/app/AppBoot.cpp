@@ -24,6 +24,7 @@
 #include "PMS_Czujnik.h"
 #include "RadioModeSwitch.h"
 #include "RamTelemetry.h"
+#include "touch_buzzer_test.h"
 #include "RtcSyncService.h"
 #include "STM32_Data.h"
 #include "SecretsConfig.h"
@@ -188,6 +189,7 @@ void initPersistenceAndConfig(RuntimeContext& ctx) {
   s_prefs.begin("zegar", false);
   AlarmRuntime::reset();
   loadNetworkConfigFromPreferences();
+  appSettings.touchTestEnabled = s_prefs.isKey("touchTest") ? s_prefs.getBool("touchTest", true) : true;
   appSettings.backgroundMusicEnabled = s_prefs.getBool("menuMusic", true);
   uiState.settingsBackgroundMusicMenu.index = appSettings.backgroundMusicEnabled ? 0 : 1;
   appSettings.showEpicIntro = s_prefs.getBool("epicIntro", true);
@@ -198,6 +200,8 @@ void initPersistenceAndConfig(RuntimeContext& ctx) {
 }
 
 void initUiAndInput() {
+  AppSettings::State& appSettings = AppSettings::mutableState();
+  UIState::State& uiState = UIState::mutableState();
   const bool showEpicIntro = AppSettings::state().showEpicIntro;
 
 #if UART_LCD_MIRROR
@@ -242,6 +246,10 @@ void initUiAndInput() {
 
   encoder_begin(ENC_CLK, ENC_DT, ENC_SW);
   pinMode(BUZZER_PIN, OUTPUT);
+  TouchBuzzerTest::begin(BoardPins::kTouchTestPad, BUZZER_PIN);
+  TouchBuzzerTest::setEnabled(AppSettings::state().touchTestEnabled);
+  appSettings.touchTestEnabled = TouchBuzzerTest::isEnabled();
+  uiState.settingsTouchMenu.index = appSettings.touchTestEnabled ? 0 : 1;
   statsManager.begin();
 }
 

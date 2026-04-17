@@ -68,6 +68,7 @@ const char* const*& settingsPmsMenuItems = ui.settingsPmsMenu.items;
 const int& settingsBuzzerMenuIndex = ui.settingsBuzzerMenu.index;
 const int& settingsBuzzerMenuCount = ui.settingsBuzzerMenu.count;
 const char* const*& settingsBuzzerMenuItems = ui.settingsBuzzerMenu.items;
+const int& settingsTouchMenuIndex = ui.settingsTouchMenu.index;
 const int& settingsBgMusicMenuIndex = ui.settingsBackgroundMusicMenu.index;
 const int& settingsBgMusicMenuCount = ui.settingsBackgroundMusicMenu.count;
 const char* const*& settingsBgMusicMenuItems = ui.settingsBackgroundMusicMenu.items;
@@ -1937,6 +1938,11 @@ void drawStats() {
   // === 1e. USTAWIENIA BUZERA (włącz/wyłącz) ===
   case STATE_SETTINGS_BUZZER: {
     drawCenteredSettingFormatted(F("BUZZER"), "STAN:   <  %s  >", settingsBuzzerMenuIndex == 0 ? "ON" : "OFF");
+    break;
+  }
+  // === 1e1. USTAWIENIA DOTYK (włącz/wyłącz) ===
+  case STATE_SETTINGS_TOUCH: {
+    drawCenteredSettingFormatted(F("DOTYK"), "STAN:   <  %s  >", settingsTouchMenuIndex == 0 ? "ON" : "OFF");
     break;
   }
   // === 1f1. USTAWIENIA MUZYKI W TLE (włącz/wyłącz) ===

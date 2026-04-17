@@ -31,6 +31,7 @@
 #include "TelemetryComposer.h"
 #include "SafeCracker.h"
 #include "TANK-GAMES/TankGame.h"
+#include "touch_buzzer_test.h"
 #include "UIState.h"
 #include "UI_Controller.h"
 #include "UI_Draw.h"
@@ -109,6 +110,7 @@ void serviceInputAndUiEvents() {
 
   HomeRuntime::handleHomeEntryIfStateChanged(appState);
   serviceBtMusicHoldGesture();
+  TouchBuzzerTest::service();
   statsManager.update();
 }
 

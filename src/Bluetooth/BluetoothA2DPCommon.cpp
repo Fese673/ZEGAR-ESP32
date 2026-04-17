@@ -17,10 +17,6 @@
 
 #include "BluetoothA2DPCommon.h"
 
-#ifdef ARDUINO_ARCH_ESP32
-#include "esp32-hal-bt-mem.h"
-#endif
-
 #if IS_VALID_PLATFORM
 
 

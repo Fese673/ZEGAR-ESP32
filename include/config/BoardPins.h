@@ -26,6 +26,9 @@ constexpr uint8_t kEncoderSw = 27;
 // --- Buzzer ---
 constexpr uint8_t kBuzzer = 19;
 
+// --- Temporary touch test on GPIO4 ---
+constexpr uint8_t kTouchTestPad = 4;
+
 // --- STM32 UART (BPM/SpO2) ---
 constexpr uint8_t kStm32UartRx = 16;
 constexpr uint8_t kStm32UartTx = 17;

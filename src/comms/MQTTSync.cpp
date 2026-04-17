@@ -2,7 +2,7 @@
 #include "WiFiSync.h"
 #include "AppLog.h"
 #include <esp_system.h>
-#include <NetworkClientSecure.h>
+#include <WiFiClientSecure.h>
 #include <WiFi.h>
 
 #include "PMS_Czujnik.h"
@@ -60,7 +60,7 @@ static constexpr size_t MQTT_PACKET_MARGIN_BYTES = 8;
 // ============================================================================
 // Static Variables
 // ============================================================================
-static NetworkClientSecure wifiClientSecure;
+static WiFiClientSecure wifiClientSecure;
 static PubSubClient mqttClient;
 static unsigned long lastPublishTime = 0;
 static unsigned long publishInterval = 5000; // 5 seconds
@@ -86,7 +86,7 @@ static uint8_t s_connectFailureCount = 0;
 
 static constexpr unsigned long MQTT_WIFI_RECOVERY_DELAY_MS = 250;
 static constexpr unsigned long MQTT_CONNECT_BUDGET_MS = 4500;
-static constexpr unsigned long MQTT_TCP_CONNECT_TIMEOUT_MS = 3000;
+static constexpr unsigned long MQTT_TCP_CONNECT_TIMEOUT_SEC = 3;
 static constexpr unsigned long MQTT_TLS_HANDSHAKE_TIMEOUT_SEC = 2;
 static constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 3;
 static constexpr uint16_t MQTT_KEEPALIVE_SEC = 15;
@@ -123,7 +123,7 @@ static void applyConfigToClient() {
 }
 
 static void applyConnectionBudget() {
-    wifiClientSecure.setConnectionTimeout(MQTT_TCP_CONNECT_TIMEOUT_MS);
+    wifiClientSecure.setTimeout(MQTT_TCP_CONNECT_TIMEOUT_SEC);
     wifiClientSecure.setHandshakeTimeout(MQTT_TLS_HANDSHAKE_TIMEOUT_SEC);
 }
 

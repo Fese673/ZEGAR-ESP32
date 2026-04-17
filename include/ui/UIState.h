@@ -26,6 +26,7 @@ struct State {
   MenuState settingsMenu;
   MenuState settingsPmsMenu;
   MenuState settingsBuzzerMenu;
+  MenuState settingsTouchMenu;
   MenuState settingsBackgroundMusicMenu;
   MenuState settingsMqttMenu;
   MenuState settingsAlarmMelodyMenu;

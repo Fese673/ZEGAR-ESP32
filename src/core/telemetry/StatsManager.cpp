@@ -9,7 +9,7 @@ void StatsManager::begin() {
         prefs.end();
     } else {
         currentStats = AppStats{};
-        envStats = EnvStats{1000.0f, -1000.0f, 1000.0f, -1000.0f};
+        envStats = EnvStats{};
     }
 
     isDirty = false;
@@ -125,7 +125,7 @@ void StatsManager::saveEnvStats() {
 
 void StatsManager::resetStats() {
     currentStats = AppStats{};
-    envStats = EnvStats{1000.0f, -1000.0f, 1000.0f, -1000.0f};
+    envStats = EnvStats{};
 
     if (prefs.begin(PREFS_NAMESPACE, false)) {
         prefs.clear();

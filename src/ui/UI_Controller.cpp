@@ -12,6 +12,7 @@
 #include "AlarmMelodyPrefs.h"
 #include "AlarmRuntime.h"
 #include "AlarmMelodyPreview.h"
+#include "touch_buzzer_test.h"
 #include "SafeCracker.h"
 #include "TANK-GAMES/TankGame.h"
 #include <Preferences.h>
@@ -68,6 +69,7 @@ constexpr const char* const kResourcesMenuItems[] = {
 constexpr const char* const kSettingsMenuItems[] = {
     "PMS5003",
     "Buzzer",
+    "Dotyk",
   "Muzyka w tle",
     "MQTT",
     "Alarmy",
@@ -140,6 +142,10 @@ int& settingsBuzzerMenuIndex = ui.settingsBuzzerMenu.index;
 int& settingsBuzzerMenuCount = ui.settingsBuzzerMenu.count;
 const char* const*& settingsBuzzerMenuItems = ui.settingsBuzzerMenu.items;
 
+int& settingsTouchMenuIndex = ui.settingsTouchMenu.index;
+int& settingsTouchMenuCount = ui.settingsTouchMenu.count;
+const char* const*& settingsTouchMenuItems = ui.settingsTouchMenu.items;
+
 int& settingsBgMusicMenuIndex = ui.settingsBackgroundMusicMenu.index;
 int& settingsBgMusicMenuCount = ui.settingsBackgroundMusicMenu.count;
 const char* const*& settingsBgMusicMenuItems = ui.settingsBackgroundMusicMenu.items;
@@ -186,6 +192,7 @@ int& s_prevSettingsUiScreenIndex = ui.prevSettingsUiScreenIndex;
 AppState& s_alarmReturnState = ui.alarmReturnState;
 
 bool& buzzerEnabled = settings.buzzerEnabled;
+bool& touchTestEnabled = settings.touchTestEnabled;
 bool& backgroundMusicEnabled = settings.backgroundMusicEnabled;
 bool& mqttEnabled = settings.mqttEnabled;
 bool& showEpicIntro = settings.showEpicIntro;
@@ -213,6 +220,16 @@ static bool getBuzzerEnabled() {
 
 static void setBuzzerEnabled(bool enabled) {
   buzzerEnabled = enabled;
+}
+
+static bool getTouchTestEnabled() {
+  return touchTestEnabled;
+}
+
+static void setTouchTestEnabled(bool enabled) {
+  TouchBuzzerTest::setEnabled(enabled);
+  touchTestEnabled = TouchBuzzerTest::isEnabled();
+  settingsTouchMenuIndex = touchTestEnabled ? 0 : 1;
 }
 
 static bool getBackgroundMusicEnabled() {
@@ -315,6 +332,7 @@ struct ToggleSettingBinding {
   AppState state;
   int* menuIndex;
   int* menuCount;
+  bool (*getValue)();
   void (*setValue)(bool);
   const char* prefKey;
 };
@@ -341,11 +359,12 @@ static int clampMenuIndexSafe(int index, int count) {
 
 static ToggleSettingBinding* findToggleSettingBinding(AppState state) {
   static ToggleSettingBinding kBindings[] = {
-      {STATE_SETTINGS_PMS5003, &settingsPmsMenuIndex, &settingsPmsMenuCount, &setPms5003Enabled, nullptr},
-      {STATE_SETTINGS_BUZZER, &settingsBuzzerMenuIndex, &settingsBuzzerMenuCount, &setBuzzerEnabled, nullptr},
-      {STATE_SETTINGS_BACKGROUND_MUSIC, &settingsBgMusicMenuIndex, &settingsBgMusicMenuCount, &setBackgroundMusicEnabled, "menuMusic"},
-      {STATE_SETTINGS_MQTT, &settingsMqttMenuIndex, &settingsMqttMenuCount, &setMqttEnabled, "mqttEnabled"},
-      {STATE_SETTINGS_BOOT_INTRO, &settingsEpicIntroIndex, &settingsEpicIntroMenuCount, &setShowEpicIntro, "epicIntro"},
+      {STATE_SETTINGS_PMS5003, &settingsPmsMenuIndex, &settingsPmsMenuCount, &getPms5003Enabled, &setPms5003Enabled, nullptr},
+      {STATE_SETTINGS_BUZZER, &settingsBuzzerMenuIndex, &settingsBuzzerMenuCount, &getBuzzerEnabled, &setBuzzerEnabled, nullptr},
+      {STATE_SETTINGS_TOUCH, &settingsTouchMenuIndex, &settingsTouchMenuCount, &getTouchTestEnabled, &setTouchTestEnabled, "touchTest"},
+      {STATE_SETTINGS_BACKGROUND_MUSIC, &settingsBgMusicMenuIndex, &settingsBgMusicMenuCount, &getBackgroundMusicEnabled, &setBackgroundMusicEnabled, "menuMusic"},
+      {STATE_SETTINGS_MQTT, &settingsMqttMenuIndex, &settingsMqttMenuCount, &getMqttEnabled, &setMqttEnabled, "mqttEnabled"},
+      {STATE_SETTINGS_BOOT_INTRO, &settingsEpicIntroIndex, &settingsEpicIntroMenuCount, &getShowEpicIntro, &setShowEpicIntro, "epicIntro"},
   };
 
   for (size_t i = 0; i < (sizeof(kBindings) / sizeof(kBindings[0])); ++i) {
@@ -461,7 +480,8 @@ static bool handleSettingsConfirmClick() {
       toggle->setValue(value);
     }
     if (toggle->prefKey != nullptr) {
-      s_prefs.putBool(toggle->prefKey, value);
+      const bool persistedValue = (toggle->getValue != nullptr) ? toggle->getValue() : value;
+      s_prefs.putBool(toggle->prefKey, persistedValue);
     }
     returnToSettingsMenu();
     return true;
@@ -974,45 +994,50 @@ static bool handleSettingsMenuClick() {
       drawStatsSafe();
       break;
     case 2:
+      appState = STATE_SETTINGS_TOUCH;
+      settingsTouchMenuIndex = getTouchTestEnabled() ? 0 : 1;
+      drawStatsSafe();
+      break;
+    case 3:
       appState = STATE_SETTINGS_BACKGROUND_MUSIC;
       settingsBgMusicMenuIndex = getBackgroundMusicEnabled() ? 0 : 1;
       drawStatsSafe();
       break;
-    case 3:
+    case 4:
       appState = STATE_SETTINGS_MQTT;
       settingsMqttMenuIndex = getMqttEnabled() ? 0 : 1;
       drawStatsSafe();
       break;
-    case 4:
+    case 5:
       settingsAlarmMelodyPersistedIndex = clampMenuIndexSafe(AlarmMelodyPrefs::loadIndex(s_prefs), AlarmMelodies::kCount);
       settingsAlarmMelodyIndex = settingsAlarmMelodyPersistedIndex;
       s_prevSettingsAlarmMelodyIndex = settingsAlarmMelodyIndex;
       appState = STATE_SETTINGS_ALARM_MELODY;
       drawStatsSafe();
       break;
-    case 5:
+    case 6:
       appState = STATE_SETTINGS_SYNC;
       s_prevSettingsSyncMin = settingsSyncMinutes;
       drawStatsSafe();
       break;
-    case 6:
+    case 7:
       appState = STATE_SETTINGS_ROTATION;
       s_prevSettingsRotationSec = settingsRotationSec;
       drawStatsSafe();
       break;
-    case 7:
+    case 8:
       settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenIndex, settingsUiScreenCount);
       appState = STATE_SETTINGS_UI_SCREEN;
       settingsUiScreenIndex = clampMenuIndexSafe(settingsUiScreenPersistedIndex, settingsUiScreenCount);
       s_prevSettingsUiScreenIndex = settingsUiScreenIndex;
       drawStatsSafe();
       break;
-    case 8:
+    case 9:
       settingsEpicIntroIndex = getShowEpicIntro() ? 0 : 1;
       appState = STATE_SETTINGS_BOOT_INTRO;
       drawStatsSafe();
       break;
-    case 9:
+    case 10:
       appState = STATE_MENU;
       drawMenuSafe();
       break;
@@ -1036,6 +1061,7 @@ void ui_begin(const UI_Callbacks& callbacks) {
   bindMenu(ui.settingsMenu, kSettingsMenuItems, arrayCount(kSettingsMenuItems));
   bindMenu(ui.settingsPmsMenu, kToggleItems, arrayCount(kToggleItems));
   bindMenu(ui.settingsBuzzerMenu, kToggleItems, arrayCount(kToggleItems));
+  bindMenu(ui.settingsTouchMenu, kToggleItems, arrayCount(kToggleItems));
   bindMenu(ui.settingsBackgroundMusicMenu, kToggleItems, arrayCount(kToggleItems));
   bindMenu(ui.settingsMqttMenu, kToggleItems, arrayCount(kToggleItems));
   bindMenu(ui.settingsBootIntroMenu, kIntroItems, arrayCount(kIntroItems));
@@ -1184,6 +1210,7 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_SETTINGS_BACKGROUND_MUSIC:
       case STATE_SETTINGS_MQTT:
       case STATE_SETTINGS_BUZZER:
+      case STATE_SETTINGS_TOUCH:
       case STATE_SETTINGS_ALARM_MELODY:
         handleSettingsRotate(dir);
         break;

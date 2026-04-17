@@ -59,6 +59,7 @@ enum AppState {
   STATE_SETTINGS,              // Menu Ustawień (lista z >)
   STATE_SETTINGS_PMS5003,      // Ustawienia PMS5003 (włącz/wyłącz)
   STATE_SETTINGS_BUZZER,       // Ustawienia Buzera (włącz/wyłącz)
+  STATE_SETTINGS_TOUCH,        // Ustawienia DOTYK (włącz/wyłącz)
   STATE_SETTINGS_BACKGROUND_MUSIC, // Muzyka w tle (włącz/wyłącz)
   STATE_SETTINGS_MQTT,         // Ustawienia MQTT (włącz/wyłącz)
   STATE_SETTINGS_ALARM_MELODY, // Wybór melodii alarmu

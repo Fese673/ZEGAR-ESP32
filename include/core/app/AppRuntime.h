@@ -5,12 +5,12 @@
 
 #include "BoardPins.h"
 
-inline constexpr unsigned long CLOCK_TICK_MS = 1000UL;
-inline constexpr unsigned long ALARM_DURATION_MS = 60000UL;
-inline constexpr unsigned long STM32_UPDATE_MS = 500UL;
-inline constexpr unsigned long STM32_TIMEOUT_MS = 3000UL;
-inline constexpr unsigned long STOPER_DRAW_MS = 100UL;
-inline constexpr uint8_t BUZZER_PIN = BoardPins::kBuzzer;
+static constexpr unsigned long CLOCK_TICK_MS = 1000UL;
+static constexpr unsigned long ALARM_DURATION_MS = 60000UL;
+static constexpr unsigned long STM32_UPDATE_MS = 500UL;
+static constexpr unsigned long STM32_TIMEOUT_MS = 3000UL;
+static constexpr unsigned long STOPER_DRAW_MS = 100UL;
+static constexpr uint8_t BUZZER_PIN = BoardPins::kBuzzer;
 
 struct MainRuntimeState {
   bool bootDiagReprinted = false;

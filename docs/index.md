@@ -8,6 +8,7 @@ Documentation area for project reports and architecture notes.
 
 ## Reports
 - See [reports/task-map.md](reports/task-map.md) for the central task map, priorities, telemetry, and logging rules.
+- See [reports/ui-menu-map.md](reports/ui-menu-map.md) for the complete UI menu and screen map.
 
 ## Telemetry
 - See [telemetry/README.md](telemetry/README.md) for the runtime counter contract and the RAM snapshot profiler.

@@ -211,7 +211,7 @@ void updateSevenSeg() {
   const bool systemTimeValid = RtcSyncService::isSystemTimeValid();
   const bool clockSeeded = RtcSyncService::isClockSeeded();
   const bool timerPreviewVisible = (appState == STATE_TIMER && !timerRunning);
-  const bool alarmEditVisible = (appState == STATE_ALARM || appState == STATE_ALARM_EDIT);
+  const bool alarmEditVisible = (appState == STATE_ALARM_EDIT);
   const unsigned long nowMs = millis();
 
   static bool alarmBlinkVisible = true;
@@ -731,10 +731,10 @@ void drawMenu() {
       const char* text = nullptr;
       switch (mode) {
         case RADIO_STATE_WIFI:
-          text = "Tryb: WIFI";
+          text = "Tryb: BT";
           break;
         case RADIO_STATE_BT:
-          text = "Tryb: BT";
+          text = "Tryb: WIFI";
           break;
         case RADIO_STATE_TRANSITIONING:
         default:

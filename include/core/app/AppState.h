@@ -14,11 +14,8 @@ enum AppState {
   STATE_TANK_GAME,       // Gra Tank Game
   STATE_SET_TIME,
   STATE_TIMER,
-  STATE_ALARM,
   STATE_STOPER,
   STATE_DEBUG_STM32,
-  STATE_STATS_RESOURCES, // stan do wyświetlania zasobów systemu
-  STATE_WIFI_SYNC,
 
   // --- Statystyki ---
   STATE_STATS,          // Menu statystyk (lista z >)
@@ -71,7 +68,6 @@ enum AppState {
   // --- Budziki (alarmy) ---
   STATE_ALARMS_LIST,          // Lista budzików
   STATE_ALARM_EDIT,           // Edycja pojedynczego budzika
-  STATE_ALARM_DELETE,         // Potwierdzenie usunięcia budzika
 
   // --- PMS5003 szczegóły ---
   STATE_PMS5003_CF1_PM1,      // Szczegóły PM1.0 w CF=1

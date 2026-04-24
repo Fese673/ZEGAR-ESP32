@@ -1219,15 +1219,6 @@ void ui_handleEvent(EncoderEvent e) {
         adjustTime_internal(dir);
         break;
 
-      case STATE_ALARM:
-        if (editState == EDIT_HOURS) {
-          alarmHour = (alarmHour + dir + 24) % 24;
-        } else {
-          alarmMinute = (alarmMinute + dir + 60) % 60;
-        }
-        drawAlarmSafe();
-        break;
-
       case STATE_ALARMS_LIST:
         // Move selection up/down; last entry is [+] add new
         alarmsMenuIndex = constrain(alarmsMenuIndex + dir, 0, max(alarmsCount, 0));
@@ -1247,12 +1238,6 @@ void ui_handleEvent(EncoderEvent e) {
           // move cursor between CZAS(0), STATUS(1), USUN(2)
           alarmEditCursor = constrain(alarmEditCursor + dir, 0, 2);
         }
-        drawStatsSafe();
-        break;
-
-      case STATE_ALARM_DELETE:
-        // Reuse alarmsMenuIndex: 0 -> NO, 1 -> YES
-        alarmsMenuIndex = constrain(alarmsMenuIndex + dir, 0, 1);
         drawStatsSafe();
         break;
 
@@ -1370,19 +1355,6 @@ void ui_handleEvent(EncoderEvent e) {
       return;
     }
 
-    if (appState == STATE_ALARM) {
-      editState = static_cast<EditState>(editState + 1);
-      if (editState > EDIT_MINUTES) {
-        alarmEnabled = true;
-        appState     = STATE_HOME;
-        updateSevenSegSafe();
-        drawHomeSafe();
-      } else {
-        drawAlarmSafe();
-      }
-      return;
-    }
-
     if (appState == STATE_TIMER) {
       if (timerRunning) {
         // Click while running: stop countdown.
@@ -1486,18 +1458,6 @@ void ui_handleEvent(EncoderEvent e) {
         appState = STATE_ALARMS_LIST;
         drawStatsSafe();
       }
-      return;
-    }
-
-    if (appState == STATE_ALARM_DELETE) {
-      // click confirms deletion if selection is 'TAK' (we encoded selection in alarmsMenuIndex)
-      // Reuse alarmsMenuIndex: 0 -> NO, 1 -> YES
-      if (alarmsMenuIndex == 1) {
-        // delete selectedAlarmIndex
-        removeAlarmAt(selectedAlarmIndex);
-      }
-      appState = STATE_ALARMS_LIST;
-      drawStatsSafe();
       return;
     }
 
@@ -1678,12 +1638,6 @@ void ui_handleEvent(EncoderEvent e) {
       case STATE_ALARM_EDIT:
         // Edycja budzika -> powrót do listy (bez dodatkowego zapisu)
         appState = STATE_ALARMS_LIST;
-        drawStatsSafe();
-        return;
-
-      case STATE_ALARM_DELETE:
-        // Potwierdzenie usunięcia -> powrót do edycji
-        appState = STATE_ALARM_EDIT;
         drawStatsSafe();
         return;
 

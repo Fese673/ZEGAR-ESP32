@@ -14,6 +14,7 @@
 #include "BootIntroService.h"
 #include "ENS160AHT21Screen.h"
 #include "ENS160AHT21Sensor.h"
+#include "Esptogution.h"
 #include "HomeRuntime.h"
 #include "LCDIcons.h"
 #include "LCDMirror.h"
@@ -24,9 +25,9 @@
 #include "PMS_Czujnik.h"
 #include "RadioModeSwitch.h"
 #include "RamTelemetry.h"
+#include "STM32_Data.h"
 #include "touch_buzzer_test.h"
 #include "RtcSyncService.h"
-#include "STM32_Data.h"
 #include "SecretsConfig.h"
 #include "StatsManager.h"
 #include "UIState.h"
@@ -46,11 +47,10 @@ static constexpr char TAG_NET[] = "NET";
 
 constexpr unsigned long SETUP_DELAY_MS = 100UL;
 constexpr long UART_BAUD = 921600;
+constexpr uint32_t GUITION_BAUD = 115200UL;
 constexpr uint8_t ENC_CLK = BoardPins::kEncoderClk;
 constexpr uint8_t ENC_DT = BoardPins::kEncoderDt;
 constexpr uint8_t ENC_SW = BoardPins::kEncoderSw;
-
-HardwareSerial& uart = Serial2;
 uint32_t s_heapBaseline = 0;
 
 String s_wifiSsid = PROJECT_WIFI_SSID;
@@ -256,7 +256,8 @@ void initUiAndInput() {
 void initSensors(RuntimeContext& ctx) {
   UIState::State& uiState = UIState::mutableState();
 
-  STM32data_begin(uart, UART_BAUD, BoardPins::kStm32UartRx, BoardPins::kStm32UartTx);
+  STM32data_begin(BoardPins::kStm32UartRx, BoardPins::kStm32UartTx);
+  EsptoGuition::begin(Serial2, GUITION_BAUD, BoardPins::kGuitionUartRx, BoardPins::kGuitionUartTx);
 
   PMS5003Sensor::begin();
   ENS160AHT21Screen::resetRuntimeData();

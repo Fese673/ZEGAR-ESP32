@@ -1,6 +1,8 @@
 #include "UI_Controller.h"
 #include <Arduino.h>
+#include "Esptogution.h"
 #include "AppSettings.h"
+
 #include "AppState.h"
 #include "ModeManager.h"
 #include "AudioBT.h"
@@ -220,6 +222,7 @@ static bool getBuzzerEnabled() {
 
 static void setBuzzerEnabled(bool enabled) {
   buzzerEnabled = enabled;
+  EsptoGuition::sendSettings();
 }
 
 static bool getTouchTestEnabled() {
@@ -246,6 +249,7 @@ static bool getMqttEnabled() {
 
 static void setMqttEnabled(bool enabled) {
   mqttEnabled = enabled;
+  EsptoGuition::sendSettings();
 }
 
 static bool getShowEpicIntro() {

@@ -10,6 +10,7 @@
 #define STM32_DATA_H
 
 #include <Arduino.h>
+#include <SoftwareSerial.h>  // EspSoftwareSerial on ESP32
 
 //--- Dane od STM32 (aktualizowane przez STM32data_update) ---
 extern int bpmNumber;        // beats per minute
@@ -17,7 +18,7 @@ extern int spo2Number;       // SpO2 (%)
 extern bool stmDataUpdated;  // ustawiana, gdy pojawią się nowe wartości
 
 //--- Inicjalizacja połączenia (wywołać raz w setup) ---
-void STM32data_begin(HardwareSerial &serialPort, uint32_t baudRate, int rxPin, int txPin);
+void STM32data_begin(int rxPin, int txPin, uint32_t baudRate = 9600UL);
 
 //--- Obsługa odbioru - wywoływać cyklicznie z loop() ---
 void STM32data_update();

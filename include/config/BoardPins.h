@@ -13,6 +13,10 @@ constexpr uint32_t kI2cClockHz = 400000UL;
 constexpr uint8_t kPms5003Rx = 34;
 constexpr uint8_t kPms5003Tx = 13;
 
+// --- Guition UART ---
+constexpr uint8_t kGuitionUartRx = 35;
+constexpr uint8_t kGuitionUartTx = 19;
+
 // --- Wyświetlacz 7-segmentowy  ---
 constexpr uint8_t kSevenSegData = 23;
 constexpr uint8_t kSevenSegClock = 18;
@@ -24,7 +28,7 @@ constexpr uint8_t kEncoderDt = 26;
 constexpr uint8_t kEncoderSw = 27;
 
 // --- Buzzer ---
-constexpr uint8_t kBuzzer = 19;
+constexpr uint8_t kBuzzer = 2;
 
 // --- Temporary touch test on GPIO4 ---
 constexpr uint8_t kTouchTestPad = 4;

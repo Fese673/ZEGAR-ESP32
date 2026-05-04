@@ -76,7 +76,7 @@ constexpr BaseType_t kCore = CORE_APP;
 constexpr UBaseType_t kPriority = 5;
 
 // WiFi init uses a larger stack because the driver bring-up path is heavy.
-constexpr size_t kStackBytes = 4096;
+constexpr size_t kStackBytes = 8192;
 
 }  // namespace WifiInitTask
 

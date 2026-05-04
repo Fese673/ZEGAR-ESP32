@@ -10,7 +10,8 @@ unsigned long stmLastReceivedMs = 0;
 unsigned long stmFramesReceived = 0;
 
 // Wskazanie potrzebnego portu (ustawiany w begin)
-HardwareSerial * stmSerial = nullptr; 
+static Stream *stmSerial = nullptr;
+static EspSoftwareSerial::UART *stmSoftwareSerial = nullptr;
 
 // Bufor do składania przychodzącej linii (bez dynamicznego String)
 static const size_t RECV_BUF_SIZE = 128;
@@ -25,9 +26,11 @@ static unsigned long lastByteReceiveMs = 0;
 // Wybór obywa sie dzięki HardwareSerial & serialPort który przekazuje port jako referencje 
 // Dzięki takiemu rozwiąznia nie musimy dawać np Serial2 na stałe 
 // Wskazanie referencji zajmuje sie znak [&]
-void STM32data_begin(HardwareSerial &serialPort, uint32_t baudRate, int rxPin, int txPin) {
-    stmSerial = &serialPort;
-    stmSerial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
+void STM32data_begin(int rxPin, int txPin, uint32_t baudRate) {
+    static EspSoftwareSerial::UART serial(rxPin, txPin);
+    stmSoftwareSerial = &serial;
+    stmSerial = stmSoftwareSerial;
+    stmSoftwareSerial->begin(baudRate, SWSERIAL_8N1);
     // zerowanie bufora
     recvIndex = 0;
     recvBuf[0] = '\0';

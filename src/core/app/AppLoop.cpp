@@ -14,6 +14,7 @@
 #include "ClockAlarmService.h"
 #include "ENS160AHT21Sensor.h"
 #include "Encoder.h"
+#include "Esptogution.h"
 #include "HomeRuntime.h"
 #include "LCDMirror.h"
 #include "LoopBaselineTelemetry.h"
@@ -252,6 +253,7 @@ void serviceComms(RuntimeContext& ctx, unsigned long nowMs) {
   LoopBaselineTelemetry::recordNetworkUpdateUs(static_cast<uint32_t>(micros() - netStartUs));
 
   RtcSyncService::processPendingWrite();
+  EsptoGuition::update();
 
   if (ctx.mqttEnabled && NetworkOrchestrator::isMqttInitialized()) {
     static unsigned long lastMqttPublish = 0;
@@ -277,7 +279,7 @@ void serviceComms(RuntimeContext& ctx, unsigned long nowMs) {
   }
 }
 
-void serviceStm32AndStopwatch(RuntimeContext& ctx, unsigned long nowMs) {
+void serviceExternalDisplayAndStopwatch(RuntimeContext& ctx, unsigned long nowMs) {
   if (appState == STATE_DEBUG_STM32 && (nowMs - ctx.state.lastSTM32Update >= STM32_UPDATE_MS)) {
     ctx.state.lastSTM32Update = nowMs;
     STM32data_update();
@@ -333,7 +335,7 @@ void runLoop() {
   serviceUiRefresh(nowMs);
   serviceDiagnostics(nowMs);
   serviceComms(ctx, nowMs);
-  serviceStm32AndStopwatch(ctx, nowMs);
+  serviceExternalDisplayAndStopwatch(ctx, nowMs);
   serviceDiagnosticsTail(nowMs);
 
   LoopBaselineTelemetry::onLoopEnd(nowMs, loopStartUs, micros());

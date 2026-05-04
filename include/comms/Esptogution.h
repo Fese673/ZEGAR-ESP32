@@ -10,6 +10,8 @@ constexpr uint8_t kFrameStart = 0xAA;
 constexpr uint8_t kTypeWeather = 0x01;
 constexpr uint8_t kTypePms = 0x02;
 constexpr uint8_t kTypeTime = 0x03;
+constexpr uint8_t kTypeSettings = 0x04;
+constexpr uint8_t kTypeSetSettings = 0x05;
 constexpr uint8_t kTypeRequest = 0x10;
 constexpr uint8_t kTypeConfig = 0x11;
 constexpr uint8_t kTypeAck = 0xFF;
@@ -27,5 +29,7 @@ void setBroadcastIntervalMs(uint32_t intervalMs);
 uint32_t getBroadcastIntervalMs();
 
 bool isReady();
+
+void sendSettings(uint8_t sequence = 0);
 
 } // namespace EsptoGuition

@@ -214,6 +214,7 @@ static bool getPms5003Enabled() {
 static void setPms5003Enabled(bool enabled) {
   PMS5003Sensor::setEnabled(enabled);
   pmsScreenDirty = true;
+  EsptoGuition::sendSettings();
 }
 
 static bool getBuzzerEnabled() {
@@ -233,6 +234,7 @@ static void setTouchTestEnabled(bool enabled) {
   TouchBuzzerTest::setEnabled(enabled);
   touchTestEnabled = TouchBuzzerTest::isEnabled();
   settingsTouchMenuIndex = touchTestEnabled ? 0 : 1;
+  EsptoGuition::sendSettings();
 }
 
 static bool getBackgroundMusicEnabled() {
@@ -241,6 +243,7 @@ static bool getBackgroundMusicEnabled() {
 
 static void setBackgroundMusicEnabled(bool enabled) {
   backgroundMusicEnabled = enabled;
+  EsptoGuition::sendSettings();
 }
 
 static bool getMqttEnabled() {

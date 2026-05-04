@@ -192,8 +192,12 @@ void initPersistenceAndConfig(RuntimeContext& ctx) {
   appSettings.touchTestEnabled = s_prefs.isKey("touchTest") ? s_prefs.getBool("touchTest", true) : true;
   appSettings.backgroundMusicEnabled = s_prefs.getBool("menuMusic", true);
   uiState.settingsBackgroundMusicMenu.index = appSettings.backgroundMusicEnabled ? 0 : 1;
+  appSettings.buzzerEnabled = s_prefs.getBool("buzzerEnabled", true);
   appSettings.showEpicIntro = s_prefs.getBool("epicIntro", true);
   uiState.settingsBootIntroMenu.index = appSettings.showEpicIntro ? 0 : 1;
+  
+  bool pmsEnabled = s_prefs.getBool("pmsEnabled", true);
+  PMS5003Sensor::setEnabled(pmsEnabled);
 
   RadioModeSwitch::begin();
   restoreRtcHandoffTime(ctx, millis(), false);

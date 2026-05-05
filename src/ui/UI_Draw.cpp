@@ -427,6 +427,7 @@ static bool isAnyAlarmArmed() {
 // --- Ekran główny ---
 static const char* const polishMonths[] PROGMEM = {
     "STY", "LUT", "MAR", "KWI", "MAJ", "CZE",
+    "LIP", "SIE", "WRZ", "PAŹ", "LIS", "GRU",
 };
 
 static void padRightTo20(char* line) {

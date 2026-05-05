@@ -14,7 +14,7 @@
 #include "BootIntroService.h"
 #include "ENS160AHT21Screen.h"
 #include "ENS160AHT21Sensor.h"
-#include "Esptogution.h"
+#include "comms/esp_to_gution/Esptogution.h"
 #include "HomeRuntime.h"
 #include "LCDIcons.h"
 #include "LCDMirror.h"
@@ -36,6 +36,7 @@
 #include "WiFiSync.h"
 #include "i2c/SharedBus.h"
 #include "Encoder.h"
+#include "meteoSync.h"
 
 namespace AppBoot {
 namespace {
@@ -211,35 +212,39 @@ void initUiAndInput() {
 #if UART_LCD_MIRROR
   lcdMirror.begin();
 #endif
-  lcdFrame.begin();
+   lcdFrame.begin();
 
-  lcd.setExecTimes(37, 1520);
-  lcd.init();
-  LCDIcons::resetPaletteCache();
+   lcd.setExecTimes(37, 1520);
+   lcd.init();
+   LCDIcons::resetPaletteCache();
 
-  const bool i2cClockApplied = I2cShared::initMaster(&Wire,
-                                                     BoardPins::kI2cSda,
-                                                     BoardPins::kI2cScl,
-                                                     BoardPins::kI2cClockHz,
-                                                     true);
-  LOG_I(TAG_I2C,
-        "Clock readback requested_hz=%lu actual_hz=%lu status=%s",
-        static_cast<unsigned long>(BoardPins::kI2cClockHz),
-        static_cast<unsigned long>(Wire.getClock()),
-        i2cClockApplied ? "applied" : "fallback_mismatch");
-  RAM_CHECKPOINT("I2C_READY");
+   const bool i2cClockApplied = I2cShared::initMaster(&Wire,
+                                                      BoardPins::kI2cSda,
+                                                      BoardPins::kI2cScl,
+                                                      BoardPins::kI2cClockHz,
+                                                      true);
+   LOG_I(TAG_I2C,
+         "Clock readback requested_hz=%lu actual_hz=%lu status=%s",
+         static_cast<unsigned long>(BoardPins::kI2cClockHz),
+         static_cast<unsigned long>(Wire.getClock()),
+         i2cClockApplied ? "applied" : "fallback_mismatch");
+   RAM_CHECKPOINT("I2C_READY");
 
-  RtcSyncService::tryRestoreSystemTimeFromDs3231(hours, minutes, seconds, lastTick);
+   RtcSyncService::tryRestoreSystemTimeFromDs3231(hours, minutes, seconds, lastTick);
 
-  lcdBacklightSafe();
-  lcdClearSafe();
-  lcdFrame.syncToCurrentFrame();
-  LCDIcons::loadPalette(lcd, LCDIcons::Palette::Home);
+   lcdBacklightSafe();
+   lcdClearSafe();
+   lcdFrame.syncToCurrentFrame();
+   LCDIcons::loadPalette(lcd, LCDIcons::Palette::Home);
 
-  BootIntroService::Callbacks introCallbacks;
-  introCallbacks.backlightOn = lcdBacklightSafe;
-  introCallbacks.backlightOff = lcdNoBacklightSafe;
-  BootIntroService::begin(introCallbacks, BUZZER_PIN);
+   // Buzzer pin must be configured as OUTPUT BEFORE any tone() calls
+   pinMode(BUZZER_PIN, OUTPUT);
+   digitalWrite(BUZZER_PIN, LOW);
+
+   BootIntroService::Callbacks introCallbacks;
+   introCallbacks.backlightOn = lcdBacklightSafe;
+   introCallbacks.backlightOff = lcdNoBacklightSafe;
+   BootIntroService::begin(introCallbacks, BUZZER_PIN);
 
   const bool skipIntroAfterModeHandoff = RadioModeSwitch::wasBootHandoffDetected();
   if (showEpicIntro && !skipIntroAfterModeHandoff) {
@@ -248,9 +253,8 @@ void initUiAndInput() {
     LOG_I(TAG_MAIN, "Boot intro skipped reason=radio_mode_handoff_restart");
   }
 
-  encoder_begin(ENC_CLK, ENC_DT, ENC_SW);
-  pinMode(BUZZER_PIN, OUTPUT);
-  TouchBuzzerTest::begin(BoardPins::kTouchTestPad, BUZZER_PIN);
+   encoder_begin(ENC_CLK, ENC_DT, ENC_SW);
+   TouchBuzzerTest::begin(BoardPins::kTouchTestPad, BUZZER_PIN);
   TouchBuzzerTest::setEnabled(AppSettings::state().touchTestEnabled);
   appSettings.touchTestEnabled = TouchBuzzerTest::isEnabled();
   uiState.settingsTouchMenu.index = appSettings.touchTestEnabled ? 0 : 1;
@@ -393,6 +397,7 @@ void runSetup() {
   initSensors(ctx);
   initComms(ctx);
   finalizeStartup();
+  meteoSync::begin();
 }
 
 }  // namespace AppBoot

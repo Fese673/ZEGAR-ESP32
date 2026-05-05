@@ -30,13 +30,16 @@ Do tego pliku należy dodawać zawsze todo jeśli sie tylko zauważy problem.
 - [ ] Zamienić rozproszony stan menu PMS5003/ustawień na jeden ustrukturyzowany model UI.
 - [ ] Usunąć lub ograniczyć duży zestaw globalnych zmiennych stanu pochodzących z `main.cpp`.
 - [ ] Przejrzeć użycie `delayMicroseconds(5)` w `src/ui/UI_Draw.cpp` i rozważyć hardware SPI / dedykowany task.
-- [ ] Zweryfikować, czy `src/drivers/I2C_bus_shared.cpp` nie zawiera pola półblokującego oczekiwania (polling `vTaskDelay(1)` w aktywnej ścieżce).
-- [ ] Ocenić zadanie `src/comms/WiFiSync.cpp` pod kątem ryzyka blokowania zasobów podczas `vTaskDelay(50)` i inicjalizacji Wi-Fi.
-- [ ] Przejrzeć `src/input/Encoder.cpp` pod kątem task pollingowego i możliwych problemów z latencją enkodera.
+- [x] Zweryfikować, czy `src/drivers/I2C_bus_shared.cpp` nie zawiera pola półblokującego oczekiwania. # zweryfikowano, poprawiono mechanizm współdzielenia
+- [x] Ocenić zadanie `src/comms/WiFiSync.cpp` pod kątem ryzyka blokowania i wyścigów. # wdrożono std::atomic i bezpieczne usuwanie tasków
+- [x] Przejrzeć `src/input/Encoder.cpp` pod kątem task pollingowego i wyścigów danych. # wdrożono std::atomic dla s_buttonPressStart
 - [ ] Sprawdzić użycie `delay_ms()` / `vTaskDelay(1)` oraz busy-wait w `src/bluetooth/BluetoothA2DPCommon.cpp` dla scenariuszy audio/recovery.
 - [ ] Ocenić czy w `src/bluetooth/BluetoothA2DPSource.cpp` i pokrewnych modułach alokacje `malloc`/`free` są bezpieczne lub dają błędy przy niskiej pamięci.
 - [ ] Zidentyfikować miejsca, w których `AppState` i `EditState` są modyfikowane globalnie bez centralnego modelu.
 - [ ] Uporządkować raporty i dokumentację tak, by łatwo dodawać kolejne pozycje.
+- [ ] **Optymalizacja EsptoGuitionTransport**: Zredukować użycie stosu (obecnie ~900B) poprzez przeniesienie buforów do pamięci statycznej/sterty.
+- [ ] **Rozszerzenie Meteo**: Dodać temperaturę odczuwalną, zachmurzenie oraz wschód/zachód słońca do pobieranych danych.
+- [ ] **Stabilność NVS**: Zamienić `ESP_ERROR_CHECK` przy operacjach na NVS na bezpieczną obsługę błędów.
 
 ## Notatki
 - Plik został przygotowany jako skalowalna lista problemów, a nie jako pełny backlog z priorytetami.

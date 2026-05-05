@@ -1,6 +1,8 @@
 #include "Encoder.h"
 #include "TaskConfig.h"
 
+#include <atomic>
+
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -43,7 +45,7 @@ static const unsigned long SEQUENCE_TIMEOUT_MS = 100; // Reset sekwencji po 100m
 // PRZYCISK - ZMIENNE STANU
 // ============================================================================
 static int  s_lastSWRaw          = HIGH;
-static unsigned long s_buttonPressStart  = 0;
+static std::atomic<unsigned long> s_buttonPressStart{0};
 static bool s_buttonWasLongPress = false;
 static unsigned long s_lastButtonAction  = 0;
 static unsigned long s_longPressCooldown = 0; // Ochrona przed powtarzalnością
@@ -107,7 +109,7 @@ void encoder_begin(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
 
   // Inicjalizuj stan przycisku
   s_lastSWRaw         = digitalRead(s_swPin);
-  s_buttonPressStart  = 0;
+    s_buttonPressStart.store(0, std::memory_order_relaxed);
   s_buttonWasLongPress = false;
   s_lastButtonAction  = 0;
   s_longPressCooldown = 0;
@@ -269,13 +271,13 @@ static EncoderEvent buttonCheck(const unsigned long now) {
 
   // Początek wciśnięcia (HIGH → LOW)
   if (s_lastSWRaw == HIGH && swRaw == LOW) {
-    s_buttonPressStart   = now;
+    s_buttonPressStart.store(now, std::memory_order_relaxed);
     s_buttonWasLongPress = false;
   }
 
   // Detekcja długiego kliknięcia (przycisk wciąż wciśnięty)
-  if (swRaw == LOW && !s_buttonWasLongPress && s_buttonPressStart != 0) {
-    const bool longPressReached = (now - s_buttonPressStart) >= s_longPressMs;
+  if (swRaw == LOW && !s_buttonWasLongPress && s_buttonPressStart.load(std::memory_order_relaxed) != 0) {
+    const bool longPressReached = (now - s_buttonPressStart.load(std::memory_order_relaxed)) >= s_longPressMs;
     const bool debounceOk       = (now - s_lastButtonAction) >= s_debounceMs;
 
     if (longPressReached && debounceOk) {
@@ -362,9 +364,10 @@ unsigned long encoder_button_hold_ms() {
     return 0;
   }
 
-  if (digitalRead(s_swPin) != LOW || s_buttonPressStart == 0) {
+  const unsigned long pressStart = s_buttonPressStart.load(std::memory_order_relaxed);
+  if (digitalRead(s_swPin) != LOW || pressStart == 0) {
     return 0;
   }
 
-  return millis() - s_buttonPressStart;
+  return millis() - pressStart;
 }

@@ -1,7 +1,9 @@
 #include "EsptoGuitionState.h"
+#include "Config.h"
 #include <math.h>
 #include <string.h>
 #include <Arduino.h>
+#include <WiFi.h>
 #include "AppLog.h"
 #include "BMP280Screen.h"
 #include "ENS160AHT21Screen.h"
@@ -12,11 +14,37 @@
 #include <Preferences.h>
 #include "UIState.h"
 #include "UI_Draw.h"
+#include "core/telemetry/RamTelemetry.h"
+#include "core/telemetry/RuntimeTelemetry.h"
+
+extern uint8_t heapUsageCore0Percent;
+extern uint8_t heapUsageCore1Percent;
+extern uint32_t ramFreeBytes;
+extern uint32_t ramTotalBytes;
+extern uint32_t ramDmaFreeBytes;
+extern uint32_t flashFreeBytes;
 
 namespace EsptoGuition {
 namespace {
 
-constexpr bool kUseSyntheticPayloads = true;
+using namespace Config;
+
+struct SyntheticWeatherState {
+  int16_t temperatureCx100 = 2200;
+  uint16_t humidityPctX100 = 5000;
+  uint16_t pressureHpaX10 = 10130;
+  unsigned long lastUpdateMs = 0;
+};
+
+struct SyntheticPmsState {
+  uint16_t pm01 = 10;
+  uint16_t pm25 = 25;
+  uint16_t pm10 = 40;
+  unsigned long lastUpdateMs = 0;
+};
+
+SyntheticWeatherState s_weatherState;
+SyntheticPmsState s_pmsState;
 
 void seedSyntheticRandom() {
   static bool s_seeded = false;
@@ -26,43 +54,55 @@ void seedSyntheticRandom() {
   }
 }
 
-int16_t randomTemperatureCx100() {
-  return static_cast<int16_t>(random(-400, 3801));
-}
-
-uint16_t randomHumidityPctX100() {
-  return static_cast<uint16_t>(random(2000, 9001));
-}
-
-uint16_t randomPressureHpaX10() {
-  return static_cast<uint16_t>(random(9800, 10461));
-}
-
-uint32_t randomSampleAgeMs() {
-  return static_cast<uint32_t>(random(0, 120000));
+template<typename T>
+T changeByPercent(T value, float percent, int minVal, int maxVal) {
+  float delta = static_cast<float>(value) * (percent / 100.0f);
+  int change = random(-static_cast<int>(delta), static_cast<int>(delta) + 1);
+  int newValue = static_cast<int>(value) + change;
+  if (newValue < minVal) newValue = minVal;
+  if (newValue > maxVal) newValue = maxVal;
+  return static_cast<T>(newValue);
 }
 
 void buildSyntheticWeatherPayload(WeatherPayload &out) {
-  seedSyntheticRandom();
-  out.temperatureCx100 = randomTemperatureCx100();
-  out.humidityPctX100 = randomHumidityPctX100();
-  out.pressureHpaX10 = randomPressureHpaX10();
-  out.sampleAgeMs = randomSampleAgeMs();
+  unsigned long nowMs = millis();
+
+  if (nowMs - s_weatherState.lastUpdateMs >= Config::kSyntheticUpdateIntervalMs) {
+    seedSyntheticRandom();
+    s_weatherState.temperatureCx100 = changeByPercent(s_weatherState.temperatureCx100, Config::kSyntheticChangePercent, -400, 3800);
+    s_weatherState.humidityPctX100 = changeByPercent(s_weatherState.humidityPctX100, Config::kSyntheticChangePercent, 0, 10000);
+    s_weatherState.pressureHpaX10 = changeByPercent(s_weatherState.pressureHpaX10, Config::kSyntheticChangePercent, 8700, 10840);
+    s_weatherState.lastUpdateMs = nowMs;
+  }
+
+  out.temperatureCx100 = s_weatherState.temperatureCx100;
+  out.humidityPctX100 = s_weatherState.humidityPctX100;
+  out.pressureHpaX10 = s_weatherState.pressureHpaX10;
+  out.sampleAgeMs = random(0, 5000);
   out.flags = 0x07U;
 }
 
 void buildSyntheticPmsPayload(PmsPayload &out) {
-  seedSyntheticRandom();
-  out.pm01 = static_cast<uint16_t>(random(0, 85));
-  out.pm25 = static_cast<uint16_t>(random(0, 150));
-  out.pm10 = static_cast<uint16_t>(random(0, 180));
-  out.count0p3 = static_cast<uint16_t>(random(0, 5000));
-  out.count0p5 = static_cast<uint16_t>(random(0, 4000));
-  out.count1p0 = static_cast<uint16_t>(random(0, 3000));
-  out.count2p5 = static_cast<uint16_t>(random(0, 2000));
-  out.count5p0 = static_cast<uint16_t>(random(0, 1000));
-  out.count10p0 = static_cast<uint16_t>(random(0, 500));
-  out.sampleAgeMs = randomSampleAgeMs();
+  unsigned long nowMs = millis();
+
+  if (nowMs - s_pmsState.lastUpdateMs >= Config::kSyntheticUpdateIntervalMs) {
+    seedSyntheticRandom();
+    s_pmsState.pm01 = changeByPercent(s_pmsState.pm01, Config::kSyntheticChangePercent, 0, 200);
+    s_pmsState.pm25 = changeByPercent(s_pmsState.pm25, Config::kSyntheticChangePercent, 0, 300);
+    s_pmsState.pm10 = changeByPercent(s_pmsState.pm10, Config::kSyntheticChangePercent, 0, 400);
+    s_pmsState.lastUpdateMs = nowMs;
+  }
+
+  out.pm01 = s_pmsState.pm01;
+  out.pm25 = s_pmsState.pm25;
+  out.pm10 = s_pmsState.pm10;
+  out.count0p3 = static_cast<uint16_t>(random(100, 3000));
+  out.count0p5 = static_cast<uint16_t>(random(50, 2000));
+  out.count1p0 = static_cast<uint16_t>(random(20, 1000));
+  out.count2p5 = static_cast<uint16_t>(random(10, 500));
+  out.count5p0 = static_cast<uint16_t>(random(5, 200));
+  out.count10p0 = static_cast<uint16_t>(random(0, 100));
+  out.sampleAgeMs = random(0, 5000);
   out.flags = 0x01U;
 }
 
@@ -206,6 +246,43 @@ bool buildTimePayload(TimePayload &out) {
   return true;
 }
 
+bool buildWifiPayload(WifiPayload &out) {
+  out.connected = (WiFi.status() == WL_CONNECTED);
+  out.rssi = out.connected ? WiFi.RSSI() : 0;
+  if (out.connected) {
+    IPAddress ip = WiFi.localIP();
+    out.ip[0] = ip[0];
+    out.ip[1] = ip[1];
+    out.ip[2] = ip[2];
+    out.ip[3] = ip[3];
+  } else {
+    out.ip[0] = 0;
+    out.ip[1] = 0;
+    out.ip[2] = 0;
+    out.ip[3] = 0;
+  }
+  return true;
+}
+
+bool buildSystemResourcesPayload(SystemResourcesPayload &out) {
+  out.freeRam = ramFreeBytes;
+  out.heapRam = ramTotalBytes;
+  out.dmaRam = ramDmaFreeBytes;
+  out.core0Cpu = heapUsageCore0Percent;
+  out.core1Cpu = heapUsageCore1Percent;
+  out.freeFlash = flashFreeBytes;
+  out.usedFlash = ESP.getSketchSize();
+
+  const RuntimeTelemetry::Snapshot rt = RuntimeTelemetry::snapshot();
+  out.underrunsAudio = static_cast<uint16_t>(rt.audio_underruns);
+  out.overflowAudio = static_cast<uint16_t>(rt.audio_overflows);
+  out.dropsAudio = static_cast<uint16_t>(rt.audio_drops);
+  out.errorsI2c = static_cast<uint16_t>(rt.i2c_errors);
+  out.timeoutsI2c = static_cast<uint16_t>(rt.i2c_timeouts);
+
+  return true;
+}
+
 void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength) {
   if (payloadLength >= 5U) {
     AppSettings::State& appSettings = AppSettings::mutableState();
@@ -229,7 +306,6 @@ void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength) {
     uiState.settingsTouchMenu.index = newTouch ? 0 : 1;
     uiState.settingsBackgroundMusicMenu.index = newMusic ? 0 : 1;
     uiState.settingsPmsMenu.index = newPms ? 0 : 1;
-    requestUiFullRedraw();
 
     Preferences localPrefs;
     localPrefs.begin("zegar", false);
@@ -238,7 +314,16 @@ void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength) {
     localPrefs.putBool("touchTest", newTouch);
     localPrefs.putBool("menuMusic", newMusic);
     localPrefs.putBool("pmsEnabled", newPms);
+
+    if (payloadLength >= 6U) {
+      int newMelodyIndex = payload[5];
+      appSettings.alarmMelodyIndex = newMelodyIndex;
+      uiState.settingsAlarmMelodyMenu.index = newMelodyIndex;
+      localPrefs.putUShort("alarmMelody", (uint16_t)newMelodyIndex);
+    }
+
     localPrefs.end();
+    requestUiFullRedraw();
   }
 }
 

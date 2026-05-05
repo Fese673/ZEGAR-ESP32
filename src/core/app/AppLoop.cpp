@@ -14,7 +14,7 @@
 #include "ClockAlarmService.h"
 #include "ENS160AHT21Sensor.h"
 #include "Encoder.h"
-#include "Esptogution.h"
+#include "comms/esp_to_gution/Esptogution.h"
 #include "HomeRuntime.h"
 #include "LCDMirror.h"
 #include "LoopBaselineTelemetry.h"
@@ -36,6 +36,7 @@
 #include "UIState.h"
 #include "UI_Controller.h"
 #include "UI_Draw.h"
+#include "meteoSync.h"
 
 namespace AppLoop {
 namespace {
@@ -254,6 +255,7 @@ void serviceComms(RuntimeContext& ctx, unsigned long nowMs) {
 
   RtcSyncService::processPendingWrite();
   EsptoGuition::update();
+  meteoSync::update();
 
   if (ctx.mqttEnabled && NetworkOrchestrator::isMqttInitialized()) {
     static unsigned long lastMqttPublish = 0;

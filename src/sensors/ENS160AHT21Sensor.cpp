@@ -14,6 +14,7 @@
 
 #include "AHTxx.h"
 #include "ENS160AHT21Screen.h"
+#include "I2C_bus_shared.h"
 #include "TemperatureConfig.h"
 
 namespace {
@@ -189,12 +190,24 @@ bool tryInitENS160AtAddress(uint8_t address) {
     s_ens160.begin(&Wire, address);
 
     for (uint8_t attempt = 0; attempt < ENS160_INIT_RETRIES; ++attempt) {
-        if (s_ens160.init()) {
+        if (!I2cShared::lock(1000)) {
+            return false;
+        }
+        const bool initOk = s_ens160.init();
+        I2cShared::unlock();
+
+        if (initOk) {
             s_ens160Address = address;
             s_ens160ErrorStreak = 0;
             s_pendingValidity = 0xFF;
             s_pendingValidityCount = 0;
-            return s_ens160.startStandardMeasure() == RESULT_OK;
+
+            if (!I2cShared::lock(1000)) {
+                return false;
+            }
+            const bool measureOk = s_ens160.startStandardMeasure() == RESULT_OK;
+            I2cShared::unlock();
+            return measureOk;
         }
 
         if ((attempt + 1) < ENS160_INIT_RETRIES) {
@@ -224,7 +237,12 @@ void updateClimateData() {
         return;
     }
 
+    if (!I2cShared::lock(1000)) {
+        return;
+    }
     const bool newData = s_aht21.update();
+    I2cShared::unlock();
+
     const bool freshData = s_aht21.hasFreshData(AHT_DATA_MAX_AGE_MS);
     const float temperature = s_aht21.getTemperature();
     const float humidity = s_aht21.getHumidity();
@@ -245,12 +263,14 @@ void updateClimateData() {
         s_hasClimateSample = true;
 
         if (newData && s_ens160Present) {
-            // Use compensated temperature when writing compensation to ENS160
-            const uint16_t tempRaw = Ens16x_CalcTempInFromCelsius(s_lastTemperature);
-            const uint16_t humRaw = Ens16x_CalcRhIn(humidity);
-            Result compResult = s_ens160.writeCompensation(tempRaw, humRaw);
-            if (compResult != RESULT_OK) {
-                LOG_E(TAG, "Compensation write failed code=%d", (int)compResult);
+            if (I2cShared::lock(1000)) {
+                const uint16_t tempRaw = Ens16x_CalcTempInFromCelsius(s_lastTemperature);
+                const uint16_t humRaw = Ens16x_CalcRhIn(humidity);
+                const Result compResult = s_ens160.writeCompensation(tempRaw, humRaw);
+                I2cShared::unlock();
+                if (compResult != RESULT_OK) {
+                    LOG_E(TAG, "Compensation write failed code=%d", (int)compResult);
+                }
             }
         }
 
@@ -282,15 +302,22 @@ void begin() {
         s_runtimeState = ENS160_STATE_INIT_STARTUP;
     }
 
-    if (s_aht21.begin(I2C_SDA_PIN, I2C_SCL_PIN)) {
-        s_aht21.setKalmanParams(0.003f, 0.15f, 0.01f, 1.0f);
-        s_aht21.setSelfHeatingCompensation(0.1f);
-        s_aht21.setMeasurementInterval(3000);
-        s_ahtPresent = true;
-        LOG_I(TAG, "component=AHT21 action=init_start");
-    } else {
-        s_ahtPresent = false;
-        LOG_W(TAG, "component=AHT21 status=not_detected");
+    {
+        bool ahtOk = false;
+        if (I2cShared::lock(1000)) {
+            ahtOk = s_aht21.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+            I2cShared::unlock();
+        }
+        if (ahtOk) {
+            s_aht21.setKalmanParams(0.003f, 0.15f, 0.01f, 1.0f);
+            s_aht21.setSelfHeatingCompensation(0.1f);
+            s_aht21.setMeasurementInterval(3000);
+            s_ahtPresent = true;
+            LOG_I(TAG, "component=AHT21 action=init_start");
+        } else {
+            s_ahtPresent = false;
+            LOG_W(TAG, "component=AHT21 status=not_detected");
+        }
     }
 
     s_started = true;
@@ -320,7 +347,13 @@ void update() {
         return;
     }
 
-    Result ensResult = s_ens160.update();
+    if (!I2cShared::lock(1000)) {
+        s_runtimeState = ENS160_STATE_COMM_ERR;
+        publishRuntimeData(false);
+        return;
+    }
+    const Result ensResult = s_ens160.update();
+    I2cShared::unlock();
 
     if (ensResult == RESULT_OK) {
         s_ens160ErrorStreak = 0;

@@ -24,7 +24,8 @@ ESP32 firmware for a custom clock platform with integrated Bluetooth A2DP audio,
 - Bluetooth A2DP sink for audio playback via external I2S output
 - WiFi connectivity with MQTT publishing and secure TLS support
 - Sensor acquisition and display management for clock/ambient monitoring
-- Runtime telemetry counters and RAM snapshot diagnostics
+- **Robustness**: Hardened I2C sharing, atomic task synchronization, and validated month arrays
+- **Guition Sync**: High-performance COBS-based UART protocol for external display communication
 - FreeRTOS task isolation and heap fragmentation tracing
 
 ## Build and run

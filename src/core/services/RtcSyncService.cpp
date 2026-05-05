@@ -138,7 +138,7 @@ void tryRestoreSystemTimeFromDs3231(int& hours, int& minutes, int& seconds, unsi
         beginStatus == RTCService::Status::InternalError ||
         beginStatus == RTCService::Status::BusBusyTimeout;
     if (attempt < kRtcRestoreAttempts && retryableStatus) {
-      delay(kRtcRestoreRetryDelayMs);
+      vTaskDelay(pdMS_TO_TICKS(kRtcRestoreRetryDelayMs));
       continue;
     }
 

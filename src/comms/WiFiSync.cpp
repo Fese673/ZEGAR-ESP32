@@ -9,6 +9,7 @@
 #include "ModeManager.h"
 #include "TaskConfig.h"
 #include "RamTelemetry.h"
+#include "meteoSync.h"
 
 namespace WiFiSync {
 
@@ -152,7 +153,7 @@ static void applyBackoff(unsigned long now, uint8_t failures) {
 }
 
 // Task handle for WiFi.begin() offload
-static TaskHandle_t wifiBeginTaskHandle = NULL;
+static std::atomic<TaskHandle_t> wifiBeginTaskHandle{NULL};
 
 // Complete WiFi init task — runs ALL WiFi hardware on Core 1
 // WiFi.mode(), WiFi.begin(), and connection wait — fully non-blocking for Core 0
@@ -172,35 +173,37 @@ static void wifiInitTask(void* param) {
   WiFi.begin(ssidCopy, passCopy);
   LOG_I(TAG, "WiFi begin called waiting_for_events=true");
 
-  wifiBeginTaskHandle = NULL;
+  wifiBeginTaskHandle.store(NULL, std::memory_order_release);
   vTaskDelete(NULL);
 }
 
 static bool startWifiConnectionTask(unsigned long now) {
-  if (wifiBeginTaskHandle != NULL) {
-    vTaskDelete(wifiBeginTaskHandle);
-    wifiBeginTaskHandle = NULL;
+  TaskHandle_t oldHandle = wifiBeginTaskHandle.exchange(NULL, std::memory_order_acq_rel);
+  if (oldHandle != NULL) {
+    vTaskDelete(oldHandle);
   }
 
   resetConnectionTracking();
   state = SyncState::WifiConnecting;
   wifiConnectStartMillis = now;
 
+  TaskHandle_t newHandle = NULL;
   if (xTaskCreatePinnedToCore(wifiInitTask,
                               "wifiInit",
                               TaskConfig::WifiInitTask::kStackBytes,
                               NULL,
                               TaskConfig::WifiInitTask::kPriority,
-                              &wifiBeginTaskHandle,
+                              &newHandle,
                               TaskConfig::WifiInitTask::kCore) != pdPASS) {
     LOG_E(TAG, "Failed to spawn WiFi init task");
-    wifiBeginTaskHandle = NULL;
     lastError = SyncError::Wifi;
     wifiFailureCount++;
     wifiConnectStartMillis = 0;
     applyBackoff(now, wifiFailureCount);
     return false;
   }
+
+  wifiBeginTaskHandle.store(newHandle, std::memory_order_release);
 
   if (onStartCb) {
     onStartCb();
@@ -261,7 +264,7 @@ void setOnStart(void (*cb)()) { onStartCb = cb; }
 void setOnDone(void (*cb)())  { onDoneCb  = cb; }
 
 TaskHandle_t getInitTaskHandle() {
-  return wifiBeginTaskHandle;
+  return wifiBeginTaskHandle.load(std::memory_order_acquire);
 }
 
 void requestTimeSync() {
@@ -285,9 +288,9 @@ void stop() {
   ntpFailureCount = 0;
 
   // Kill background init task if still running
-  if (wifiBeginTaskHandle != NULL) {
-    vTaskDelete(wifiBeginTaskHandle);
-    wifiBeginTaskHandle = NULL;
+  TaskHandle_t killHandle = wifiBeginTaskHandle.exchange(NULL, std::memory_order_acq_rel);
+  if (killHandle != NULL) {
+    vTaskDelete(killHandle);
   }
 
   if (wifiEventHandlerInstalled) {
@@ -452,15 +455,19 @@ void update() {
       timeSyncRequested = false;
       lastPeriodicSync = now;
 
-      LOG_I(TAG,
-        "NTP synced time=%02d:%02d:%02d dst=%d",
-        timeinfo.tm_hour,
-        timeinfo.tm_min,
-        timeinfo.tm_sec,
-        timeinfo.tm_isdst);
+       LOG_I(TAG,
+         "NTP synced time=%02d:%02d:%02d dst=%d",
+         timeinfo.tm_hour,
+         timeinfo.tm_min,
+         timeinfo.tm_sec,
+         timeinfo.tm_isdst);
 
       state = SyncState::Idle;
       if (onDoneCb) onDoneCb();
+
+#if defined(METEO_ENABLED)
+      meteoSync::triggerFetch();
+#endif
       return;
     }
 

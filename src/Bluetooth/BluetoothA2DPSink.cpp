@@ -1218,21 +1218,34 @@ void BluetoothA2DPSink::audio_data_callback(const uint8_t *data, uint32_t len) {
 
 bool BluetoothA2DPSink::is_avrc_connected() { return avrc_connection_state; }
 
+namespace {
+struct PendingAvrcRelease {
+    int cmd = -1;
+    unsigned long pressMs = 0;
+};
+static PendingAvrcRelease s_pendingRelease;
+}  // namespace
+
 void BluetoothA2DPSink::execute_avrc_command(int cmd) {
   ESP_LOGD(BT_AV_TAG, "execute_avrc_command: %d", cmd);
-  esp_err_t ok =
+
+  // Flush any previous pending release that has timed out (>= 100ms since press)
+  if (s_pendingRelease.cmd >= 0) {
+    const unsigned long elapsed = BluetoothA2DPCommon::get_millis() - s_pendingRelease.pressMs;
+    if (elapsed >= 100 || elapsed > 100000) {  // 100ms threshold; overflow guard
+      esp_avrc_ct_send_passthrough_cmd(0, s_pendingRelease.cmd,
+                                       ESP_AVRC_PT_CMD_STATE_RELEASED);
+      s_pendingRelease.cmd = -1;
+    }
+  }
+
+  // Send PRESSED for the new command
+  const esp_err_t ok =
       esp_avrc_ct_send_passthrough_cmd(0, cmd, ESP_AVRC_PT_CMD_STATE_PRESSED);
   if (ok == ESP_OK) {
-    delay_ms(100);
-    ok = esp_avrc_ct_send_passthrough_cmd(0, cmd,
-                                          ESP_AVRC_PT_CMD_STATE_RELEASED);
-    if (ok == ESP_OK) {
-      ESP_LOGD(BT_AV_TAG, "execute_avrc_command: %d -> OK", cmd);
-    } else {
-      ESP_LOGE(BT_AV_TAG,
-               "execute_avrc_command ESP_AVRC_PT_CMD_STATE_RELEASED FAILED: %d",
-               ok);
-    }
+    s_pendingRelease.cmd = cmd;
+    s_pendingRelease.pressMs = BluetoothA2DPCommon::get_millis();
+    ESP_LOGD(BT_AV_TAG, "execute_avrc_command: %d -> OK (async release)", cmd);
   } else {
     ESP_LOGE(BT_AV_TAG,
              "execute_avrc_command ESP_AVRC_PT_CMD_STATE_PRESSED FAILED: %d",

@@ -20,8 +20,8 @@ constexpr BaseType_t kCore = CORE_SYSTEM;
 // BtAppT must stay below BtI2STask but above I2C/WiFi so state handling does not lag.
 constexpr UBaseType_t kPriority = 19;
 
-// BtAppT needs enough room for A2DP state handling; shrinking this risks stack overflow.
-constexpr size_t kStackBytes = 4096;
+// BtAppT needs enough room for A2DP state handling + malloc + callback chains; shrinking this risks stack overflow.
+constexpr size_t kStackBytes = 8192;
 
 // Event queue depth for BtAppT; reducing this turns bursts of BT events into drops.
 constexpr int kEventQueueSize = 32;
@@ -80,11 +80,25 @@ constexpr size_t kStackBytes = 8192;
 
 }  // namespace WifiInitTask
 
+namespace MeteoSyncTask {
+
+// Meteo runs on Core 1 as a background network service and must not compete with the realtime band.
+constexpr BaseType_t kCore = CORE_APP;
+
+// Keep Meteo below WiFi init so connection bring-up remains the higher-priority setup path.
+constexpr UBaseType_t kPriority = 4;
+
+// HTTPClient + JSON parsing need more headroom than a minimal service task.
+constexpr size_t kStackBytes = 8192;
+
+}  // namespace MeteoSyncTask
+
 static_assert(BtAppTask::kCore == CORE_SYSTEM, "BtAppTask must stay on Core 0");
 static_assert(BtI2STask::kCore == CORE_SYSTEM, "BtI2STask must stay on Core 0");
 static_assert(EncoderTask::kCore == CORE_APP, "EncoderTask must stay on Core 1");
 static_assert(I2cWorkerTask::kCore == CORE_APP, "I2cWorkerTask must stay on Core 1");
 static_assert(WifiInitTask::kCore == CORE_APP, "WifiInitTask must stay on Core 1");
+static_assert(MeteoSyncTask::kCore == CORE_APP, "MeteoSyncTask must stay on Core 1");
 
 static_assert(BtI2STask::kPriority > EncoderTask::kPriority,
               "Audio must stay above the encoder priority band");
@@ -94,6 +108,8 @@ static_assert(BtAppTask::kPriority > I2cWorkerTask::kPriority,
               "BT app must stay above I2C worker");
 static_assert(I2cWorkerTask::kPriority > WifiInitTask::kPriority,
               "I2C worker must stay above WiFi init");
+static_assert(WifiInitTask::kPriority > MeteoSyncTask::kPriority,
+              "WiFi init must stay above Meteo sync");
 static_assert(BtAppTask::kPriority < configMAX_PRIORITIES,
               "BtAppTask priority must fit the FreeRTOS priority range");
 static_assert(EncoderTask::kPriority < configMAX_PRIORITIES,
@@ -102,6 +118,8 @@ static_assert(I2cWorkerTask::kPriority < configMAX_PRIORITIES,
               "I2cWorkerTask priority must fit the FreeRTOS priority range");
 static_assert(WifiInitTask::kPriority < configMAX_PRIORITIES,
               "WifiInitTask priority must fit the FreeRTOS priority range");
+static_assert(MeteoSyncTask::kPriority < configMAX_PRIORITIES,
+              "MeteoSyncTask priority must fit the FreeRTOS priority range");
 static_assert(BtI2STask::kPriority < configMAX_PRIORITIES,
               "BtI2STask priority must fit the FreeRTOS priority range");
 

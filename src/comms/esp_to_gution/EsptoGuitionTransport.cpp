@@ -1,6 +1,9 @@
 #include "EsptoGuitionTransport.h"
+#include "BoardPins.h"
 #include "EsptoGuitionCobs.h"
 #include "EsptoGuitionState.h"
+#include "Esptogution.h"
+#include <Arduino.h>
 
 namespace EsptoGuition {
 namespace {
@@ -11,18 +14,12 @@ constexpr uint8_t kAckOk = 0x00;
 constexpr uint8_t kAckBadType = 0x01;
 constexpr uint8_t kAckBadLength = 0x02;
 constexpr uint8_t kAckBadCrc = 0x03;
-constexpr uint16_t kMaxPayloadBytes = 128U;
-
-constexpr uint8_t kTypeWeather = 0x01;
-constexpr uint8_t kTypePms = 0x02;
-constexpr uint8_t kTypeTime = 0x03;
-constexpr uint8_t kTypeSettings = 0x04;
-constexpr uint8_t kTypeSetSettings = 0x05;
-constexpr uint8_t kTypeRequest = 0x10;
-constexpr uint8_t kTypeConfig = 0x11;
-constexpr uint8_t kTypeAck = 0xFF;
+constexpr uint8_t kProtocolVersion = 1;
+constexpr uint8_t kDeviceRoleSensor = 1;
 
 HardwareSerial *s_serial = nullptr;
+uint32_t s_bootId = 0;
+PeerSyncState s_syncState = kSyncBooting;
 
 struct RxState {
   uint8_t buffer[256] = {};
@@ -38,12 +35,50 @@ void sendAck(uint8_t sequence, uint8_t ackCode, uint8_t relatedType) {
   sendRawFrame(kTypeAck, sequence, payload, sizeof(payload));
 }
 
-void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload, uint16_t payloadLength) {
+void sendHelloAck(uint8_t sequence) {
+  uint8_t buf[11];
+  uint8_t *c = buf;
+  *c++ = kProtocolVersion;
+  *c++ = kDeviceRoleSensor;
+  // bootId little-endian
+  *c++ = static_cast<uint8_t>(s_bootId & 0xFF);
+  *c++ = static_cast<uint8_t>((s_bootId >> 8) & 0xFF);
+  *c++ = static_cast<uint8_t>((s_bootId >> 16) & 0xFF);
+  *c++ = static_cast<uint8_t>((s_bootId >> 24) & 0xFF);
+  // uptimeMs little-endian
+  uint32_t uptime = static_cast<uint32_t>(millis());
+  *c++ = static_cast<uint8_t>(uptime & 0xFF);
+  *c++ = static_cast<uint8_t>((uptime >> 8) & 0xFF);
+  *c++ = static_cast<uint8_t>((uptime >> 16) & 0xFF);
+  *c++ = static_cast<uint8_t>((uptime >> 24) & 0xFF);
+  *c++ = static_cast<uint8_t>(s_syncState);
+  sendRawFrame(kTypeHelloAck, sequence, buf, static_cast<uint16_t>(c - buf));
+}
+
+void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
+                 uint16_t payloadLength) {
   switch (type) {
+  case kTypeHello:
+    // Guition się zgłosił – odpowiadamy HELLO_ACK i od razu wysyłamy pełny stan
+    // (Real-time Sync)
+    sendHelloAck(sequence);
+    s_syncState = kSyncPeerDetected;
+
+    // Natychmiastowy push wszystkiego na start
+    EsptoGuition::sendSettings(EsptoGuition::nextSequence());
+    EsptoGuition::sendWeather(EsptoGuition::nextSequence());
+    EsptoGuition::sendPms(EsptoGuition::nextSequence());
+    EsptoGuition::sendTime(EsptoGuition::nextSequence());
+    EsptoGuition::sendWifiStatus(EsptoGuition::nextSequence());
+    EsptoGuition::sendSystemResources(EsptoGuition::nextSequence());
+    break;
   case kTypeRequest:
-    if (payloadLength >= 1 && payload[0] == kTypeSettings) {
-      // request settings -> just reply by sending current settings
-      // (This will be called via main Esptogution facade or we can just send it).
+    if (payloadLength >= 1) {
+      if (payload[0] == kTypeSettings) {
+        EsptoGuition::sendSettings(sequence);
+      } else if (payload[0] == kTypeSystemResources) {
+        EsptoGuition::sendSystemResources(sequence);
+      }
     }
     break;
   case kTypeSetSettings:
@@ -58,14 +93,48 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload, uint16_
 
 } // namespace
 
-void beginSerial(HardwareSerial &serialPort, uint32_t baudRate, int rxPin, int txPin) {
+void beginSerial(HardwareSerial &serialPort, uint32_t baudRate, int rxPin,
+                 int txPin) {
+  // Wymuszamy wyłączenie buzzera na starcie (GPIO 2 / LED_BUILTIN)
+  pinMode(BoardPins::kBuzzer, OUTPUT);
+  digitalWrite(BoardPins::kBuzzer, LOW);
+
+  // Unikamy esp_random(), bo używa ADC2 (konflikt z GPIO 2 / Buzzerem)
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  s_bootId = (static_cast<uint32_t>(mac[5]) << 24) |
+             (static_cast<uint32_t>(mac[4]) << 16) |
+             (static_cast<uint32_t>(mac[3]) << 8) |
+             static_cast<uint32_t>(millis());
+
+  s_syncState = kSyncUartReady;
   s_serial = &serialPort;
   s_serial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
   resetRx();
 }
 
-void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload, uint16_t payloadLength) {
-  if (s_serial == nullptr || payloadLength > kMaxPayloadBytes) return;
+void sendHelloAck(uint8_t sequence) {
+  uint8_t buf[11];
+  uint8_t *c = buf;
+  *c++ = kProtocolVersion;
+  *c++ = kDeviceRoleSensor;
+  *c++ = static_cast<uint8_t>(s_bootId & 0xFF);
+  *c++ = static_cast<uint8_t>((s_bootId >> 8) & 0xFF);
+  *c++ = static_cast<uint8_t>((s_bootId >> 16) & 0xFF);
+  *c++ = static_cast<uint8_t>((s_bootId >> 24) & 0xFF);
+  uint32_t uptime = static_cast<uint32_t>(millis());
+  *c++ = static_cast<uint8_t>(uptime & 0xFF);
+  *c++ = static_cast<uint8_t>((uptime >> 8) & 0xFF);
+  *c++ = static_cast<uint8_t>((uptime >> 16) & 0xFF);
+  *c++ = static_cast<uint8_t>((uptime >> 24) & 0xFF);
+  *c++ = static_cast<uint8_t>(s_syncState);
+  sendRawFrame(kTypeHelloAck, sequence, buf, static_cast<uint16_t>(c - buf));
+}
+
+void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
+                  uint16_t payloadLength) {
+  if (s_serial == nullptr || payloadLength > kMaxPayloadBytes)
+    return;
 
   uint8_t frame[kFrameHeaderBytes + kMaxPayloadBytes + kFrameCrcBytes] = {};
   uint8_t *cursor = frame;
@@ -79,7 +148,8 @@ void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload, uint16
     cursor += payloadLength;
   }
 
-  const uint16_t crc = crc16Ccitt(frame, static_cast<size_t>(kFrameHeaderBytes + payloadLength));
+  const uint16_t crc =
+      crc16Ccitt(frame, static_cast<size_t>(kFrameHeaderBytes + payloadLength));
   *cursor++ = static_cast<uint8_t>(crc & 0xFFU);
   *cursor++ = static_cast<uint8_t>((crc >> 8) & 0xFFU);
 
@@ -95,12 +165,14 @@ void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload, uint16
 }
 
 bool ingestSerialBytes() {
-  if (s_serial == nullptr) return false;
+  if (s_serial == nullptr)
+    return false;
 
   bool consumed = false;
   while (s_serial->available() > 0) {
     const int rawByte = s_serial->read();
-    if (rawByte < 0) break;
+    if (rawByte < 0)
+      break;
 
     const uint8_t byte = static_cast<uint8_t>(rawByte);
 
@@ -112,18 +184,22 @@ bool ingestSerialBytes() {
         if (decodedLen >= kFrameHeaderBytes + kFrameCrcBytes) {
           uint8_t type = decodedBuffer[0];
           uint8_t sequence = decodedBuffer[1];
-          uint16_t payloadLength = static_cast<uint16_t>(decodedBuffer[2]) | 
-                                   (static_cast<uint16_t>(decodedBuffer[3]) << 8U);
+          uint16_t payloadLength =
+              static_cast<uint16_t>(decodedBuffer[2]) |
+              (static_cast<uint16_t>(decodedBuffer[3]) << 8U);
 
-          if (payloadLength <= kMaxPayloadBytes && 
-              decodedLen == kFrameHeaderBytes + payloadLength + kFrameCrcBytes) {
+          if (payloadLength <= kMaxPayloadBytes &&
+              decodedLen ==
+                  kFrameHeaderBytes + payloadLength + kFrameCrcBytes) {
 
-            uint16_t receivedCrc = static_cast<uint16_t>(decodedBuffer[decodedLen - 2]) |
-                                   (static_cast<uint16_t>(decodedBuffer[decodedLen - 1]) << 8U);
+            uint16_t receivedCrc =
+                static_cast<uint16_t>(decodedBuffer[decodedLen - 2]) |
+                (static_cast<uint16_t>(decodedBuffer[decodedLen - 1]) << 8U);
             uint16_t expectedCrc = crc16Ccitt(decodedBuffer, decodedLen - 2);
 
             if (receivedCrc == expectedCrc) {
-              handleFrame(type, sequence, decodedBuffer + kFrameHeaderBytes, payloadLength);
+              handleFrame(type, sequence, decodedBuffer + kFrameHeaderBytes,
+                          payloadLength);
               consumed = true;
             } else {
               sendAck(sequence, kAckBadCrc, type);

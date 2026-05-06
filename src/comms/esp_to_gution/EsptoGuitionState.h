@@ -8,6 +8,25 @@ struct WeatherPayload {
   int16_t temperatureCx100 = 0;
   uint16_t humidityPctX100 = 0;
   uint16_t pressureHpaX10 = 0;
+  uint16_t eco2 = 0;
+  uint32_t sampleAgeMs = 0;
+  uint8_t flags = 0;
+};
+
+struct OutdoorWeatherPayload {
+  int16_t temperatureCx100 = 0;
+  uint16_t humidityPctX100 = 0;
+  uint16_t pressureHpaX10 = 0;
+  uint16_t windSpeedMsX100 = 0;
+  uint16_t windGustMsX100 = 0;
+  uint8_t windDeg = 0;
+  uint8_t weatherCode = 0;
+  uint8_t cloudCover = 0;
+  int16_t apparentTempCx100 = 0;
+  uint16_t pm25UgM3 = 0;
+  uint16_t pm10UgM3 = 0;
+  uint16_t co2Ppm = 0;
+  uint8_t aqi = 0;
   uint32_t sampleAgeMs = 0;
   uint8_t flags = 0;
 };
@@ -52,6 +71,7 @@ struct WifiPayload {
 };
 
 bool buildWeatherPayload(WeatherPayload &out, unsigned long nowMs);
+bool buildOutdoorWeatherPayload(OutdoorWeatherPayload &out, unsigned long nowMs);
 bool buildPmsPayload(PmsPayload &out, unsigned long nowMs);
 bool buildTimePayload(TimePayload &out);
 bool buildWifiPayload(WifiPayload &out);

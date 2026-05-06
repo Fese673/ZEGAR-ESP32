@@ -13,6 +13,7 @@ uint32_t s_lastBroadcastMs = 0;
 uint8_t s_sequence = 0;
 
 WeatherPayload s_lastSentWeather;
+OutdoorWeatherPayload s_lastSentOutdoorWeather;
 PmsPayload s_lastSentPms;
 WifiPayload s_lastSentWifi;
 SystemResourcesPayload s_lastSentResources;
@@ -49,10 +50,36 @@ void sendWeather(uint8_t sequence) {
   appendS16(cursor, payload.temperatureCx100);
   appendU16(cursor, payload.humidityPctX100);
   appendU16(cursor, payload.pressureHpaX10);
+  appendU16(cursor, payload.eco2);
   appendU32(cursor, payload.sampleAgeMs);
   appendU8(cursor, payload.flags);
 
-  sendRawFrame(kTypeWeather, sequence, buffer, static_cast<uint16_t>(cursor - buffer));
+  sendRawFrame(kTypeIndoorWeather, sequence, buffer, static_cast<uint16_t>(cursor - buffer));
+}
+
+void sendOutdoorWeather(uint8_t sequence) {
+  OutdoorWeatherPayload payload;
+  if (!buildOutdoorWeatherPayload(payload, millis())) return;
+
+  uint8_t buffer[32] = {};
+  uint8_t *cursor = buffer;
+  appendS16(cursor, payload.temperatureCx100);
+  appendU16(cursor, payload.humidityPctX100);
+  appendU16(cursor, payload.pressureHpaX10);
+  appendU16(cursor, payload.windSpeedMsX100);
+  appendU16(cursor, payload.windGustMsX100);
+  appendU8(cursor, payload.windDeg);
+  appendU8(cursor, payload.weatherCode);
+  appendU8(cursor, payload.cloudCover);
+  appendS16(cursor, payload.apparentTempCx100);
+  appendU16(cursor, payload.pm25UgM3);
+  appendU16(cursor, payload.pm10UgM3);
+  appendU16(cursor, payload.co2Ppm);
+  appendU8(cursor, payload.aqi);
+  appendU32(cursor, payload.sampleAgeMs);
+  appendU8(cursor, payload.flags);
+
+  sendRawFrame(kTypeOutdoorWeather, sequence, buffer, static_cast<uint16_t>(cursor - buffer));
 }
 
 void sendPms(uint8_t sequence) {
@@ -110,6 +137,7 @@ void broadcastSnapshots(unsigned long nowMs) {
 
   constexpr unsigned long kKeepaliveIntervalMs = Config::kKeepaliveIntervalMs;
   constexpr unsigned long kSafetyRefreshIntervalMs = Config::kSafetyRefreshIntervalMs;
+  constexpr unsigned long kOutdoorIntervalMs = 5000UL;
 
   WeatherPayload currentWeather;
   if (buildWeatherPayload(currentWeather, nowMs)) {
@@ -119,6 +147,21 @@ void broadcastSnapshots(unsigned long nowMs) {
     if (changed) {
       sendWeather(s_sequence++);
       s_lastSentWeather = currentWeather;
+      lastKeepaliveMs = nowMs;
+    }
+  }
+
+  OutdoorWeatherPayload currentOutdoor;
+  static unsigned long lastOutdoorCheckMs = 0;
+  if (buildOutdoorWeatherPayload(currentOutdoor, nowMs)) {
+    bool periodElapsed = (nowMs - lastOutdoorCheckMs >= kOutdoorIntervalMs);
+    bool changed = (currentOutdoor.temperatureCx100 != s_lastSentOutdoorWeather.temperatureCx100) ||
+                  (currentOutdoor.humidityPctX100 != s_lastSentOutdoorWeather.humidityPctX100) ||
+                  (currentOutdoor.pressureHpaX10 != s_lastSentOutdoorWeather.pressureHpaX10);
+    if (changed || periodElapsed) {
+      sendOutdoorWeather(s_sequence++);
+      s_lastSentOutdoorWeather = currentOutdoor;
+      lastOutdoorCheckMs = nowMs;
       lastKeepaliveMs = nowMs;
     }
   }
@@ -183,12 +226,14 @@ void broadcastSnapshots(unsigned long nowMs) {
   if (nowMs - lastSafetyRefreshMs >= kSafetyRefreshIntervalMs) {
     lastSafetyRefreshMs = nowMs;
     sendWeather(s_sequence++);
+    sendOutdoorWeather(s_sequence++);
     sendPms(s_sequence++);
     sendTime(s_sequence++);
     sendWifiStatus(s_sequence++);
     sendSystemResources(s_sequence++);
     sendSettings(s_sequence++);
     buildWeatherPayload(s_lastSentWeather, nowMs);
+    buildOutdoorWeatherPayload(s_lastSentOutdoorWeather, nowMs);
     buildPmsPayload(s_lastSentPms, nowMs);
     buildWifiPayload(s_lastSentWifi);
     buildSystemResourcesPayload(s_lastSentResources);

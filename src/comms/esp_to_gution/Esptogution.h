@@ -7,13 +7,14 @@
 namespace EsptoGuition {
 
 constexpr uint8_t kFrameStart = 0xAA;
-constexpr uint8_t kTypeWeather = 0x01;
+constexpr uint8_t kTypeIndoorWeather = 0x01;
 constexpr uint8_t kTypePms = 0x02;
 constexpr uint8_t kTypeTime = 0x03;
 constexpr uint8_t kTypeSettings = 0x04;
 constexpr uint8_t kTypeSetSettings = 0x05;
 constexpr uint8_t kTypeSystemResources = 0x06;
 constexpr uint8_t kTypeWifiStatus = 0x07;
+constexpr uint8_t kTypeOutdoorWeather = 0x08;
 constexpr uint8_t kTypeRequest = 0x10;
 constexpr uint8_t kTypeConfig = 0x11;
 constexpr uint8_t kTypeHello    = 0x20;
@@ -59,6 +60,7 @@ void sendWeather(uint8_t sequence = 0);
 void sendPms(uint8_t sequence = 0);
 void sendTime(uint8_t sequence = 0);
 void sendWifiStatus(uint8_t sequence = 0);
+void sendOutdoorWeather(uint8_t sequence = 0);
 uint8_t nextSequence();
 
 } // namespace EsptoGuition

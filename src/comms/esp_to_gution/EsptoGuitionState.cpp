@@ -7,6 +7,7 @@
 #include "AppLog.h"
 #include "BMP280Screen.h"
 #include "ENS160AHT21Screen.h"
+#include "meteoSync.h"
 #include "PMS_Czujnik.h"
 #include "RTCService.h"
 #include "AppSettings.h"
@@ -33,6 +34,24 @@ struct SyntheticWeatherState {
   int16_t temperatureCx100 = 2200;
   uint16_t humidityPctX100 = 5000;
   uint16_t pressureHpaX10 = 10130;
+  uint16_t eco2 = 600;
+  unsigned long lastUpdateMs = 0;
+};
+
+struct SyntheticOutdoorState {
+  int16_t temperatureCx100 = 1500;
+  uint16_t humidityPctX100 = 7000;
+  uint16_t pressureHpaX10 = 10130;
+  uint16_t windSpeedMsX100 = 500;
+  uint16_t windGustMsX100 = 800;
+  uint8_t windDeg = 180;
+  uint8_t weatherCode = 0;
+  uint8_t cloudCover = 40;
+  int16_t apparentTempCx100 = 1400;
+  uint16_t pm25UgM3 = 150;
+  uint16_t pm10UgM3 = 300;
+  uint16_t co2Ppm = 420;
+  uint8_t aqi = 1;
   unsigned long lastUpdateMs = 0;
 };
 
@@ -44,6 +63,7 @@ struct SyntheticPmsState {
 };
 
 SyntheticWeatherState s_weatherState;
+SyntheticOutdoorState s_outdoorState;
 SyntheticPmsState s_pmsState;
 
 void seedSyntheticRandom() {
@@ -72,14 +92,16 @@ void buildSyntheticWeatherPayload(WeatherPayload &out) {
     s_weatherState.temperatureCx100 = changeByPercent(s_weatherState.temperatureCx100, Config::kSyntheticChangePercent, -400, 3800);
     s_weatherState.humidityPctX100 = changeByPercent(s_weatherState.humidityPctX100, Config::kSyntheticChangePercent, 0, 10000);
     s_weatherState.pressureHpaX10 = changeByPercent(s_weatherState.pressureHpaX10, Config::kSyntheticChangePercent, 8700, 10840);
+    s_weatherState.eco2 = changeByPercent(s_weatherState.eco2, Config::kSyntheticChangePercent, 400, 2000);
     s_weatherState.lastUpdateMs = nowMs;
   }
 
   out.temperatureCx100 = s_weatherState.temperatureCx100;
   out.humidityPctX100 = s_weatherState.humidityPctX100;
   out.pressureHpaX10 = s_weatherState.pressureHpaX10;
+  out.eco2 = s_weatherState.eco2;
   out.sampleAgeMs = random(0, 5000);
-  out.flags = 0x07U;
+  out.flags = 0x47U;
 }
 
 void buildSyntheticPmsPayload(PmsPayload &out) {
@@ -177,14 +199,21 @@ bool buildWeatherPayload(WeatherPayload &out, unsigned long nowMs) {
   bool tempFromEns = false;
   bool humValid = false;
   bool pressureValid = false;
+  bool eco2Valid = false;
 
   const float temperatureC = pickWeatherTemperature(tempValid, tempFromEns);
   const float humidityPct = pickWeatherHumidity(humValid);
   const float pressureHpa = pickWeatherPressure(pressureValid);
+  const uint16_t eco2 = ENS160AHT21Screen::runtimeData.hasGasSample
+    ? ENS160AHT21Screen::runtimeData.eco2 : 0;
+  if (ENS160AHT21Screen::runtimeData.hasGasSample && ENS160AHT21Screen::runtimeData.eco2 > 0) {
+    eco2Valid = true;
+  }
 
   out.temperatureCx100 = tempValid ? static_cast<int16_t>(lroundf(temperatureC * 100.0f)) : 0;
   out.humidityPctX100 = humValid ? static_cast<uint16_t>(lroundf(humidityPct * 100.0f)) : 0;
   out.pressureHpaX10 = pressureValid ? static_cast<uint16_t>(lroundf(pressureHpa * 10.0f)) : 0;
+  out.eco2 = eco2Valid ? eco2 : 0;
   out.sampleAgeMs = latestWeatherAgeMs(nowMs);
   out.flags = 0;
   if (tempValid) out.flags |= 0x01U;
@@ -193,8 +222,46 @@ bool buildWeatherPayload(WeatherPayload &out, unsigned long nowMs) {
   if (tempFromEns) out.flags |= 0x08U;
   if (ENS160AHT21Screen::runtimeData.hasClimateSample) out.flags |= 0x10U;
   if (BMP280Screen::runtimeData.hasPressure) out.flags |= 0x20U;
+  if (eco2Valid) out.flags |= 0x40U;
 
   return true;
+}
+
+bool buildOutdoorWeatherPayload(OutdoorWeatherPayload &out, unsigned long nowMs) {
+  uint8_t flags = 0;
+
+  meteoSync::WeatherData wd;
+  if (meteoSync::getLatest(wd) && wd.valid) {
+    out.temperatureCx100 = static_cast<int16_t>(lroundf(wd.temperature * 100.0f));
+    flags |= 0x01U;
+    out.humidityPctX100 = static_cast<uint16_t>(lroundf(static_cast<float>(wd.humidity) * 100.0f));
+    flags |= 0x02U;
+    out.pressureHpaX10 = static_cast<uint16_t>(lroundf(wd.pressure * 10.0f));
+    flags |= 0x04U;
+    out.windSpeedMsX100 = static_cast<uint16_t>(lroundf(wd.windSpeed * 100.0f));
+    out.windGustMsX100 = static_cast<uint16_t>(lroundf(wd.windGust * 100.0f));
+    out.windDeg = static_cast<uint8_t>(wd.windDeg / 2U);
+    flags |= 0x08U;
+    out.weatherCode = wd.weatherCode;
+    out.cloudCover = wd.cloudCover;
+    out.apparentTempCx100 = static_cast<int16_t>(lroundf(wd.apparentTemp * 100.0f));
+    flags |= 0x10U;
+    out.sampleAgeMs = (wd.timestamp != 0)
+      ? static_cast<uint32_t>(nowMs - min(static_cast<unsigned long>(wd.timestamp * 1000UL), nowMs))
+      : 0;
+  }
+
+  meteoSync::AirQualityData aq;
+  if (meteoSync::getLatestAirQuality(aq) && aq.valid) {
+    out.pm25UgM3 = static_cast<uint16_t>(lroundf(aq.pm25 * 100.0f));
+    out.pm10UgM3 = static_cast<uint16_t>(lroundf(aq.pm10 * 100.0f));
+    out.co2Ppm = static_cast<uint16_t>(lroundf(aq.co2));
+    out.aqi = (aq.europeanAqi < 255) ? static_cast<uint8_t>(aq.europeanAqi) : 255;
+    flags |= 0x20U;
+  }
+
+  out.flags = flags;
+  return flags != 0;
 }
 
 bool buildPmsPayload(PmsPayload &out, unsigned long nowMs) {

@@ -1,18 +1,23 @@
 import os
 import subprocess
 
-# Konfiguracja ścieżek
-PIO_EXE = r"C:\Users\PC\.platformio\penv\Scripts\pio.exe"
-PROJECT_DIR = r"C:\PROJEKTY\ZEGAR-ESP32"
+# Dokładna ścieżka wskazana jako rozwiązanie
+PIO_EXE = r"C:\PROJEKTY\pio-home\penv\Scripts\platformio.exe"
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def run_build():
-    print("--- Rozpoczynam kompilację projektu ZEGAR-ESP32 (PlatformIO) ---")
+    print(f"--- Rozpoczynam kompilację: {PIO_EXE} run -e esp32dev ---")
     
+    if not os.path.exists(PIO_EXE):
+        print(f"BŁĄD: Nie znaleziono pliku: {PIO_EXE}")
+        return
+
     try:
-        # PlatformIO zazwyczaj nie wymaga tak skomplikowanego środowiska jak IDF
-        # Wystarczy odpalić pio.exe run w katalogu projektu
+        # Używamy dokładnie tej komendy, która jest rozwiązaniem
+        cmd = [PIO_EXE, "run", "-e", "esp32dev"]
+        
         result = subprocess.run(
-            [PIO_EXE, "run"],
+            cmd,
             cwd=PROJECT_DIR,
             text=True
         )

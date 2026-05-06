@@ -9,15 +9,31 @@ struct WeatherData {
   float pressure;         // hPa
   uint8_t weatherCode;   // WMO code
   float windSpeed;       // m/s
+  float apparentTemp;    // °C feels like
+  uint8_t cloudCover;    // %
+  uint16_t windDeg;      // degrees
+  float windGust;        // m/s
   uint32_t timestamp;    // Unix time
-  bool valid;            // true when at least one successful sample is available
+  bool valid;
 
   WeatherData();
+};
+
+struct AirQualityData {
+  uint16_t europeanAqi;
+  float pm25;
+  float pm10;
+  float co2;
+  uint32_t timestamp;
+  bool valid;
+
+  AirQualityData();
 };
 
 void begin();
 void update();
 void triggerFetch();
 bool getLatest(WeatherData& out);
+bool getLatestAirQuality(AirQualityData& out);
 
 } // namespace meteoSync

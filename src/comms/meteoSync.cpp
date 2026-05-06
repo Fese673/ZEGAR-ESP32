@@ -2,6 +2,8 @@
 #include "OpenMeteo.h"
 #include "TaskConfig.h"
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include <atomic>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
@@ -22,16 +24,24 @@ constexpr UBaseType_t kTaskPriority = TaskConfig::MeteoSyncTask::kPriority;
 constexpr BaseType_t kTaskCore = TaskConfig::MeteoSyncTask::kCore;
 
 static constexpr char kCurrentApiLink[] = CURRENT_API_LINK;
+static constexpr char kAirQualityApiLink[] = "&current=european_aqi,pm2_5,pm10,carbon_dioxide&timeformat=unixtime";
 
 static portMUX_TYPE s_stateMux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_aqMux = portMUX_INITIALIZER_UNLOCKED;
 WeatherData s_latest;
+AirQualityData s_latestAirQuality;
 unsigned long s_lastUartSendMs = 0;
 bool s_initialized = false;
 TaskHandle_t s_fetchTaskHandle = nullptr;
 std::atomic<bool> s_pendingInitialFetch{false};
 
 WeatherData::WeatherData()
-  : temperature(0), humidity(0), pressure(0), weatherCode(0), windSpeed(0), timestamp(0), valid(false) {}
+  : temperature(0), humidity(0), pressure(0), weatherCode(0),
+    windSpeed(0), apparentTemp(0), cloudCover(0), windDeg(0), windGust(0),
+    timestamp(0), valid(false) {}
+
+AirQualityData::AirQualityData()
+  : europeanAqi(0), pm25(0), pm10(0), co2(0), timestamp(0), valid(false) {}
 
 static bool copyLatestSnapshot(WeatherData& out) {
   taskENTER_CRITICAL(&s_stateMux);
@@ -48,6 +58,10 @@ static void storeLatestSnapshot(const OM_CurrentWeather& currentWeather) {
   s_latest.pressure = currentWeather.pressure;
   s_latest.weatherCode = currentWeather.weather_code;
   s_latest.windSpeed = currentWeather.wind_speed;
+  s_latest.apparentTemp = currentWeather.apparent_temp;
+  s_latest.cloudCover = currentWeather.cloud_cover;
+  s_latest.windDeg = currentWeather.wind_deg;
+  s_latest.windGust = currentWeather.wind_gust;
   s_latest.timestamp = static_cast<uint32_t>(currentWeather.time);
   s_latest.valid = true;
   taskEXIT_CRITICAL(&s_stateMux);
@@ -84,6 +98,55 @@ static bool doFetch() {
   return true;
 }
 
+static void storeLatestAirQuality() {
+  String url = "http://air-quality-api.open-meteo.com/v1/air-quality?latitude="
+             + String(kLatitude) + "&longitude=" + String(kLongitude)
+             + kAirQualityApiLink;
+
+  WiFiClient client;
+  client.setTimeout(5000UL);
+  HTTPClient http;
+  if (!http.begin(client, url)) {
+    LOG_W(TAG_METEO, "AQ HTTP begin failed");
+    return;
+  }
+  http.useHTTP10(true);
+  http.setReuse(false);
+  http.setConnectTimeout(5000UL);
+  http.setTimeout(5000UL);
+
+  const int code = http.GET();
+  if (code <= 0) {
+    LOG_W(TAG_METEO, "AQ fetch failed, code=%d", code);
+    http.end();
+    return;
+  }
+
+  DynamicJsonDocument doc(1024);
+  DeserializationError err = deserializeJson(doc, http.getString());
+  http.end();
+
+  if (err != DeserializationError::Ok || doc["current"].isNull()) {
+    LOG_W(TAG_METEO, "AQ JSON parse failed");
+    return;
+  }
+
+  AirQualityData aq;
+  aq.europeanAqi = doc["current"]["european_aqi"] | 0U;
+  aq.pm25 = doc["current"]["pm2_5"] | 0.0f;
+  aq.pm10 = doc["current"]["pm10"] | 0.0f;
+  aq.co2 = doc["current"]["carbon_dioxide"] | 0.0f;
+  aq.timestamp = doc["current"]["time"] | 0U;
+  aq.valid = true;
+
+  taskENTER_CRITICAL(&s_aqMux);
+  s_latestAirQuality = aq;
+  taskEXIT_CRITICAL(&s_aqMux);
+
+  LOG_I(TAG_METEO, "AQ OK: AQI=%u PM2.5=%.1f PM10=%.1f CO2=%.0f",
+        (unsigned)aq.europeanAqi, aq.pm25, aq.pm10, aq.co2);
+}
+
 static void fetchTask(void* param) {
   (void)param;
   LOG_I(TAG_METEO, "Task started on core %d", xPortGetCoreID());
@@ -99,6 +162,7 @@ static void fetchTask(void* param) {
     }
 
     doFetch();
+    storeLatestAirQuality();
     haveFetchedOnce = true;
 
     // Drain any request that arrived while the fetch was still running so we do not double-fetch.
@@ -174,6 +238,14 @@ void update() {
 
 bool getLatest(WeatherData& out) {
   return copyLatestSnapshot(out);
+}
+
+bool getLatestAirQuality(AirQualityData& out) {
+  taskENTER_CRITICAL(&s_aqMux);
+  out = s_latestAirQuality;
+  const bool valid = s_latestAirQuality.valid;
+  taskEXIT_CRITICAL(&s_aqMux);
+  return valid;
 }
 
 } // namespace meteoSync

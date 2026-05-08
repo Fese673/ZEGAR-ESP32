@@ -108,25 +108,30 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
     updateSevenSeg();
   }
 
-  if (timeValid && !alarmRinging && Clock::seconds() == 0 && alarmsCount > 0) {
-    const time_t nowTime = time(nullptr);
-    tm timeInfo;
-    localtime_r(&nowTime, &timeInfo);
-    const int today = timeInfo.tm_yday;
+  if (timeValid && !alarmRinging && alarmsCount > 0) {
+    static int s_lastAlarmMinute = -1;
+    const int currentMinute = Clock::minutes();
+    if (currentMinute != s_lastAlarmMinute) {
+      s_lastAlarmMinute = currentMinute;
+      const time_t nowTime = time(nullptr);
+      struct tm timeInfo;
+      localtime_r(&nowTime, &timeInfo);
+      const int today = timeInfo.tm_yday;
 
-    for (int i = 0; i < alarmsCount; ++i) {
-      if (!alarms[i].enabled) continue;
+      for (int i = 0; i < alarmsCount; ++i) {
+        if (!alarms[i].enabled) continue;
 
-      if (alarms[i].hour == Clock::hours() &&
-          alarms[i].minute == Clock::minutes() &&
-          alarms[i].lastTriggerDay != (uint16_t)today) {
-        alarmStartTime = millis();
-        alarms[i].lastTriggerDay = (uint16_t)today;
-        if (buzzerEnabled) {
-          alarmRinging = true;
-          AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, buzzerPin);
+        if (alarms[i].hour == Clock::hours() &&
+            alarms[i].minute == currentMinute &&
+            alarms[i].lastTriggerDay != (uint16_t)today) {
+          alarmStartTime = millis();
+          alarms[i].lastTriggerDay = (uint16_t)today;
+          if (buzzerEnabled) {
+            alarmRinging = true;
+            AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, buzzerPin);
+          }
+          break;
         }
-        break;
       }
     }
   }

@@ -1,6 +1,31 @@
 # Archiwum Błędów - ZEGAR-ESP32
 ---
+### [ID: ERR_033] | CLOCK_SET_VALIDATION | IMPACT: MEDIUM
+**Files:** `[ClockService.cpp]`
+
+**PROBLEM:** `Clock::set(int h, int m, int s)` nie walidował zakresu. Wartości spoza zakresu (h≥24, m≥60, s≥60) powodowały wyświetlanie nieprawidłowego czasu (np. "25:00:00") i potencjalnie błędne działanie alarmu.
+
+**CAUSE:** Bezpośrednie przypisanie `s_hours = h` bez modulo. `tickSecond()` overflow protection działa tylko dla przyrostu o 1s.
+
+**LOGIC_CHANGE:**
+- `Clock::set()`: dodano `s_hours = (h % 24 + 24) % 24` (i analogicznie dla minut/sekund)
+- Wzór `(x % N + N) % N` zapewnia poprawny clamp również dla wartości ujemnych
+
+**VERIFICATION:** Kompilacja OK. `Clock::set(25, 60, 60)` = (1, 0, 0). `Clock::set(-1, 0, 0)` = (23, 0, 0).
 ---
+### [ID: ERR_032] | ALARM_MISS | IMPACT: HIGH
+**Files:** `[ClockAlarmService.cpp]`
+
+**PROBLEM:** Alarm mógł być PRZEGAPIONY gdy `tickClock()` był opóźniony o >1s (np. blokada I2C/UART). Warunek `Clock::seconds() == 0` wymagał idealnego trafienia na sekundę 0. Przy opóźnieniu 2s, `seconds()` skakał z 58 na 1 (ominięcie 0) → alarm nie zadzwonił. Dodatkowo, `alarms[i].lastTriggerDay = 0` w AppBoot.cpp kolidował z `tm_yday == 0` (1 stycznia) — `0 != 0` = false → żaden alarm nie dzwonił 1 stycznia.
+
+**CAUSE:** (1) `tickClock()` wołany co 1000ms przez EV_CLOCK_TICK. Jeśli poprzedni handler blokował >1s, `EventBus::process()` opóźniał wywołanie. `syncLocalClockFromSystemTime()` ustawiał czas systemowy (np. :01), a `Clock::seconds()` nigdy nie był 0. (2) Sentinela `0` dla `lastTriggerDay` — C `tm_yday` zaczyna się od 0, więc 1 stycznia `0 != 0` pomijało wszystkie alarmy.
+
+**LOGIC_CHANGE:**
+- Zamiast `seconds() == 0` → porównanie minut: `static int s_lastAlarmMinute` z `Clock::minutes()`
+- Sprawdzane raz na minutę, niezależnie od opóźnienia tickClock
+- `AppBoot.cpp`: `lastTriggerDay = 0` → `lastTriggerDay = UINT16_MAX` (65535, nigdy nie równy `tm_yday`)
+
+**VERIFICATION:** Kompilacja OK. Alarm dzwoni o właściwej minucie nawet gdy tickClock opóźniony o kilka sekund. 1 stycznia alarm dzwoni normalnie.
 ---
 ### [ID: ERR_031] | ALARM_CHOPPY_PLAYBACK | IMPACT: MEDIUM
 **Files:** `[AppLoop.cpp]`

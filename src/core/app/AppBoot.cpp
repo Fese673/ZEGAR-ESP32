@@ -223,7 +223,7 @@ void initUiAndInput() {
                                                       BoardPins::kI2cSda,
                                                       BoardPins::kI2cScl,
                                                       BoardPins::kI2cClockHz,
-                                                      true);
+                                                      false);
    LOG_I(TAG_I2C,
          "Clock readback requested_hz=%lu actual_hz=%lu status=%s",
          static_cast<unsigned long>(BoardPins::kI2cClockHz),
@@ -363,7 +363,7 @@ void initComms(RuntimeContext& ctx) {
     alarmRuntime.alarms[i].hour = static_cast<uint8_t>(s_prefs.getUShort(keyH, 7));
     alarmRuntime.alarms[i].minute = static_cast<uint8_t>(s_prefs.getUShort(keyM, 0));
     alarmRuntime.alarms[i].enabled = s_prefs.getBool(keyE, true);
-    alarmRuntime.alarms[i].lastTriggerDay = 0;
+    alarmRuntime.alarms[i].lastTriggerDay = UINT16_MAX;
   }
 
   WiFiSync::setOnDone([]() {

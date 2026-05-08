@@ -32,9 +32,9 @@ void hms(int& h, int& m, int& s) {
 }
 
 void set(int h, int m, int s) {
-  s_hours = h;
-  s_minutes = m;
-  s_seconds = s;
+  s_hours = (h % 24 + 24) % 24;
+  s_minutes = (m % 60 + 60) % 60;
+  s_seconds = (s % 60 + 60) % 60;
 }
 
 void setLastTick(unsigned long nowMs) {

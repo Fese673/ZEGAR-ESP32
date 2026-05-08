@@ -110,6 +110,7 @@ void beginSerial(HardwareSerial &serialPort, uint32_t baudRate, int rxPin,
   s_syncState = kSyncUartReady;
   s_serial = &serialPort;
   s_serial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
+  s_serial->setTxBufferSize(1024);
   resetRx();
 }
 
@@ -161,7 +162,10 @@ void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
   memcpy(txBuffer + 1, cobsBuffer, cobsLen);
   txBuffer[1 + cobsLen] = 0x00;
 
-  s_serial->write(txBuffer, cobsLen + 2);
+  const size_t wireLen = cobsLen + 2;
+  if (s_serial->availableForWrite() >= wireLen) {
+    s_serial->write(txBuffer, wireLen);
+  }
 }
 
 bool ingestSerialBytes() {

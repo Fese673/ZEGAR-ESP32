@@ -5,7 +5,7 @@
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
 #include "LCDMirror.h"
-#include "AppState.h" // for EditState / AppState enums
+#include "AppState.h"
 #include "BoardPins.h"
 
 
@@ -19,20 +19,6 @@
 #ifndef LATCH_PIN
 #define LATCH_PIN BoardPins::kSevenSegLatch
 #endif
-
-
-// --- Externs: variables defined in your main program ---
-extern int hours;
-extern int minutes;
-extern int seconds;
-
-
-extern unsigned long lastTick;
-
-
-extern bool stoperRunning;
-extern unsigned long stoperStart;
-extern unsigned long stoperElapsed;
 
 
 extern int displayedBPM;
@@ -58,6 +44,11 @@ extern unsigned long timerStartMillis;
 extern unsigned long timerDurationMs;
 extern int timerUiCursor;   // 0=CZAS, 1=PRESETY
 extern int timerPresetIndex; // 0=2m, 1=15m, 2=45m
+
+// Stoper (Stopwatch)
+extern bool stoperRunning;
+extern unsigned long stoperStart;
+extern unsigned long stoperElapsed;
 
 
 // LCD object (your main must define it, e.g. LiquidCrystal_I2C lcd(...))

@@ -15,6 +15,12 @@ static audio_tools::I2SStream s_audioStream;
 static bool s_audioStreamActive = false;
 #endif
 
+#if defined(ARDUINO_ARCH_ESP32)
+extern "C" bool btInUse() {
+    return true;
+}
+#endif
+
 namespace {
 
 constexpr char TAG[] = "BT";

@@ -27,6 +27,12 @@ struct OutdoorWeatherPayload {
   uint16_t pm10UgM3 = 0;
   uint16_t co2Ppm = 0;
   uint8_t aqi = 0;
+  uint8_t precipitationMmX10 = 0;
+  uint8_t uvIndexX10 = 0;
+  uint8_t sunriseHour = 0;
+  uint8_t sunriseMin = 0;
+  uint8_t sunsetHour = 0;
+  uint8_t sunsetMin = 0;
   uint32_t sampleAgeMs = 0;
   uint8_t flags = 0;
 };

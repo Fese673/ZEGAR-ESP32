@@ -67,16 +67,26 @@ void update() {
   ramTotalBytes = totalHeap;
 
 #ifdef ARDUINO_ARCH_ESP32
-  ramLargestBlockBytes = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  // O(1) fast retrieval. Avoids O(N) heap linked-list traversal which locks the CPU for >10ms.
+  ramLargestBlockBytes = ESP.getMaxAllocHeap();
   ramMinFreeBytes = ESP.getMinFreeHeap();
-  ramDmaFreeBytes = heap_caps_get_free_size(MALLOC_CAP_DMA);
+  // Approximation for DMA free size to avoid O(N) traversal. 
+  // Most free internal RAM is DMA-capable on ESP32.
+  ramDmaFreeBytes = freeHeap;
 #else
   ramLargestBlockBytes = 0;
   ramMinFreeBytes = ramFreeBytes;
   ramDmaFreeBytes = 0;
 #endif
 
-  flashFreeBytes = ESP.getFreeSketchSpace();
+  // Cache flash size once — ESP.getFreeSketchSpace() reads SPI flash partition
+  // table which disables the instruction cache on BOTH cores and blocks all
+  // interrupts. Flash size never changes at runtime.
+  static bool s_flashCached = false;
+  if (!s_flashCached) {
+    flashFreeBytes = ESP.getFreeSketchSpace();
+    s_flashCached = true;
+  }
 }
 
 }  // namespace SystemResourcesService

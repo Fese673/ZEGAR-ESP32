@@ -4,6 +4,7 @@
 #include <esp_system.h>
 #include <WiFiClientSecure.h>
 #include <WiFi.h>
+#include <atomic>
 
 #include "PMS_Czujnik.h"
 #include "RamTelemetry.h"
@@ -83,12 +84,15 @@ static MqttConnectionState s_state = MqttConnectionState::WaitingForWifi;
 static unsigned long s_nextStateCheckMs = 0;
 static unsigned long s_connectStartMs = 0;
 static uint8_t s_connectFailureCount = 0;
+static TaskHandle_t s_connectTask = nullptr;
+static std::atomic<bool> s_connectInProgress{false};
+static std::atomic<bool> s_connectResult{false};
 
 static constexpr unsigned long MQTT_WIFI_RECOVERY_DELAY_MS = 250;
 static constexpr unsigned long MQTT_CONNECT_BUDGET_MS = 4500;
 static constexpr unsigned long MQTT_TCP_CONNECT_TIMEOUT_SEC = 3;
 static constexpr unsigned long MQTT_TLS_HANDSHAKE_TIMEOUT_SEC = 2;
-static constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 3;
+static constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 1;
 static constexpr uint16_t MQTT_KEEPALIVE_SEC = 15;
 
 // ============================================================================
@@ -112,6 +116,15 @@ static void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     memcpy(payloadText, payload, copyLength);
     payloadText[copyLength] = '\0';
     LOG_I(TAG, "Message received topic=%s payload=%s payload_len=%u", topic, payloadText, length);
+}
+
+static void mqttConnectTask(void*) {
+    const bool ok = mqttClient.connect(s_config.clientId.c_str(),
+                                        s_config.username.c_str(),
+                                        s_config.password.c_str());
+    s_connectResult.store(ok);
+    s_connectInProgress.store(false);
+    vTaskDelete(nullptr);
 }
 
 static void applyConfigToClient() {
@@ -231,38 +244,54 @@ static bool mqtt_reconnect(unsigned long nowMs) {
 
     s_state = MqttConnectionState::Connecting;
     s_connectStartMs = nowMs;
+    s_connectInProgress.store(true);
+    s_connectResult.store(false);
 
-    const bool connected = mqttClient.connect(s_config.clientId.c_str(),
-                                              s_config.username.c_str(),
-                                              s_config.password.c_str());
-    const unsigned long elapsedMs = millis() - s_connectStartMs;
+    BaseType_t created = xTaskCreatePinnedToCore(
+        mqttConnectTask,
+        "mqttConn",
+        4096,
+        nullptr,
+        1,
+        &s_connectTask,
+        0
+    );
 
-    if (connected && elapsedMs <= MQTT_CONNECT_BUDGET_MS) {
-        LOG_I(TAG, "Connected elapsed_ms=%lu", elapsedMs);
-        s_connectFailureCount = 0;
-        s_state = MqttConnectionState::Online;
+    if (created != pdPASS) {
+        LOG_E(TAG, "Failed to create connection task, connecting synchronously");
+        s_connectInProgress.store(false);
+        s_connectTask = nullptr;
 
-        LOG_I(TAG, "Request time sync source=WiFiSync");
-        WiFiSync::requestTimeSync();
-        RAM_CHECKPOINT("MQTT_CONNECTED");
-        return true;
+        const bool connected = mqttClient.connect(s_config.clientId.c_str(),
+                                                  s_config.username.c_str(),
+                                                  s_config.password.c_str());
+        const unsigned long elapsedMs = millis() - s_connectStartMs;
+
+        if (connected && elapsedMs <= MQTT_CONNECT_BUDGET_MS) {
+            LOG_I(TAG, "Connected elapsed_ms=%lu", elapsedMs);
+            s_connectFailureCount = 0;
+            s_state = MqttConnectionState::Online;
+            WiFiSync::requestTimeSync();
+            RAM_CHECKPOINT("MQTT_CONNECTED");
+            return true;
+        }
+
+        if (connected) {
+            LOG_W(TAG, "Connect exceeded budget elapsed_ms=%lu budget_ms=%lu", elapsedMs, MQTT_CONNECT_BUDGET_MS);
+            mqttClient.disconnect();
+        }
+
+        const int rc = mqttClient.state();
+        if (s_connectFailureCount < 255) ++s_connectFailureCount;
+
+        const unsigned long backoffMs = computeBackoffMs(s_connectFailureCount);
+        s_nextStateCheckMs = nowMs + backoffMs;
+        s_state = MqttConnectionState::Backoff;
+
+        LOG_W(TAG, "Connection failed rc=%d elapsed_ms=%lu failures=%u backoff_ms=%lu", rc, elapsedMs, (unsigned)s_connectFailureCount, backoffMs);
+        return false;
     }
 
-    if (connected) {
-        LOG_W(TAG, "Connect exceeded budget elapsed_ms=%lu budget_ms=%lu", elapsedMs, MQTT_CONNECT_BUDGET_MS);
-        mqttClient.disconnect();
-    }
-
-    const int rc = mqttClient.state();
-    if (s_connectFailureCount < 255) {
-        ++s_connectFailureCount;
-    }
-
-    const unsigned long backoffMs = computeBackoffMs(s_connectFailureCount);
-    s_nextStateCheckMs = nowMs + backoffMs;
-    s_state = MqttConnectionState::Backoff;
-
-    LOG_W(TAG, "Connection failed rc=%d elapsed_ms=%lu failures=%u backoff_ms=%lu", rc, elapsedMs, (unsigned)s_connectFailureCount, backoffMs);
     return false;
 }
 
@@ -316,6 +345,18 @@ void startCore1Task() {
 void stopCore1Task() {
     if (!s_serviceStarted && mqtt_task_handle == NULL) {
         return;
+    }
+
+    if (s_connectInProgress.load()) {
+        unsigned long waitStart = millis();
+        while (s_connectInProgress.load() && (millis() - waitStart) < 2000) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (s_connectInProgress.load()) {
+            LOG_W(TAG, "Connection task did not finish, proceeding");
+        }
+        s_connectInProgress.store(false);
+        s_connectTask = nullptr;
     }
 
     s_serviceStarted = false;
@@ -466,6 +507,41 @@ void update() {
         }
 
         s_state = MqttConnectionState::Idle;
+    }
+
+    if (s_state == MqttConnectionState::Connecting) {
+        if (s_connectInProgress.load()) {
+            return;
+        }
+        s_connectTask = nullptr;
+
+        const unsigned long elapsedMs = millis() - s_connectStartMs;
+        const bool connected = s_connectResult.load();
+
+        if (connected && elapsedMs <= MQTT_CONNECT_BUDGET_MS) {
+            LOG_I(TAG, "Connected elapsed_ms=%lu", elapsedMs);
+            s_connectFailureCount = 0;
+            s_state = MqttConnectionState::Online;
+            WiFiSync::requestTimeSync();
+            RAM_CHECKPOINT("MQTT_CONNECTED");
+            return;
+        }
+
+        if (connected) {
+            LOG_W(TAG, "Connect exceeded budget elapsed_ms=%lu budget_ms=%lu", elapsedMs, MQTT_CONNECT_BUDGET_MS);
+            mqttClient.disconnect();
+        }
+
+        const int rc = mqttClient.state();
+        if (s_connectFailureCount < 255) ++s_connectFailureCount;
+
+        const unsigned long backoffMs = computeBackoffMs(s_connectFailureCount);
+        s_nextStateCheckMs = now + backoffMs;
+        s_state = MqttConnectionState::Backoff;
+
+        LOG_W(TAG, "Connection failed rc=%d elapsed_ms=%lu failures=%u backoff_ms=%lu",
+              rc, elapsedMs, (unsigned)s_connectFailureCount, backoffMs);
+        return;
     }
 
     if (s_state == MqttConnectionState::Idle) {

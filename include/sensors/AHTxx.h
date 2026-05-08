@@ -184,6 +184,7 @@ class AHTxx {
     unsigned long _intervalMs;
     uint32_t  _measureCount;
     bool      _sampleValid;
+    bool      _initialized = false;
 
     float _selfHeatOffset;
     float _rawTemp, _rawHum;

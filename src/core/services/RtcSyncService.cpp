@@ -7,6 +7,7 @@
 
 #include "AppLog.h"
 #include "BoardPins.h"
+#include "ClockService.h"
 #include "RTCService.h"
 
 namespace RtcSyncService {
@@ -75,7 +76,27 @@ void syncLocalClockFromSystemTime(int& hours, int& minutes, int& seconds) {
   seconds = localTime.tm_sec;
 }
 
+static void tryRestoreTimeImpl(int& hours, int& minutes, int& seconds, unsigned long& lastTick);
+
 void tryRestoreSystemTimeFromDs3231(int& hours, int& minutes, int& seconds, unsigned long& lastTick) {
+  int h, m, s;
+  unsigned long lt;
+  tryRestoreTimeImpl(h, m, s, lt);
+  hours = h;
+  minutes = m;
+  seconds = s;
+  lastTick = lt;
+}
+
+void tryRestoreSystemTimeFromDs3231() {
+  int h, m, s;
+  unsigned long lt;
+  tryRestoreTimeImpl(h, m, s, lt);
+  Clock::set(h, m, s);
+  Clock::setLastTick(lt);
+}
+
+static void tryRestoreTimeImpl(int& hours, int& minutes, int& seconds, unsigned long& lastTick) {
   RTCService::Config rtcCfg;
   rtcCfg.wire = &Wire;
   rtcCfg.sdaPin = BoardPins::kI2cSda;
@@ -153,6 +174,10 @@ void noteNtpSync(unsigned long ntpSyncMillis) {
 
   lastSeenNtpSyncMillis = ntpSyncMillis;
   s_clockSeeded = true;
+  scheduleRtcWriteFromSystemTime();
+}
+
+void scheduleRtcWrite() {
   scheduleRtcWriteFromSystemTime();
 }
 

@@ -7,6 +7,7 @@ from typing import Iterable
 
 TREE_PREFIX_PATTERN = re.compile(r"^(?P<indent>(?: {4}|│   )*)(?P<branch>[├└])── (?P<name>.+)$")
 COMMENT_PATTERN = re.compile(r"\s+#.*$")
+EXCLUDE_DIRS = {'__pycache__', '.pio', '.venv', '.git', '.vscode'}
 
 
 def collect_tree(root: Path, max_depth: int = 2) -> set[str]:
@@ -17,6 +18,8 @@ def collect_tree(root: Path, max_depth: int = 2) -> set[str]:
             return
         entries = sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower()))
         for entry in entries:
+            if entry.is_dir() and entry.name in EXCLUDE_DIRS:
+                continue
             entry_rel = rel_path / entry.name
             if entry.is_dir():
                 paths.add(f"{entry_rel.as_posix()}/")
@@ -32,6 +35,8 @@ def format_tree(root: Path, max_depth: int = 2) -> Iterable[str]:
     def _walk(path: Path, depth: int, prefix: str, last: bool) -> Iterable[str]:
         entries = sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower()))
         for index, entry in enumerate(entries):
+            if entry.is_dir() and entry.name in EXCLUDE_DIRS:
+                continue
             is_last = index == len(entries) - 1
             branch = '└──' if is_last else '├──'
             line = f"{prefix}{branch} {entry.name}"

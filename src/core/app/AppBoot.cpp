@@ -1,4 +1,5 @@
 #include "AppBoot.h"
+#include "AppLoop.h"
 
 #include <Arduino.h>
 #include <Esp.h>
@@ -12,6 +13,7 @@
 #include "BMP280Sensor.h"
 #include "BoardPins.h"
 #include "BootIntroService.h"
+#include "ClockService.h"
 #include "ENS160AHT21Screen.h"
 #include "ENS160AHT21Sensor.h"
 #include "comms/esp_to_gution/Esptogution.h"
@@ -46,13 +48,14 @@ static constexpr char TAG_I2C[] = "I2C";
 static constexpr char TAG_RAM[] = "RAM";
 static constexpr char TAG_NET[] = "NET";
 
-constexpr unsigned long SETUP_DELAY_MS = 100UL;
+constexpr unsigned long SETUP_DELAY_MS = 10UL;
 constexpr long UART_BAUD = 921600;
 constexpr uint32_t GUITION_BAUD = 115200UL;
 constexpr uint8_t ENC_CLK = BoardPins::kEncoderClk;
 constexpr uint8_t ENC_DT = BoardPins::kEncoderDt;
 constexpr uint8_t ENC_SW = BoardPins::kEncoderSw;
 uint32_t s_heapBaseline = 0;
+static bool s_lcdDetected = false;
 
 String s_wifiSsid = PROJECT_WIFI_SSID;
 String s_wifiPass = PROJECT_WIFI_PASS;
@@ -60,21 +63,21 @@ String s_ntpServer = PROJECT_NTP_SERVER;
 MQTTSync::Config s_mqttConfig;
 
 void lcdBacklightSafe() {
-  if (I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
+  if (s_lcdDetected && I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
     lcd.backlight();
     I2cShared::unlock();
   }
 }
 
 void lcdNoBacklightSafe() {
-  if (I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
+  if (s_lcdDetected && I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
     lcd.noBacklight();
     I2cShared::unlock();
   }
 }
 
 void lcdClearSafe() {
-  if (I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
+  if (s_lcdDetected && I2cShared::lock(LCD_I2C_LOCK_TIMEOUT_MS)) {
     lcd.clear();
     I2cShared::unlock();
 #if BOOT_LCD_CLEAR_TELEMETRY
@@ -88,6 +91,10 @@ void lcdClearSafe() {
 }
 
 void drawHomeThrottled() {
+  if (BootIntroService::isActive()) {
+    return;
+  }
+
   HomeRuntime::markHomeDirty();
   HomeRuntime::serviceRedraw(appState);
 }
@@ -136,16 +143,14 @@ bool restoreRtcHandoffTime(RuntimeContext& ctx, unsigned long nowMs, bool refres
   }
 
   if (rtcHours < 24 && rtcMinutes < 60 && rtcSeconds < 60) {
-    ctx.hours = rtcHours;
-    ctx.minutes = rtcMinutes;
-    ctx.seconds = rtcSeconds;
-    ctx.lastTick = nowMs;
+    Clock::set(rtcHours, rtcMinutes, rtcSeconds);
+    Clock::setLastTick(nowMs);
     RtcSyncService::markClockSeeded();
     LOG_I(TAG_MAIN,
           "Restore time from RTC handoff hours=%02u minutes=%02u seconds=%02u",
-          static_cast<unsigned>(ctx.hours),
-          static_cast<unsigned>(ctx.minutes),
-          static_cast<unsigned>(ctx.seconds));
+          static_cast<unsigned>(Clock::hours()),
+          static_cast<unsigned>(Clock::minutes()),
+          static_cast<unsigned>(Clock::seconds()));
     updateSevenSeg();
     if (refreshHomeUi) {
       drawHomeThrottled();
@@ -214,10 +219,6 @@ void initUiAndInput() {
 #endif
    lcdFrame.begin();
 
-   lcd.setExecTimes(37, 1520);
-   lcd.init();
-   LCDIcons::resetPaletteCache();
-
    const bool i2cClockApplied = I2cShared::initMaster(&Wire,
                                                       BoardPins::kI2cSda,
                                                       BoardPins::kI2cScl,
@@ -228,9 +229,20 @@ void initUiAndInput() {
          static_cast<unsigned long>(BoardPins::kI2cClockHz),
          static_cast<unsigned long>(Wire.getClock()),
          i2cClockApplied ? "applied" : "fallback_mismatch");
+
+   s_lcdDetected = I2cShared::probe(&Wire, 0x27, 100, 2);
+   if (s_lcdDetected) {
+       lcd.setExecTimes(37, 1520);
+       lcd.init();
+       LOG_I(TAG_MAIN, "LCD 20x4 detected and initialized at 0x27");
+   } else {
+       LOG_W(TAG_MAIN, "LCD 20x4 NOT detected at 0x27 - skipping init");
+   }
+
+   LCDIcons::resetPaletteCache();
    RAM_CHECKPOINT("I2C_READY");
 
-   RtcSyncService::tryRestoreSystemTimeFromDs3231(hours, minutes, seconds, lastTick);
+   RtcSyncService::tryRestoreSystemTimeFromDs3231();
 
    lcdBacklightSafe();
    lcdClearSafe();
@@ -265,7 +277,6 @@ void initSensors(RuntimeContext& ctx) {
   UIState::State& uiState = UIState::mutableState();
 
   STM32data_begin(BoardPins::kStm32UartRx, BoardPins::kStm32UartTx);
-  EsptoGuition::begin(Serial2, GUITION_BAUD, BoardPins::kGuitionUartRx, BoardPins::kGuitionUartTx);
 
   PMS5003Sensor::begin();
   ENS160AHT21Screen::resetRuntimeData();
@@ -355,7 +366,6 @@ void initComms(RuntimeContext& ctx) {
     alarmRuntime.alarms[i].lastTriggerDay = 0;
   }
 
-  WiFiSync::setTimeRefs(ctx.hours, ctx.minutes, ctx.seconds, ctx.lastTick);
   WiFiSync::setOnDone([]() {
     const unsigned long ntpSyncMs = WiFiSync::getLastNtpSyncTime();
     RtcSyncService::noteNtpSync(ntpSyncMs);
@@ -392,11 +402,13 @@ void finalizeStartup() {
 void runSetup() {
   RuntimeContext ctx = makeRuntimeContext();
   initCoreHardware();
+  EsptoGuition::begin(Serial2, GUITION_BAUD, BoardPins::kGuitionUartRx, BoardPins::kGuitionUartTx);
   initPersistenceAndConfig(ctx);
   initUiAndInput();
   initSensors(ctx);
   initComms(ctx);
   finalizeStartup();
+  AppLoop::initEventHandlers();
   meteoSync::begin();
 }
 

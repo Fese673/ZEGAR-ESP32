@@ -82,23 +82,31 @@ constexpr size_t kStackBytes = 8192;
 
 namespace MeteoSyncTask {
 
-// Meteo runs on Core 1 as a background network service and must not compete with the realtime band.
-constexpr BaseType_t kCore = CORE_APP;
+    // Meteo runs on Core 0 as a background network service to avoid contention with the UI loop.
+    constexpr BaseType_t kCore = CORE_SYSTEM;
 
-// Keep Meteo below WiFi init so connection bring-up remains the higher-priority setup path.
-constexpr UBaseType_t kPriority = 4;
+// Keep Meteo at priority 1 so it shares time with the main loop instead of starving it.
+constexpr UBaseType_t kPriority = 1;
 
 // HTTPClient + JSON parsing need more headroom than a minimal service task.
 constexpr size_t kStackBytes = 8192;
 
 }  // namespace MeteoSyncTask
 
+namespace WifiMonitorTask {
+// WiFi monitor runs on Core 0 to stay out of the UI's way.
+constexpr BaseType_t kCore = CORE_SYSTEM;
+// Low priority; just needs to poll RSSI once in a while.
+constexpr UBaseType_t kPriority = 2;
+constexpr size_t kStackBytes = 2048;
+}  // namespace WifiMonitorTask
+
 static_assert(BtAppTask::kCore == CORE_SYSTEM, "BtAppTask must stay on Core 0");
 static_assert(BtI2STask::kCore == CORE_SYSTEM, "BtI2STask must stay on Core 0");
 static_assert(EncoderTask::kCore == CORE_APP, "EncoderTask must stay on Core 1");
 static_assert(I2cWorkerTask::kCore == CORE_APP, "I2cWorkerTask must stay on Core 1");
 static_assert(WifiInitTask::kCore == CORE_APP, "WifiInitTask must stay on Core 1");
-static_assert(MeteoSyncTask::kCore == CORE_APP, "MeteoSyncTask must stay on Core 1");
+static_assert(MeteoSyncTask::kCore == CORE_SYSTEM, "MeteoSyncTask should stay on Core 0");
 
 static_assert(BtI2STask::kPriority > EncoderTask::kPriority,
               "Audio must stay above the encoder priority band");

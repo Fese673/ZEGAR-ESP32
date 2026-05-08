@@ -25,8 +25,8 @@ constexpr uint8_t ENS160_I2C_ADDRESS = 0x53;
 constexpr uint8_t ENS160_I2C_ADDRESS_ALT = 0x52;
 constexpr uint8_t I2C_SDA_PIN = 21;
 constexpr uint8_t I2C_SCL_PIN = 22;
-constexpr uint8_t ENS160_INIT_RETRIES = 3;
-constexpr unsigned long ENS160_INIT_RETRY_DELAY_MS = 150;
+constexpr uint8_t ENS160_INIT_RETRIES = 1;
+constexpr unsigned long ENS160_INIT_RETRY_DELAY_MS = 20;
 constexpr uint8_t ENS160_REINIT_ERROR_THRESHOLD = 3;
 constexpr unsigned long ENS160_REINIT_COOLDOWN_MS = 5000UL;
 constexpr unsigned long ENS160_COMM_ERR_LOG_INTERVAL_MS = 2000UL;
@@ -187,14 +187,16 @@ void setENS160OfflineState() {
 }
 
 bool tryInitENS160AtAddress(uint8_t address) {
-    s_ens160.begin(&Wire, address);
-
     for (uint8_t attempt = 0; attempt < ENS160_INIT_RETRIES; ++attempt) {
-        if (!I2cShared::lock(1000)) {
+        if (!I2cShared::lock(50)) {
             return false;
         }
+
+        if (attempt == 0) {
+            s_ens160.begin(&Wire, address);
+        }
+
         const bool initOk = s_ens160.init();
-        I2cShared::unlock();
 
         if (initOk) {
             s_ens160Address = address;
@@ -202,13 +204,12 @@ bool tryInitENS160AtAddress(uint8_t address) {
             s_pendingValidity = 0xFF;
             s_pendingValidityCount = 0;
 
-            if (!I2cShared::lock(1000)) {
-                return false;
-            }
             const bool measureOk = s_ens160.startStandardMeasure() == RESULT_OK;
             I2cShared::unlock();
             return measureOk;
         }
+
+        I2cShared::unlock();
 
         if ((attempt + 1) < ENS160_INIT_RETRIES) {
 #ifdef ARDUINO_ARCH_ESP32
@@ -237,7 +238,7 @@ void updateClimateData() {
         return;
     }
 
-    if (!I2cShared::lock(1000)) {
+    if (!I2cShared::lock(50)) {
         return;
     }
     const bool newData = s_aht21.update();
@@ -263,7 +264,7 @@ void updateClimateData() {
         s_hasClimateSample = true;
 
         if (newData && s_ens160Present) {
-            if (I2cShared::lock(1000)) {
+            if (I2cShared::lock(50)) {
                 const uint16_t tempRaw = Ens16x_CalcTempInFromCelsius(s_lastTemperature);
                 const uint16_t humRaw = Ens16x_CalcRhIn(humidity);
                 const Result compResult = s_ens160.writeCompensation(tempRaw, humRaw);
@@ -304,7 +305,7 @@ void begin() {
 
     {
         bool ahtOk = false;
-        if (I2cShared::lock(1000)) {
+        if (I2cShared::lock(50)) {
             ahtOk = s_aht21.begin(I2C_SDA_PIN, I2C_SCL_PIN);
             I2cShared::unlock();
         }
@@ -329,6 +330,10 @@ void update() {
         return;
     }
 
+    if (!s_ens160Present && !s_ahtPresent) {
+        return;
+    }
+
     const unsigned long now = millis();
     updateClimateData();
 
@@ -347,7 +352,7 @@ void update() {
         return;
     }
 
-    if (!I2cShared::lock(1000)) {
+    if (!I2cShared::lock(50)) {
         s_runtimeState = ENS160_STATE_COMM_ERR;
         publishRuntimeData(false);
         return;

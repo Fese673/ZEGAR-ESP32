@@ -6,14 +6,9 @@
 #include "AlarmRuntime.h"
 #include "AppSettings.h"
 #include "AppState.h"
+#include "ClockService.h"
 #include "HomeRuntime.h"
 #include "RtcSyncService.h"
-
-// Global clock/timer runtime state from main.cpp
-extern int hours;
-extern int minutes;
-extern int seconds;
-extern unsigned long lastTick;
 
 // Shared alarm runtime state.
 namespace {
@@ -78,18 +73,16 @@ static void startBackgroundMelody(uint8_t melodyIndex,
 }  // namespace
 
 void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
-  if (appState == STATE_SET_TIME) {
-    return;
-  }
-
   const unsigned long nowMs = millis();
   const bool timeSeeded = RtcSyncService::isClockSeeded();
   const bool timeValid = RtcSyncService::isSystemTimeValid();
 
   if (timeSeeded && timeValid) {
-    if (nowMs - lastTick >= clockTickMs) {
-      lastTick = nowMs - ((nowMs - lastTick) % clockTickMs);
-      RtcSyncService::syncLocalClockFromSystemTime(hours, minutes, seconds);
+    if (nowMs - Clock::lastTick() >= clockTickMs) {
+      Clock::setLastTick(nowMs - ((nowMs - Clock::lastTick()) % clockTickMs));
+      int h, m, s;
+      RtcSyncService::syncLocalClockFromSystemTime(h, m, s);
+      Clock::set(h, m, s);
       if (appState != STATE_STOPER) {
         updateSevenSeg();
       }
@@ -98,20 +91,10 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
       }
     }
   } else if (timeSeeded) {
-    if (nowMs - lastTick >= clockTickMs) {
-      int loops = 0;
-      while (nowMs - lastTick >= clockTickMs && loops < 60) {
-        lastTick += clockTickMs;
-        seconds++;
-        if (seconds >= 60) {
-          seconds = 0;
-          minutes++;
-          if (minutes >= 60) {
-            minutes = 0;
-            hours = (hours + 1) % 24;
-          }
-        }
-        loops++;
+    if (nowMs - Clock::lastTick() >= clockTickMs) {
+      while (nowMs - Clock::lastTick() >= clockTickMs) {
+        Clock::setLastTick(Clock::lastTick() + clockTickMs);
+        Clock::tickSecond();
       }
 
       if (appState != STATE_STOPER) {
@@ -125,7 +108,7 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
     updateSevenSeg();
   }
 
-  if (timeValid && !alarmRinging && seconds == 0 && alarmsCount > 0) {
+  if (timeValid && !alarmRinging && Clock::seconds() == 0 && alarmsCount > 0) {
     const time_t nowTime = time(nullptr);
     tm timeInfo;
     localtime_r(&nowTime, &timeInfo);
@@ -134,8 +117,8 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
     for (int i = 0; i < alarmsCount; ++i) {
       if (!alarms[i].enabled) continue;
 
-      if (alarms[i].hour == hours &&
-          alarms[i].minute == minutes &&
+      if (alarms[i].hour == Clock::hours() &&
+          alarms[i].minute == Clock::minutes() &&
           alarms[i].lastTriggerDay != (uint16_t)today) {
         alarmStartTime = millis();
         alarms[i].lastTriggerDay = (uint16_t)today;

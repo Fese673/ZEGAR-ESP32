@@ -61,7 +61,7 @@ void sendOutdoorWeather(uint8_t sequence) {
   OutdoorWeatherPayload payload;
   if (!buildOutdoorWeatherPayload(payload, millis())) return;
 
-  uint8_t buffer[32] = {};
+  uint8_t buffer[48] = {};
   uint8_t *cursor = buffer;
   appendS16(cursor, payload.temperatureCx100);
   appendU16(cursor, payload.humidityPctX100);
@@ -76,6 +76,12 @@ void sendOutdoorWeather(uint8_t sequence) {
   appendU16(cursor, payload.pm10UgM3);
   appendU16(cursor, payload.co2Ppm);
   appendU8(cursor, payload.aqi);
+  appendU8(cursor, payload.precipitationMmX10);
+  appendU8(cursor, payload.uvIndexX10);
+  appendU8(cursor, payload.sunriseHour);
+  appendU8(cursor, payload.sunriseMin);
+  appendU8(cursor, payload.sunsetHour);
+  appendU8(cursor, payload.sunsetMin);
   appendU32(cursor, payload.sampleAgeMs);
   appendU8(cursor, payload.flags);
 
@@ -132,6 +138,11 @@ void sendWifiStatus(uint8_t sequence) {
 }
 
 void broadcastSnapshots(unsigned long nowMs) {
+  if (nowMs - s_lastBroadcastMs < s_broadcastIntervalMs) {
+    return;
+  }
+  s_lastBroadcastMs = nowMs;
+
   static unsigned long lastKeepaliveMs = 0;
   static unsigned long lastSafetyRefreshMs = 0;
 
@@ -187,18 +198,28 @@ void broadcastSnapshots(unsigned long nowMs) {
     }
   }
 
-  WifiPayload currentWifi;
-  if (buildWifiPayload(currentWifi)) {
-    bool changed = (currentWifi.connected != s_lastSentWifi.connected) ||
-                 (currentWifi.rssi != s_lastSentWifi.rssi) ||
-                 (currentWifi.ip[0] != s_lastSentWifi.ip[0]) ||
-                 (currentWifi.ip[1] != s_lastSentWifi.ip[1]) ||
-                 (currentWifi.ip[2] != s_lastSentWifi.ip[2]) ||
-                 (currentWifi.ip[3] != s_lastSentWifi.ip[3]);
-    if (changed) {
-      sendWifiStatus(s_sequence++);
-      s_lastSentWifi = currentWifi;
-      lastKeepaliveMs = nowMs;
+  static unsigned long lastWifiSendMs = 0;
+  bool timeElapsed = (nowMs - lastWifiSendMs >= 2000UL);
+  
+  if (timeElapsed) {
+    WifiPayload currentWifi;
+    if (buildWifiPayload(currentWifi)) {
+      bool rssiChanged = abs(static_cast<int>(currentWifi.rssi) - static_cast<int>(s_lastSentWifi.rssi)) >= 2;
+      bool stateChanged = (currentWifi.connected != s_lastSentWifi.connected) ||
+                          (currentWifi.ip[0] != s_lastSentWifi.ip[0]) ||
+                          (currentWifi.ip[1] != s_lastSentWifi.ip[1]) ||
+                          (currentWifi.ip[2] != s_lastSentWifi.ip[2]) ||
+                          (currentWifi.ip[3] != s_lastSentWifi.ip[3]);
+                          
+      if (stateChanged || rssiChanged) {
+        sendWifiStatus(s_sequence++);
+        s_lastSentWifi = currentWifi;
+        lastWifiSendMs = nowMs;
+        lastKeepaliveMs = nowMs;
+      } else {
+        // Zaktualizuj czas nawet jeśli nie wysłano, żeby nie odpytywać WiFi co każdą pętlę
+        lastWifiSendMs = nowMs;
+      }
     }
   }
 
@@ -207,9 +228,10 @@ void broadcastSnapshots(unsigned long nowMs) {
     lastResourcesCheckMs = nowMs;
     SystemResourcesPayload currentRes;
     if (buildSystemResourcesPayload(currentRes)) {
+      bool ramChanged = abs(static_cast<int32_t>(currentRes.freeRam) - static_cast<int32_t>(s_lastSentResources.freeRam)) > 1024;
       bool changed = (currentRes.core0Cpu != s_lastSentResources.core0Cpu) ||
                     (currentRes.core1Cpu != s_lastSentResources.core1Cpu) ||
-                    (currentRes.freeRam != s_lastSentResources.freeRam);
+                    ramChanged;
       if (changed) {
         sendSystemResources(s_sequence++);
         s_lastSentResources = currentRes;

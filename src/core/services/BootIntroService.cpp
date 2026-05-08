@@ -4,6 +4,11 @@
 
 #include "LCDMirror.h"
 
+#ifdef ARDUINO_ARCH_ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
+
 namespace BootIntroService {
 namespace {
 
@@ -164,25 +169,18 @@ void begin(const Callbacks& callbacks, uint8_t buzzerPin) {
   s_buzzerPin = buzzerPin;
 }
 
-void start() {
-  randomSeed(static_cast<uint32_t>(micros()));
-  s_state = BootIntroState{};
-  s_state.phase = IntroPhase::Noise;
-  s_state.phaseStartedMs = millis();
-  s_state.backlightOn = true;
-}
+
 
 bool isActive() {
   return s_state.phase != IntroPhase::Idle && s_state.phase != IntroPhase::Done;
 }
 
-bool service() {
-  if (!isActive()) {
-    return false;
-  }
-
-  const unsigned long nowMs = millis();
-  switch (s_state.phase) {
+static void introTask(void* param) {
+  while (isActive()) {
+    const unsigned long nowMs = millis();
+    bool continueRunning = true;
+    
+    switch (s_state.phase) {
     case IntroPhase::Noise:
       if (s_state.lastNoiseMs == 0 || (nowMs - s_state.lastNoiseMs) >= 90UL) {
         renderNoiseFrame();
@@ -295,10 +293,36 @@ bool service() {
     case IntroPhase::Done:
     case IntroPhase::Idle:
     default:
-      return false;
-  }
+      continueRunning = false;
+      break;
+    }
 
-  return s_state.phase != IntroPhase::Done;
+    if (!continueRunning) {
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  vTaskDelete(nullptr);
+}
+
+void start() {
+  randomSeed(static_cast<uint32_t>(micros()));
+  s_state = BootIntroState{};
+  s_state.phase = IntroPhase::Noise;
+  s_state.phaseStartedMs = millis();
+  s_state.backlightOn = true;
+
+  xTaskCreatePinnedToCore(introTask,
+                          "bootIntro",
+                          4096,
+                          nullptr,
+                          15, // High priority to avoid UI freezes
+                          nullptr,
+                          1); // Core 1
+}
+
+bool service() {
+  return isActive();
 }
 
 }  // namespace BootIntroService

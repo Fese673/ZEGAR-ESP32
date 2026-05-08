@@ -38,6 +38,7 @@ std::atomic<bool> s_pendingInitialFetch{false};
 WeatherData::WeatherData()
   : temperature(0), humidity(0), pressure(0), weatherCode(0),
     windSpeed(0), apparentTemp(0), cloudCover(0), windDeg(0), windGust(0),
+    precipitation(0), uvIndex(0), sunrise(0), sunset(0),
     timestamp(0), valid(false) {}
 
 AirQualityData::AirQualityData()
@@ -62,6 +63,10 @@ static void storeLatestSnapshot(const OM_CurrentWeather& currentWeather) {
   s_latest.cloudCover = currentWeather.cloud_cover;
   s_latest.windDeg = currentWeather.wind_deg;
   s_latest.windGust = currentWeather.wind_gust;
+  s_latest.precipitation = currentWeather.precipitation;
+  s_latest.uvIndex = currentWeather.uv_index;
+  s_latest.sunrise = currentWeather.sunrise;
+  s_latest.sunset = currentWeather.sunset;
   s_latest.timestamp = static_cast<uint32_t>(currentWeather.time);
   s_latest.valid = true;
   taskEXIT_CRITICAL(&s_stateMux);
@@ -89,12 +94,14 @@ static bool doFetch() {
 
   storeLatestSnapshot(currentWeather);
   LOG_I(TAG_METEO,
-        "Fetched OK: T=%.1f H=%u P=%.1f W=%.1f Code=%u",
+        "Fetched OK: T=%.1f H=%u P=%.1f W=%.1f Code=%u Rain=%.1f UV=%.1f",
         currentWeather.temp,
         currentWeather.humidity,
         currentWeather.pressure,
         currentWeather.wind_speed,
-        currentWeather.weather_code);
+        currentWeather.weather_code,
+        currentWeather.precipitation,
+        currentWeather.uv_index);
   return true;
 }
 
@@ -123,7 +130,7 @@ static void storeLatestAirQuality() {
   }
 
   DynamicJsonDocument doc(1024);
-  DeserializationError err = deserializeJson(doc, http.getString());
+    DeserializationError err = deserializeJson(doc, http.getStream());
   http.end();
 
   if (err != DeserializationError::Ok || doc["current"].isNull()) {

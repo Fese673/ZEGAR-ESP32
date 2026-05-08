@@ -40,6 +40,7 @@ bool AHTxx::begin(int32_t sda, int32_t scl, uint32_t speed, uint32_t stretch)
     if (timeoutMs == 0) timeoutMs = 1;
     Wire.setTimeout(timeoutMs);
 
+    _initialized = false;
     _status = AHTXX_NO_ERROR;
     _appStatus = AHTXX_STATUS_NO_VALID_OUTPUT;
     _invalidateSample(true);
@@ -53,6 +54,7 @@ bool AHTxx::begin(int32_t sda, int32_t scl, uint32_t speed, uint32_t stretch)
 
     _state = AHT_STATE_POWER_WAIT;
     _stateTs = millis();
+    _initialized = true;
     return true;
 }
 
@@ -177,6 +179,10 @@ bool AHTxx::_checkCRC8()
 
 bool AHTxx::update()
 {
+    if (!_initialized) {
+        return false;
+    }
+
     unsigned long now = millis();
 
     switch (_state) {

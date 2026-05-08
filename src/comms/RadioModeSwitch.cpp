@@ -5,13 +5,9 @@
 #include <esp_system.h>
 
 #include "AppLog.h"
-
+#include "ClockService.h"
 #include "NetworkOrchestrator.h"
 #include "StatsManager.h"
-
-extern int hours;
-extern int minutes;
-extern int seconds;
 
 namespace RadioModeSwitch {
 void clearRTCTime();
@@ -76,9 +72,9 @@ bool isValidRtcModeFlag(uint32_t rtcFlag) {
 }
 
 void storeRtcSnapshot(uint32_t modeFlag) {
-  rtc_state.hours = (uint8_t)hours;
-  rtc_state.minutes = (uint8_t)minutes;
-  rtc_state.seconds = (uint8_t)seconds;
+  rtc_state.hours = (uint8_t)Clock::hours();
+  rtc_state.minutes = (uint8_t)Clock::minutes();
+  rtc_state.seconds = (uint8_t)Clock::seconds();
   rtc_state.mode_flag = modeFlag;
 }
 

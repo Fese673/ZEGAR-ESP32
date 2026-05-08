@@ -24,11 +24,6 @@ bool stoperRunning = false;
 unsigned long stoperStart = 0;
 unsigned long stoperElapsed = 0;
 
-int hours = 12;
-int minutes = 0;
-int seconds = 0;
-unsigned long lastTick = 0;
-
 MainRuntimeState g_mainRuntimeState;
 
 RuntimeContext makeRuntimeContext() {
@@ -37,10 +32,6 @@ RuntimeContext makeRuntimeContext() {
   AlarmRuntime::State& alarmRuntime = AlarmRuntime::mutableState();
 
   return RuntimeContext{
-      hours,
-      minutes,
-      seconds,
-      lastTick,
       appSettings.mqttEnabled,
       appSettings.homeOverlaySeconds,
       appSettings.homeUiProfile,

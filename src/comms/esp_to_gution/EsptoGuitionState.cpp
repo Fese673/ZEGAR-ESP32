@@ -4,6 +4,7 @@
 #include <string.h>
 #include <Arduino.h>
 #include <WiFi.h>
+#include "WiFiSync.h"
 #include "AppLog.h"
 #include "BMP280Screen.h"
 #include "ENS160AHT21Screen.h"
@@ -29,6 +30,40 @@ namespace EsptoGuition {
 namespace {
 
 using namespace Config;
+
+bool isSummerTime(time_t epoch) {
+  struct tm tm_info;
+  if (gmtime_r(&epoch, &tm_info) == nullptr) return false;
+  
+  int year = tm_info.tm_year + 1900;
+  int month = tm_info.tm_mon + 1;
+  int day = tm_info.tm_mday;
+  int hour = tm_info.tm_hour;
+
+  if (month < 3 || month > 10) return false;
+  if (month > 3 && month < 10) return true;
+
+  // Last Sunday of March (starts at 1:00 UTC)
+  int lastSundayMarch = 31 - ((5 * year / 4 + 4) % 7);
+  if (month == 3) {
+    if (day > lastSundayMarch) return true;
+    if (day < lastSundayMarch) return false;
+    return hour >= 1;
+  }
+
+  // Last Sunday of October (ends at 1:00 UTC)
+  int lastSundayOctober = 31 - ((5 * year / 4 + 1) % 7);
+  if (month == 10) {
+    if (day < lastSundayOctober) return true;
+    if (day > lastSundayOctober) return false;
+    return hour < 1;
+  }
+  return false;
+}
+
+int getLocalTimeOffset(time_t epoch) {
+  return isSummerTime(epoch) ? 7200 : 3600;
+}
 
 struct SyntheticWeatherState {
   int16_t temperatureCx100 = 2200;
@@ -246,6 +281,20 @@ bool buildOutdoorWeatherPayload(OutdoorWeatherPayload &out, unsigned long nowMs)
     out.cloudCover = wd.cloudCover;
     out.apparentTempCx100 = static_cast<int16_t>(lroundf(wd.apparentTemp * 100.0f));
     flags |= 0x10U;
+    out.precipitationMmX10 = static_cast<uint8_t>(lroundf(wd.precipitation * 10.0f));
+    out.uvIndexX10 = static_cast<uint8_t>(lroundf(wd.uvIndex * 10.0f));
+    flags |= 0x40U;
+    if (wd.sunrise != 0) {
+      const uint32_t sunriseLocal = wd.sunrise + getLocalTimeOffset(static_cast<time_t>(wd.sunrise));
+      out.sunriseHour = static_cast<uint8_t>((sunriseLocal / 3600UL) % 24UL);
+      out.sunriseMin = static_cast<uint8_t>((sunriseLocal / 60UL) % 60UL);
+    }
+    if (wd.sunset != 0) {
+      const uint32_t sunsetLocal = wd.sunset + getLocalTimeOffset(static_cast<time_t>(wd.sunset));
+      out.sunsetHour = static_cast<uint8_t>((sunsetLocal / 3600UL) % 24UL);
+      out.sunsetMin = static_cast<uint8_t>((sunsetLocal / 60UL) % 60UL);
+    }
+    flags |= 0x80U;
     out.sampleAgeMs = (wd.timestamp != 0)
       ? static_cast<uint32_t>(nowMs - min(static_cast<unsigned long>(wd.timestamp * 1000UL), nowMs))
       : 0;
@@ -294,16 +343,11 @@ bool buildPmsPayload(PmsPayload &out, unsigned long nowMs) {
 }
 
 bool buildTimePayload(TimePayload &out) {
-  time_t epoch = 0;
-  if (RTCService::getEpoch(&epoch) == RTCService::Status::Ok && epoch > 0) {
+  // Use system time (RAM) instead of hitting the I2C bus (RTCService::getEpoch).
+  // The system time is already synced with RTC by ClockService.
+  const time_t epoch = time(nullptr);
+  if (epoch > 1000000UL) { // Basic sanity check
     out.unixSeconds = static_cast<uint32_t>(epoch);
-    out.valid = 1U;
-    return true;
-  }
-
-  const time_t systemEpoch = time(nullptr);
-  if (systemEpoch > 0) {
-    out.unixSeconds = static_cast<uint32_t>(systemEpoch);
     out.valid = 1U;
     return true;
   }
@@ -315,7 +359,7 @@ bool buildTimePayload(TimePayload &out) {
 
 bool buildWifiPayload(WifiPayload &out) {
   out.connected = (WiFi.status() == WL_CONNECTED);
-  out.rssi = out.connected ? WiFi.RSSI() : 0;
+  out.rssi = out.connected ? WiFiSync::getRssi() : 0;
   if (out.connected) {
     IPAddress ip = WiFi.localIP();
     out.ip[0] = ip[0];
@@ -338,7 +382,13 @@ bool buildSystemResourcesPayload(SystemResourcesPayload &out) {
   out.core0Cpu = heapUsageCore0Percent;
   out.core1Cpu = heapUsageCore1Percent;
   out.freeFlash = flashFreeBytes;
-  out.usedFlash = ESP.getSketchSize();
+  // Cache once — ESP.getSketchSize() reads SPI flash partition header,
+  // disabling instruction cache on BOTH cores. Sketch size is constant.
+  static uint32_t s_cachedSketchSize = 0;
+  if (s_cachedSketchSize == 0) {
+    s_cachedSketchSize = ESP.getSketchSize();
+  }
+  out.usedFlash = s_cachedSketchSize;
 
   const RuntimeTelemetry::Snapshot rt = RuntimeTelemetry::snapshot();
   out.underrunsAudio = static_cast<uint16_t>(rt.audio_underruns);

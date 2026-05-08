@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include "comms/esp_to_gution/Esptogution.h"
 #include "AppSettings.h"
+#include "ClockService.h"
 
 #include "AppState.h"
 #include "ModeManager.h"
@@ -25,6 +26,10 @@
 #include "UIState.h"
 
 extern Preferences s_prefs;
+
+int g_editH = 12;
+int g_editM = 0;
+int g_editS = 0;
 
 namespace {
 
@@ -609,6 +614,7 @@ static bool handleMainMenuClick() {
 
   switch (menuIndex) {
     case 0:  // Ustaw czas
+      Clock::hms(g_editH, g_editM, g_editS);
       appState  = STATE_SET_TIME;
       editState = EDIT_HOURS;
       drawSetTimeSafe();
@@ -1117,17 +1123,17 @@ void ui_begin(const UI_Callbacks& callbacks) {
   }
 }
 
-// Pomocnicza: zmiana czasu w trybie edycji
+// Pomocnicza: zmiana czasu w trybie edycji (modyfikuje frozen copy)
 static void adjustTime_internal(int dir) {
   switch (editState) {
     case EDIT_HOURS:
-      hours = (hours + dir + 24) % 24;
+      g_editH = (g_editH + dir + 24) % 24;
       break;
     case EDIT_MINUTES:
-      minutes = (minutes + dir + 60) % 60;
+      g_editM = (g_editM + dir + 60) % 60;
       break;
     case EDIT_SECONDS:
-      seconds = (seconds + dir + 60) % 60;
+      g_editS = (g_editS + dir + 60) % 60;
       break;
     default:
       break;
@@ -1351,8 +1357,11 @@ void ui_handleEvent(EncoderEvent e) {
     if (appState == STATE_SET_TIME) {
       editState = static_cast<EditState>(editState + 1);
       if (editState == EDIT_DONE) {
-        lastTick = millis();
+        Clock::set(g_editH, g_editM, g_editS);
+        Clock::setLastTick(millis());
+        Clock::applyToSystemTime();
         RtcSyncService::markClockSeeded();
+        RtcSyncService::scheduleRtcWrite();
         appState = STATE_HOME;
         updateSevenSegSafe();
         drawHomeSafe();

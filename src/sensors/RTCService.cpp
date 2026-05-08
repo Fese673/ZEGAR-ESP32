@@ -163,8 +163,14 @@ Status getTm(struct tm *outTm)
         return Status::InvalidArgument;
     }
 
+    if (!I2cShared::lock(gConfig.i2cTimeoutMs)) {
+        setLastStatus(Status::BusBusyTimeout);
+        return Status::BusBusyTimeout;
+    }
+
     const uint32_t startMs = millis();
     if (!gRtc.read(outTm)) {
+        I2cShared::unlock();
         gDiag.readsFailed++;
         const Status status = classifyReadWriteFailure(false);
         gDiag.lastOperationDurationMs = millis() - startMs;
@@ -172,6 +178,7 @@ Status getTm(struct tm *outTm)
         return status;
     }
 
+    I2cShared::unlock();
     gDiag.readsOk++;
     gDiag.oscillatorRunning = gRtc.isRunning();
     gDiag.lastOperationDurationMs = millis() - startMs;
@@ -194,8 +201,14 @@ Status setTm(const struct tm &timeInfo)
         return Status::InvalidDateTime;
     }
 
+    if (!I2cShared::lock(gConfig.i2cTimeoutMs)) {
+        setLastStatus(Status::BusBusyTimeout);
+        return Status::BusBusyTimeout;
+    }
+
     const uint32_t startMs = millis();
     if (!gRtc.write(&timeInfo)) {
+        I2cShared::unlock();
         gDiag.writesFailed++;
         const Status status = classifyReadWriteFailure(true);
         gDiag.lastOperationDurationMs = millis() - startMs;
@@ -203,6 +216,7 @@ Status setTm(const struct tm &timeInfo)
         return status;
     }
 
+    I2cShared::unlock();
     gDiag.writesOk++;
     gDiag.oscillatorRunning = gRtc.isRunning();
     gDiag.lastOperationDurationMs = millis() - startMs;
@@ -251,11 +265,17 @@ Status getEpoch(time_t *outEpoch)
         return Status::InvalidArgument;
     }
 
+    if (!I2cShared::lock(gConfig.i2cTimeoutMs)) {
+        setLastStatus(Status::BusBusyTimeout);
+        return Status::BusBusyTimeout;
+    }
+
     const uint32_t startMs = millis();
 
     // ErriezDS3231::getEpoch() returns 0 on failure.
     const time_t epoch = gRtc.getEpoch();
     if (epoch == 0) {
+        I2cShared::unlock();
         gDiag.readsFailed++;
         const Status status = classifyReadWriteFailure(false);
         gDiag.lastOperationDurationMs = millis() - startMs;
@@ -263,6 +283,7 @@ Status getEpoch(time_t *outEpoch)
         return status;
     }
 
+    I2cShared::unlock();
     *outEpoch = epoch;
     gDiag.readsOk++;
     gDiag.oscillatorRunning = gRtc.isRunning();
@@ -286,8 +307,14 @@ Status setEpoch(time_t epoch, bool verify)
         return Status::InvalidDateTime;
     }
 
+    if (!I2cShared::lock(gConfig.i2cTimeoutMs)) {
+        setLastStatus(Status::BusBusyTimeout);
+        return Status::BusBusyTimeout;
+    }
+
     const uint32_t startMs = millis();
     if (!gRtc.setEpoch(epoch)) {
+        I2cShared::unlock();
         gDiag.writesFailed++;
         const Status status = classifyReadWriteFailure(true);
         gDiag.lastOperationDurationMs = millis() - startMs;
@@ -298,6 +325,7 @@ Status setEpoch(time_t epoch, bool verify)
     if (verify) {
         const time_t readBack = gRtc.getEpoch();
         if (readBack == 0) {
+            I2cShared::unlock();
             gDiag.writesFailed++;
             const Status status = classifyReadWriteFailure(false);
             gDiag.lastOperationDurationMs = millis() - startMs;
@@ -308,6 +336,7 @@ Status setEpoch(time_t epoch, bool verify)
         // Tolerate a 1s difference due to rollover between set and read.
         const int64_t delta = (int64_t)readBack - (int64_t)epoch;
         if (delta < -1 || delta > 1) {
+            I2cShared::unlock();
             gDiag.validationErrors++;
             gDiag.lastOperationDurationMs = millis() - startMs;
             setLastStatus(Status::WriteFailed);
@@ -315,6 +344,7 @@ Status setEpoch(time_t epoch, bool verify)
         }
     }
 
+    I2cShared::unlock();
     gDiag.writesOk++;
     gDiag.oscillatorRunning = gRtc.isRunning();
     gDiag.lastOperationDurationMs = millis() - startMs;

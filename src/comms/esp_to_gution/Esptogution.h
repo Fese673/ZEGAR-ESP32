@@ -40,7 +40,7 @@ struct HelloPayload {
   uint8_t  syncState;       // PeerSyncState
 };
 
-constexpr uint32_t kDefaultBroadcastIntervalMs = 30000UL;
+constexpr uint32_t kDefaultBroadcastIntervalMs = 200UL;
 constexpr uint32_t kDefaultFrameTimeoutMs = 200UL;
 constexpr uint16_t kMaxPayloadBytes = 128U;
 

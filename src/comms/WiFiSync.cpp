@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "AppLog.h"
+#include "ClockService.h"
 #include "ModeManager.h"
 #include "TaskConfig.h"
 #include "RamTelemetry.h"
@@ -31,12 +32,6 @@ constexpr uint8_t kNtpServerCopySize = 64;
 
 }  // namespace
 
-// pointers to time variables in main (set by setTimeRefs)
-static int* pHours = nullptr;
-static int* pMinutes = nullptr;
-static int* pSeconds = nullptr;
-static unsigned long* pLastTick = nullptr;
-
 // Safe copies for the background task and SNTP configuration.
 static char ssidCopy[kSsidCopySize] = {0};
 static char passCopy[kPassCopySize] = {0};
@@ -45,6 +40,7 @@ static char ntpServerCopy[kNtpServerCopySize] = {0};
 // Background-task and sync tracking.
 static std::atomic<bool> wifiConnectedByTask{false};
 static std::atomic<bool> wifiFailedByTask{false};
+static std::atomic<int8_t> wifiRssi{0};
 static std::atomic<uint16_t> wifiDisconnectReason{0};
 static unsigned long lastNtpSyncMillis = 0;
 static bool ntpSynced = false;
@@ -230,11 +226,15 @@ static unsigned long computeBackoffMs(uint8_t failures) {
   return 60000;
 }
 
-void setTimeRefs(int &hoursRef, int &minutesRef, int &secondsRef, unsigned long &lastTickRef) {
-  pHours = &hoursRef;
-  pMinutes = &minutesRef;
-  pSeconds = &secondsRef;
-  pLastTick = &lastTickRef;
+static void wifiMonitorTask(void* param) {
+  while (true) {
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiRssi.store(static_cast<int8_t>(WiFi.RSSI()), std::memory_order_relaxed);
+    } else {
+      wifiRssi.store(0, std::memory_order_relaxed);
+    }
+    vTaskDelay(5000 / portTICK_PERIOD_MS);
+  }
 }
 
 void begin(const char* _ssid, const char* _pass,
@@ -245,8 +245,6 @@ void begin(const char* _ssid, const char* _pass,
   copyCredential(passCopy, kPassCopySize, _pass);
   copyNtpServer(_ntp_server);
 
-  // Keep system time in UTC and convert to local time via TZ.
-  // Defensive: some components may overwrite TZ at runtime.
   ensureTzSet();
 
   resetSyncState();
@@ -258,6 +256,14 @@ void begin(const char* _ssid, const char* _pass,
   lastNtpSyncMillis = 0;
   ntpSynced = false;
   lastPeriodicSync = millis();
+
+  static TaskHandle_t monitorHandle = NULL;
+  if (monitorHandle == NULL) {
+    xTaskCreatePinnedToCore(
+        wifiMonitorTask, "wifiMonitor", TaskConfig::WifiMonitorTask::kStackBytes,
+        NULL, TaskConfig::WifiMonitorTask::kPriority, &monitorHandle,
+        TaskConfig::WifiMonitorTask::kCore);
+  }
 }
 
 void setOnStart(void (*cb)()) { onStartCb = cb; }
@@ -277,7 +283,6 @@ static void requestWifiConnect() {
 
 void startSync() {
   LOG_I(TAG, "startSync request_wifi=true request_time_sync=true");
-  // Backwards compatible: request both WiFi connect and time sync.
   requestWifiConnect();
   requestTimeSync();
 }
@@ -287,7 +292,6 @@ void stop() {
   wifiFailureCount = 0;
   ntpFailureCount = 0;
 
-  // Kill background init task if still running
   TaskHandle_t killHandle = wifiBeginTaskHandle.exchange(NULL, std::memory_order_acq_rel);
   if (killHandle != NULL) {
     vTaskDelete(killHandle);
@@ -299,7 +303,6 @@ void stop() {
     wifiEventHandler = 0;
   }
 
-  // Avoid disconnect noise when WiFi driver is already off/uninitialized.
   const wifi_mode_t currentMode = WiFi.getMode();
   if (currentMode != WIFI_MODE_NULL) {
     WiFi.disconnect(true);
@@ -335,7 +338,6 @@ static void scheduleBackoff(unsigned long now, uint8_t failures) {
 void update() {
   unsigned long now = millis();
 
-  // Periodic sync: if device is in WiFi mode, connected and idle, run sync every interval
   if (ModeManager::isWifiOn() && WiFi.status() == WL_CONNECTED && state == SyncState::Idle) {
     if (now - lastPeriodicSync >= periodicSyncIntervalMs) {
       LOG_I(TAG, "Periodic time sync requested interval_min=%lu", periodicSyncIntervalMs / 60000UL);
@@ -344,34 +346,27 @@ void update() {
     }
   }
 
-  // Transition out of Backoff when time elapsed
   if (state == SyncState::Backoff && now >= backoffUntilMillis) {
     state = SyncState::Idle;
   }
 
-  // Nothing to do
   if (state == SyncState::Idle) {
-    // Respect backoff window if requests are pending
     if ((timeSyncRequested || wifiConnectRequested) && now < backoffUntilMillis) {
       state = SyncState::Backoff;
       return;
     }
 
-    // If WiFi mode is off, don't try to connect/sync.
     if (!ModeManager::isWifiOn()) {
       return;
     }
 
-    // If time sync requested, ensure WiFi connect is requested too when not connected.
     if (timeSyncRequested && WiFi.status() != WL_CONNECTED) {
       requestWifiConnect();
     }
 
-    // Connect WiFi if requested and not connected.
     if (wifiConnectRequested && WiFi.status() != WL_CONNECTED) {
       if (!ssidCopy[0]) {
         lastError = SyncError::MissingCredentials;
-        // Keep state idle; nothing to retry.
         resetRequestFlags();
         return;
       }
@@ -382,7 +377,6 @@ void update() {
       return;
     }
 
-    // Start time sync if requested and WiFi is connected.
     if (timeSyncRequested && WiFi.status() == WL_CONNECTED) {
       state = SyncState::TimeSyncing;
       syncStartMillis = now;
@@ -402,7 +396,6 @@ void update() {
       lastError = SyncError::None;
       LOG_I(TAG, "WiFi connected");
 
-      // If time sync is requested, go straight to time sync.
       if (timeSyncRequested) {
         state = SyncState::TimeSyncing;
         syncStartMillis = now;
@@ -439,14 +432,11 @@ void update() {
   }
 
   if (state == SyncState::TimeSyncing) {
-    // Defensive: ensure TZ wasn't overwritten between sync cycles.
     ensureTzSet();
     struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 10)) {  // 10ms timeout — non-blocking poll
-      if (pHours)   *pHours   = timeinfo.tm_hour;
-      if (pMinutes) *pMinutes = timeinfo.tm_min;
-      if (pSeconds) *pSeconds = timeinfo.tm_sec;
-      if (pLastTick) *pLastTick = millis();
+    if (getLocalTime(&timeinfo, 10)) {
+      Clock::set(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+      Clock::setLastTick(millis());
 
       lastNtpSyncMillis = now;
       ntpSynced = true;
@@ -476,7 +466,6 @@ void update() {
       ntpFailureCount++;
       LOG_W(TAG, "NTP sync timeout failures=%u", ntpFailureCount);
       scheduleBackoff(now, ntpFailureCount);
-      // Keep timeSyncRequested=true to retry later.
       timeSyncRequested = true;
       return;
     }
@@ -493,18 +482,18 @@ bool hasNtpSynced() {
   return ntpSynced;
 }
 
-} // namespace WiFiSync
+int8_t getRssi() {
+  return wifiRssi.load(std::memory_order_relaxed);
+}
 
-// --- API: configure periodic sync interval (minutes) ---
-namespace WiFiSync {
 void setPeriodicSyncIntervalMinutes(uint16_t minutes) {
   if (minutes < kMinPeriodicSyncMinutes) minutes = kMinPeriodicSyncMinutes;
   if (minutes > kMaxPeriodicSyncMinutes) minutes = kMaxPeriodicSyncMinutes;
-  // granularity 1 minute is fine; caller ensures multiple-of-10 if desired
   periodicSyncIntervalMs = (unsigned long)minutes * 60000UL;
 }
 
 uint16_t getPeriodicSyncIntervalMinutes() {
   return (uint16_t)(periodicSyncIntervalMs / 60000UL);
 }
+
 } // namespace WiFiSync

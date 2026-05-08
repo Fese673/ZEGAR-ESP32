@@ -24,6 +24,7 @@ uint16_t s_releaseThreshold = 0;
 bool s_touchActive = false;
 uint8_t s_pressedSamples = 0;
 uint8_t s_releasedSamples = 0;
+bool s_toneActive = false;
 
 void resetDetectionState() {
   s_touchActive = false;
@@ -74,10 +75,18 @@ uint16_t sampleBaseline(uint8_t touchPad) {
 
 void startTone() {
   tone(s_buzzerPin, kToneHz);
+  s_toneActive = true;
 }
 
 void stopTone() {
+  if (!s_toneActive) {
+    digitalWrite(s_buzzerPin, LOW);
+    return;
+  }
+
   noTone(s_buzzerPin);
+  s_toneActive = false;
+  digitalWrite(s_buzzerPin, LOW);
 }
 
 bool calibrateTouchPad() {
@@ -102,6 +111,7 @@ void begin(uint8_t touchPad, uint8_t buzzerPin) {
   s_buzzerPin = buzzerPin;
   s_enabled = false;
   s_ready = false;
+  s_toneActive = false;
   resetDetectionState();
   stopTone();
 }

@@ -90,6 +90,7 @@ struct SensorRuntime {
 };
 
 SensorRuntime s_runtime;
+static bool s_isPresent = false;
 static float s_pressureOffsetHpa = 0.0f;
 
 bool readBytes(uint8_t address, uint8_t reg, uint8_t *buffer, size_t length) {
@@ -101,7 +102,7 @@ bool readBytes(uint8_t address, uint8_t reg, uint8_t *buffer, size_t length) {
     return false;
   }
 
-  Wire.setTimeOut((uint16_t)BMP280_I2C_TIMEOUT_MS);
+  Wire.setTimeOut((uint16_t)constrain(BMP280_I2C_TIMEOUT_MS, 1UL, 65535UL));
   Wire.beginTransmission(address);
   Wire.write(reg);
   if (Wire.endTransmission(false) != 0) {
@@ -131,7 +132,7 @@ bool writeReg(uint8_t address, uint8_t reg, uint8_t value) {
     return false;
   }
 
-  Wire.setTimeOut((uint16_t)BMP280_I2C_TIMEOUT_MS);
+  Wire.setTimeOut((uint16_t)constrain(BMP280_I2C_TIMEOUT_MS, 1UL, 65535UL));
   Wire.beginTransmission(address);
   Wire.write(reg);
   Wire.write(value);
@@ -407,12 +408,14 @@ void begin() {
   }
 
   if (initializeAtAddress(BMP280_ADDR_LOW) || initializeAtAddress(BMP280_ADDR_HIGH)) {
+    s_isPresent = true;
     s_runtime.started = true;
     s_runtime.driverState = DriverState::Idle;
     publishState(BMP280Screen::SensorState::Init, true);
     return;
   }
 
+  s_isPresent = false;
   s_runtime.started = true;
   s_runtime.driverState = DriverState::Missing;
   BMP280Screen::RuntimeData &runtime = BMP280Screen::runtimeData;
@@ -441,10 +444,14 @@ void update() {
     return;
   }
 
+  if (!s_isPresent) {
+    return;
+  }
+
   BMP280Screen::RuntimeData &runtime = BMP280Screen::runtimeData;
   const unsigned long now = millis();
 
-  if (runtime.sensorState == BMP280Screen::SensorState::Missing || runtime.sensorState == BMP280Screen::SensorState::Error) {
+  if (runtime.sensorState == BMP280Screen::SensorState::Error) {
     tryRecover();
     return;
   }

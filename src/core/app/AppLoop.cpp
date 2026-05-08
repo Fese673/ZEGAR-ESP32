@@ -14,6 +14,7 @@
 #include "ClockAlarmService.h"
 #include "ENS160AHT21Sensor.h"
 #include "Encoder.h"
+#include "core/events/EventBus.h"
 #include "comms/esp_to_gution/Esptogution.h"
 #include "HomeRuntime.h"
 #include "LCDMirror.h"
@@ -43,50 +44,36 @@ namespace {
 
 static constexpr char TAG_MAIN[] = "MAIN";
 static constexpr char TAG_BT[] = "BT";
+static RuntimeContext s_ctx = makeRuntimeContext();
 
-void syncUiStateTransition() {
-  static AppState lastUiState = STATE_HOME;
-  if (appState == lastUiState) {
+// ─── Encoder input ───────────────────────────────────────────────────
+
+static void serviceBtLongPress() {
+  if (BootIntroService::isActive()) {
     return;
   }
 
-  requestUiFullRedraw();
-  lastUiState = appState;
-}
-
-void serviceBtMusicHoldGesture() {
-  static bool btMusicHoldLatched = false;
-
   if (appState != STATE_HOME || !ModeManager::isBtOn()) {
-    btMusicHoldLatched = false;
     return;
   }
 
   const unsigned long holdMs = encoder_button_hold_ms();
+  static bool latched = false;
+
   if (holdMs == 0) {
-    btMusicHoldLatched = false;
+    latched = false;
     return;
   }
 
-  if (!btMusicHoldLatched && holdMs >= 4000UL) {
-    btMusicHoldLatched = true;
+  if (!latched && holdMs >= 4000UL) {
+    latched = true;
     UIState::mutableState().btMusicMenu.index = 0;
     appState = STATE_BT_MUSIC_CONTROL;
     drawBtMusicControl();
   }
 }
 
-void serviceBootDiagnostics(RuntimeContext& ctx, unsigned long nowMs) {
-  if (!ctx.state.bootDiagReprinted && nowMs >= 5000UL) {
-    ctx.state.bootDiagReprinted = true;
-    LOG_I(TAG_MAIN,
-          "Boot serial alive i2c_hz=%lu heap_b=%u",
-          static_cast<unsigned long>(Wire.getClock()),
-          ESP.getFreeHeap());
-  }
-}
-
-void serviceInputAndUiEvents() {
+static void serviceEncoderInput() {
   HomeRuntime::handleHomeEntryIfStateChanged(appState);
 
   while (true) {
@@ -95,9 +82,11 @@ void serviceInputAndUiEvents() {
       break;
     }
 
-    const bool suppressHomeBtLongPress = (evt == ENC_LONG && appState == STATE_HOME && ModeManager::isBtOn());
+    if (BootIntroService::isActive()) {
+      continue;
+    }
 
-    if (evt == ENC_CLICK || (evt == ENC_LONG && appState != STATE_TANK_GAME && !suppressHomeBtLongPress)) {
+    if (evt == ENC_CLICK || (evt == ENC_LONG && appState != STATE_TANK_GAME)) {
       statsManager.registerClick();
     } else if (evt == ENC_LEFT) {
       statsManager.registerStepLeft();
@@ -105,174 +94,44 @@ void serviceInputAndUiEvents() {
       statsManager.registerStepRight();
     }
 
-    if (!RadioModeSwitch::isInitializing() && !suppressHomeBtLongPress) {
+    const bool suppressLong = (evt == ENC_LONG && appState == STATE_HOME && ModeManager::isBtOn());
+    if (!RadioModeSwitch::isInitializing() && !suppressLong) {
       ui_handleEvent(evt);
     }
+
+    HomeRuntime::handleHomeEntryIfStateChanged(appState);
   }
 
-  HomeRuntime::handleHomeEntryIfStateChanged(appState);
-  serviceBtMusicHoldGesture();
-  TouchBuzzerTest::service();
-  statsManager.update();
+  serviceBtLongPress();
 }
 
-void serviceUiRefreshPreSensors() {
-  const uint32_t refreshStartUs = micros();
+// ─── Handler: EV_UI_OVERLAY (10ms) ────────────────────────────────────
+
+static void onUiOverlay(const Event&) {
+  if (BootIntroService::isActive()) return;
+
+  const uint32_t startUs = micros();
+
   HomeRuntime::serviceOverlayRotation(appState);
   HomeRuntime::serviceRedraw(appState);
-  LoopBaselineTelemetry::recordUiRefreshUs(static_cast<uint32_t>(micros() - refreshStartUs));
+  TouchBuzzerTest::service();
+  statsManager.update();
+
+  LoopBaselineTelemetry::recordUiRefreshUs(static_cast<uint32_t>(micros() - startUs));
 }
 
-void serviceSensors() {
+// ─── Handler: EV_SENSOR_READ (200ms) ──────────────────────────────────
+
+static void onSensorRead(const Event&) {
   SystemResourcesService::update();
   PMS5003Sensor::update();
   ENS160AHT21Sensor::update();
   BMP280Sensor::update();
-}
 
-void serviceUiRefresh(unsigned long nowMs) {
-  const uint32_t refreshStartUs = micros();
-
-  static unsigned long lastStatsRedraw = 0;
-  static unsigned long lastGamesMenuRedraw = 0;
-  if ((appState == STATE_STATS_RESOURCES_CPU || appState == STATE_STATS_RESOURCES_RAM ||
-       appState == STATE_STATS_RESOURCES_FLASH ||
-       appState == STATE_PMS5003_CF1 || appState == STATE_PMS5003_CF1_PM1 || appState == STATE_PMS5003_CF1_PM25 || appState == STATE_PMS5003_CF1_PM10 ||
-       appState == STATE_PMS5003_ATM || appState == STATE_PMS5003_ATM_PM1 || appState == STATE_PMS5003_ATM_PM25 || appState == STATE_PMS5003_ATM_PM10 ||
-       appState == STATE_PMS5003_PARTICLES || appState == STATE_PMS5003_PARTICLES_0_3 || appState == STATE_PMS5003_PARTICLES_0_5 || appState == STATE_PMS5003_PARTICLES_1_0 || appState == STATE_PMS5003_PARTICLES_2_5 || appState == STATE_PMS5003_PARTICLES_5_0 || appState == STATE_PMS5003_PARTICLES_10_0 ||
-       appState == STATE_PMS5003_TELEMETRY ||
-       appState == STATE_ENS160_AHT21 || appState == STATE_ENS160_AHT21_SUMMARY || appState == STATE_ENS160_AHT21_GAS ||
-       appState == STATE_ENS160_AHT21_GAS_AQI || appState == STATE_ENS160_AHT21_GAS_TVOC || appState == STATE_ENS160_AHT21_GAS_ECO2 ||
-       appState == STATE_ENS160_AHT21_CLIMATE || appState == STATE_ENS160_AHT21_CLIMATE_TEMP || appState == STATE_ENS160_AHT21_CLIMATE_HUM ||
-       appState == STATE_ENS160_AHT21_STATUS ||
-       appState == STATE_BMP280 || appState == STATE_BMP280_TEMP || appState == STATE_BMP280_PRESSURE ||
-       appState == STATE_BMP280_STATUS || appState == STATE_BMP280_ALTITUDE) &&
-      (nowMs - lastStatsRedraw >= 1000UL)) {
-    lastStatsRedraw = nowMs;
-    drawStats();
-  }
-
-  static unsigned long lastTimerRedraw = 0;
-  if (appState == STATE_TIMER && (nowMs - lastTimerRedraw >= 1000UL)) {
-    lastTimerRedraw = nowMs;
-    if (timerRunning || editState == EDIT_DONE) {
-      drawTimer();
-    }
-  }
-
-  if (appState == STATE_SAFE_CRACKER && SafeCracker::service(nowMs)) {
-    SafeCracker::stop();
-    appState = STATE_GAMES_MENU;
-    lastGamesMenuRedraw = nowMs;
-    drawMenu();
-  }
-
-  if (appState == STATE_TANK_GAME && TankGame::service(nowMs)) {
-    TankGame::stop();
-    appState = STATE_GAMES_MENU;
-    lastGamesMenuRedraw = nowMs;
-    drawMenu();
-  }
-
-  static bool menuMusicPlaying = false;
-  const bool backgroundMusicEnabled = AppSettings::state().backgroundMusicEnabled;
-  const bool shouldPlayMenuMusic = (appState == STATE_GAMES_MENU && backgroundMusicEnabled);
-  if (shouldPlayMenuMusic != menuMusicPlaying) {
-    if (shouldPlayMenuMusic) {
-      ClockAlarmService::startMenuMusic(BUZZER_PIN);
-      lastGamesMenuRedraw = nowMs;
-    } else {
-      ClockAlarmService::stopMenuMusic(BUZZER_PIN);
-    }
-
-    menuMusicPlaying = shouldPlayMenuMusic;
-  }
-
-  if (appState == STATE_GAMES_MENU && (nowMs - lastGamesMenuRedraw >= 120UL)) {
-    lastGamesMenuRedraw = nowMs;
-    drawMenu();
-  }
-
-  static unsigned long lastBtMusicControlRedraw = 0;
-  if (appState == STATE_BT_MUSIC_CONTROL && (nowMs - lastBtMusicControlRedraw >= 1000UL)) {
-    lastBtMusicControlRedraw = nowMs;
-    drawBtMusicControl();
-  }
-
-  LoopBaselineTelemetry::recordUiRefreshUs(static_cast<uint32_t>(micros() - refreshStartUs));
-}
-
-void serviceDiagnostics(unsigned long nowMs) {
-  static unsigned long lastStatusDiag = 0;
-  if (!ModeManager::isBtOn() && (nowMs - lastStatusDiag >= 2000UL)) {
-    lastStatusDiag = nowMs;
-    static uint32_t lastHeap = 0;
-    const uint32_t currentHeap = ESP.getFreeHeap();
-    const int heapDelta = static_cast<int>(currentHeap) - static_cast<int>(lastHeap);
-    lastHeap = currentHeap;
-
-    LOG_I(TAG_MAIN,
-          "Status wifi=%s mqtt=%s bt=%s heap_b=%u delta_b=%+d mode=%s",
-          ModeManager::isWifiOn() ? "ON" : "OFF",
-          NetworkOrchestrator::isMqttInitialized() ? "ON" : "OFF",
-          ModeManager::isBtOn() ? "ON" : "OFF",
-          currentHeap,
-          heapDelta,
-          (NetworkOrchestrator::getCurrentRadioState() == RADIO_STATE_BT) ? "BT" : "WiFi");
-  }
-
-#if ENABLE_RUNTIME_TELEMETRY
-  RuntimeTelemetry::service(Serial, nowMs);
-#endif
-
-  RamTelemetry::service(Serial, nowMs);
-
-#if CORE_DEBUG_LEVEL > 0
-  static bool lcdTimingPrimed = false;
-  static unsigned long lastLcdTimingReport = 0;
-  constexpr unsigned long LCD_TIMING_WINDOW_MS = 30000UL;
-  if (!lcdTimingPrimed && nowMs >= LCD_TIMING_WINDOW_MS) {
-    lcdFrame.resetStats();
-    lcdTimingPrimed = true;
-    lastLcdTimingReport = nowMs;
-  }
-  if (lcdTimingPrimed && (nowMs - lastLcdTimingReport >= LCD_TIMING_WINDOW_MS)) {
-    lastLcdTimingReport = nowMs;
-    lcdFrame.reportTiming("runtime");
-    lcdFrame.resetStats();
-  }
-#endif
-}
-
-void serviceComms(RuntimeContext& ctx, unsigned long nowMs) {
-  ClockAlarmService::tickClock(CLOCK_TICK_MS, BUZZER_PIN);
-  ClockAlarmService::serviceAlarmPlayback(BUZZER_PIN, ALARM_DURATION_MS);
-
-  NetworkOrchestrator::setMqttEnabled(ctx.mqttEnabled);
+  NetworkOrchestrator::setMqttEnabled(s_ctx.mqttEnabled);
   const uint32_t netStartUs = micros();
   NetworkOrchestrator::update();
   LoopBaselineTelemetry::recordNetworkUpdateUs(static_cast<uint32_t>(micros() - netStartUs));
-
-  RtcSyncService::processPendingWrite();
-  EsptoGuition::update();
-  meteoSync::update();
-
-  if (ctx.mqttEnabled && NetworkOrchestrator::isMqttInitialized()) {
-    static unsigned long lastMqttPublish = 0;
-    if (nowMs - lastMqttPublish >= 5000UL) {
-      lastMqttPublish = nowMs;
-      const uint32_t mqttStartUs = micros();
-      TelemetryComposer::Sample sample;
-      TelemetryComposer::buildMqttTelemetrySample(sample);
-      MQTTSync::publishSensorData(sample.temperatureC,
-                                  sample.humidityPct,
-                                  sample.pressureHpa,
-                                  sample.aqi,
-                                  sample.tvoc,
-                                  sample.eco2);
-      LoopBaselineTelemetry::recordMqttPublishUs(static_cast<uint32_t>(micros() - mqttStartUs));
-    }
-  }
 
   if (NetworkOrchestrator::getCurrentRadioState() == RADIO_STATE_BT) {
     radioMode = BT_ONLY;
@@ -281,66 +140,214 @@ void serviceComms(RuntimeContext& ctx, unsigned long nowMs) {
   }
 }
 
-void serviceExternalDisplayAndStopwatch(RuntimeContext& ctx, unsigned long nowMs) {
-  if (appState == STATE_DEBUG_STM32 && (nowMs - ctx.state.lastSTM32Update >= STM32_UPDATE_MS)) {
-    ctx.state.lastSTM32Update = nowMs;
-    STM32data_update();
+// ─── Handler: EV_CLOCK_TICK (1000ms) ──────────────────────────────────
 
-    if (stmDataUpdated) {
-      stmDataUpdated = false;
-      displayedBPM = bpmNumber;
-      displayedSPO2 = spo2Number;
-      stm32Connected = true;
-      ctx.state.lastSTM32DataReceived = nowMs;
-    } else if (nowMs - ctx.state.lastSTM32DataReceived > STM32_TIMEOUT_MS) {
-      stm32Connected = false;
-      displayedBPM = 0;
-      displayedSPO2 = 0;
-    }
-
-    drawDebugSTM32();
-  }
-
-  if (appState == STATE_STOPER && (nowMs - ctx.state.lastStoperDraw >= STOPER_DRAW_MS)) {
-    ctx.state.lastStoperDraw = nowMs;
-    drawStoper();
-  }
+static void onClockTick(const Event&) {
+  ClockAlarmService::tickClock(CLOCK_TICK_MS, BUZZER_PIN);
+  RtcSyncService::processPendingWrite();
+  meteoSync::update();
 }
 
-void serviceDiagnosticsTail(unsigned long nowMs) {
-  static unsigned long lastBtCheck = 0;
-  if (nowMs - lastBtCheck > 60000UL) {
-    lastBtCheck = nowMs;
-    LOG_I(TAG_BT, "Connected=%s", audioBT_isConnected() ? "yes" : "no");
+// ─── Handler: EV_UI_REFRESH (1000ms) ──────────────────────────────────
+
+static void onUiRefresh(const Event&) {
+  if (BootIntroService::isActive()) return;
+
+  const uint32_t startUs = micros();
+
+  switch (appState) {
+    case STATE_TIMER:
+      if (timerRunning || editState == EDIT_DONE) drawTimer();
+      break;
+
+    case STATE_DEBUG_STM32:
+      if (millis() - s_ctx.state.lastSTM32Update >= STM32_UPDATE_MS) {
+        s_ctx.state.lastSTM32Update = millis();
+        STM32data_update();
+        if (stmDataUpdated) {
+          stmDataUpdated = false;
+          displayedBPM = bpmNumber;
+          displayedSPO2 = spo2Number;
+          stm32Connected = true;
+          s_ctx.state.lastSTM32DataReceived = millis();
+        } else if (millis() - s_ctx.state.lastSTM32DataReceived > STM32_TIMEOUT_MS) {
+          stm32Connected = false;
+          displayedBPM = 0;
+          displayedSPO2 = 0;
+        }
+        drawDebugSTM32();
+      }
+      break;
+
+    case STATE_STOPER:
+      if (millis() - s_ctx.state.lastStoperDraw >= STOPER_DRAW_MS) {
+        s_ctx.state.lastStoperDraw = millis();
+        drawStoper();
+      }
+      break;
+
+    case STATE_BT_MUSIC_CONTROL:
+      drawBtMusicControl();
+      break;
+
+    default:
+      if (appState >= STATE_STATS_RESOURCES_MENU || appState == STATE_PMS5003 ||
+          appState == STATE_ENS160_AHT21 || appState == STATE_BMP280) {
+        drawStats();
+      }
+      break;
   }
+
+  static unsigned long lastGamesRedraw = 0;
+  const unsigned long now = millis();
+  if (appState == STATE_GAMES_MENU && now - lastGamesRedraw >= 120UL) {
+    lastGamesRedraw = now;
+    drawMenu();
+  }
+
+  static bool menuMusicPlaying = false;
+  const bool bgMusic = AppSettings::state().backgroundMusicEnabled;
+  const bool shouldPlay = (appState == STATE_GAMES_MENU && bgMusic);
+  if (shouldPlay != menuMusicPlaying) {
+    if (shouldPlay) ClockAlarmService::startMenuMusic(BUZZER_PIN);
+    else ClockAlarmService::stopMenuMusic(BUZZER_PIN);
+    menuMusicPlaying = shouldPlay;
+  }
+
+  if (appState == STATE_SAFE_CRACKER && SafeCracker::service(now)) {
+    SafeCracker::stop();
+    appState = STATE_GAMES_MENU;
+    drawMenu();
+  }
+
+  if (appState == STATE_TANK_GAME && TankGame::service(now)) {
+    TankGame::stop();
+    appState = STATE_GAMES_MENU;
+    drawMenu();
+  }
+
+  LoopBaselineTelemetry::recordUiRefreshUs(static_cast<uint32_t>(micros() - startUs));
+}
+
+// ─── Handler: EV_DIAGNOSTICS (2000ms) ─────────────────────────────────
+
+static void onDiagnostics(const Event&) {
+  const unsigned long now = millis();
+
+  if (!ModeManager::isBtOn()) {
+    static uint32_t lastHeap = 0;
+    const uint32_t currentHeap = ESP.getFreeHeap();
+    const int delta = static_cast<int>(currentHeap) - static_cast<int>(lastHeap);
+    lastHeap = currentHeap;
+
+    LOG_I(TAG_MAIN,
+          "Status wifi=%s mqtt=%s bt=%s heap_b=%u delta_b=%+d mode=%s",
+          ModeManager::isWifiOn() ? "ON" : "OFF",
+          NetworkOrchestrator::isMqttInitialized() ? "ON" : "OFF",
+          ModeManager::isBtOn() ? "ON" : "OFF",
+          currentHeap, delta,
+          (NetworkOrchestrator::getCurrentRadioState() == RADIO_STATE_BT) ? "BT" : "WiFi");
+  }
+
+#if ENABLE_RUNTIME_TELEMETRY
+  RuntimeTelemetry::service(Serial, now);
+#endif
+
+  RamTelemetry::service(Serial, now);
+
+#if CORE_DEBUG_LEVEL > 0
+  static bool primed = false;
+  static unsigned long lastLcdReport = 0;
+  if (!primed && now >= 30000UL) { lcdFrame.resetStats(); primed = true; lastLcdReport = now; }
+  if (primed && now - lastLcdReport >= 30000UL) {
+    lastLcdReport = now;
+    lcdFrame.reportTiming("runtime");
+    lcdFrame.resetStats();
+  }
+#endif
+}
+
+// ─── Handler: EV_MQTT_PUBLISH (5000ms) ────────────────────────────────
+
+static void onMqttPublish(const Event&) {
+  if (!s_ctx.mqttEnabled || !NetworkOrchestrator::isMqttInitialized()) return;
+
+  const uint32_t startUs = micros();
+  TelemetryComposer::Sample sample;
+  TelemetryComposer::buildMqttTelemetrySample(sample);
+  MQTTSync::publishSensorData(sample.temperatureC,
+                              sample.humidityPct,
+                              sample.pressureHpa,
+                              sample.aqi,
+                              sample.tvoc,
+                              sample.eco2);
+  LoopBaselineTelemetry::recordMqttPublishUs(static_cast<uint32_t>(micros() - startUs));
+}
+
+// ─── Handler: EV_BOOT_LOGGING (5000ms, oneshot) ──────────────────────
+
+static void onBootLogging(const Event&) {
+  if (s_ctx.state.bootDiagReprinted) return;
+  s_ctx.state.bootDiagReprinted = true;
+  LOG_I(TAG_MAIN,
+        "Boot serial alive i2c_hz=%lu heap_b=%u",
+        static_cast<unsigned long>(Wire.getClock()),
+        ESP.getFreeHeap());
+}
+
+// ─── Handler: EV_BT_CONN_CHECK (60000ms) ──────────────────────────────
+
+static void onBtConnCheck(const Event&) {
+  LOG_I(TAG_BT, "Connected=%s", audioBT_isConnected() ? "yes" : "no");
+}
+
+// ─── AppState change helper ───────────────────────────────────────────
+
+static void onAppStateChanged(const Event& e) {
+  requestUiFullRedraw();
 }
 
 }  // namespace
 
-void runLoop() {
-  if (BootIntroService::service()) {
-    return;
-  }
+// ─── Public API ───────────────────────────────────────────────────────
 
-  static RuntimeContext ctx = makeRuntimeContext();
-  const unsigned long nowMs = millis();
+void runLoop() {
+  const uint32_t nowMs = millis();
   const uint32_t loopStartUs = micros();
   LoopBaselineTelemetry::onLoopStart(nowMs, loopStartUs);
 
-  syncUiStateTransition();
-
-  serviceBootDiagnostics(ctx, nowMs);
-  serviceInputAndUiEvents();
-  syncUiStateTransition();
-  serviceUiRefreshPreSensors();
-  serviceSensors();
-  serviceUiRefresh(nowMs);
-  serviceDiagnostics(nowMs);
-  serviceComms(ctx, nowMs);
-  serviceExternalDisplayAndStopwatch(ctx, nowMs);
-  serviceDiagnosticsTail(nowMs);
+  serviceEncoderInput();
+  BootIntroService::service();
+  EventBus::process();
+  EsptoGuition::update();
+  ClockAlarmService::serviceAlarmPlayback(BUZZER_PIN, ALARM_DURATION_MS);
 
   LoopBaselineTelemetry::onLoopEnd(nowMs, loopStartUs, micros());
+}
+
+void initEventHandlers() {
+  // Elevate the current loopTask priority to 2 so it preempts background tasks (like Meteo).
+  vTaskPrioritySet(NULL, 2);
+
+  EventBus::init();
+  EventBus::subscribe(EV_UI_OVERLAY,     onUiOverlay);
+  EventBus::subscribe(EV_SENSOR_READ,    onSensorRead);
+  EventBus::subscribe(EV_CLOCK_TICK,     onClockTick);
+  EventBus::subscribe(EV_UI_REFRESH,     onUiRefresh);
+  EventBus::subscribe(EV_DIAGNOSTICS,    onDiagnostics);
+  EventBus::subscribe(EV_MQTT_PUBLISH,   onMqttPublish);
+  EventBus::subscribe(EV_BOOT_LOGGING,   onBootLogging);
+  EventBus::subscribe(EV_BT_CONN_CHECK,  onBtConnCheck);
+  EventBus::subscribe(EV_APP_STATE_CHANGED, onAppStateChanged);
+
+  EventBus::addTimer(EV_UI_OVERLAY,     10);
+  EventBus::addTimer(EV_SENSOR_READ,    200);
+  EventBus::addTimer(EV_CLOCK_TICK,     1000);
+  EventBus::addTimer(EV_UI_REFRESH,     100);
+  EventBus::addTimer(EV_DIAGNOSTICS,    2000, false, 500);
+  EventBus::addTimer(EV_MQTT_PUBLISH,   5000);
+  EventBus::addTimer(EV_BOOT_LOGGING,   5000, true);
+  EventBus::addTimer(EV_BT_CONN_CHECK,  60000);
 }
 
 }  // namespace AppLoop

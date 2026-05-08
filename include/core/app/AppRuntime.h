@@ -20,10 +20,6 @@ struct MainRuntimeState {
 };
 
 struct RuntimeContext {
-  int& hours;
-  int& minutes;
-  int& seconds;
-  unsigned long& lastTick;
   bool& mqttEnabled;
   int& settingsRotationSec;
   int& settingsUiScreenIndex;
@@ -54,11 +50,6 @@ extern bool stm32Connected;
 extern bool stoperRunning;
 extern unsigned long stoperStart;
 extern unsigned long stoperElapsed;
-
-extern int hours;
-extern int minutes;
-extern int seconds;
-extern unsigned long lastTick;
 
 extern MainRuntimeState g_mainRuntimeState;
 

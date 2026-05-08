@@ -1,8 +1,10 @@
 #include "UI_Draw.h"
 #include "AppSettings.h"
+#include "ClockService.h"
 #include "LCDMirror.h"
 #include "StatsManager.h"
 #include "RtcSyncService.h"
+#include "UI_Controller.h"
 #include "WiFiSync.h"
 #include "ModeManager.h"
 #include "AudioBT.h"
@@ -249,18 +251,11 @@ void updateSevenSeg() {
   uint8_t HH, MM, SS;
 
   if (alarmRinging) {
-    if (systemTimeValid) {
-      time_t now = time(nullptr);
-      struct tm timeinfo;
-      localtime_r(&now, &timeinfo);
-      HH = packTwoDigits(timeinfo.tm_hour);
-      MM = packTwoDigits(timeinfo.tm_min);
-      SS = packTwoDigits(timeinfo.tm_sec);
-    } else {
-      HH = packTwoDigits(hours);
-      MM = packTwoDigits(minutes);
-      SS = packTwoDigits(seconds);
-    }
+    int th, tm, ts;
+    Clock::hms(th, tm, ts);
+    HH = packTwoDigits(th);
+    MM = packTwoDigits(tm);
+    SS = packTwoDigits(ts);
   } else if (timerRunning) {
     unsigned long elapsed = (nowMs >= timerStartMillis) ? (nowMs - timerStartMillis) : 0;
     long remainingMs = (long)timerDurationMs - (long)elapsed;
@@ -290,19 +285,19 @@ void updateSevenSeg() {
     HH = packTwoDigits(previewHours);
     MM = packTwoDigits(previewMinutes);
     SS = 0;
-  } else if (appState != STATE_SET_TIME && systemTimeValid) {
-    struct tm timeinfo;
-    time_t now = time(nullptr);
-    localtime_r(&now, &timeinfo);
-    HH = packTwoDigits(timeinfo.tm_hour);
-    MM = packTwoDigits(timeinfo.tm_min);
-    SS = packTwoDigits(timeinfo.tm_sec);
+  } else if (appState == STATE_SET_TIME) {
+    HH = packTwoDigits(g_editH);
+    MM = packTwoDigits(g_editM);
+    SS = packTwoDigits(g_editS);
   } else {
-    HH = packTwoDigits(hours);
-    MM = packTwoDigits(minutes);
-    SS = packTwoDigits(seconds);
+    int th, tm, ts;
+    Clock::hms(th, tm, ts);
+    HH = packTwoDigits(th);
+    MM = packTwoDigits(tm);
+    SS = packTwoDigits(ts);
   }
 
+  commitSevenSegFrame(swapNibbles(SS), swapNibbles(MM), swapNibbles(HH));
   commitSevenSegFrame(swapNibbles(SS), swapNibbles(MM), swapNibbles(HH));
 }
 
@@ -540,10 +535,14 @@ void drawHome() {
     struct tm timeinfo;
     localtime_r(&now, &timeinfo);
     snprintf(row1, sizeof(row1), "%02d %s %04d", timeinfo.tm_mday, polishMonths[timeinfo.tm_mon], 1900 + timeinfo.tm_year);
-    snprintf(row2, sizeof(row2), ">> %02d:%02d:%02d <<", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    char tbuf[10];
+    Clock::formatHms(tbuf, sizeof(tbuf));
+    snprintf(row2, sizeof(row2), ">> %s <<", tbuf);
   } else if (clockSeeded) {
     snprintf(row1, sizeof(row1), "%s", "BRAK DATY RTC/NTP");
-    snprintf(row2, sizeof(row2), ">> %02d:%02d:%02d <<", hours, minutes, seconds);
+    char tbuf[10];
+    Clock::formatHms(tbuf, sizeof(tbuf));
+    snprintf(row2, sizeof(row2), ">> %s <<", tbuf);
   } else {
     snprintf(row1, sizeof(row1), "%s", "OCZEKIWANIE NA CZAS");
     snprintf(row2, sizeof(row2), "%s", ">> --:--:-- <<");
@@ -1008,9 +1007,9 @@ void drawSetTime() {
 
   char tbuf[21];
   char hh[3]; char mm[3]; char ss[3];
-  snprintf(hh, sizeof(hh), "%02d", hours);
-  snprintf(mm, sizeof(mm), "%02d", minutes);
-  snprintf(ss, sizeof(ss), "%02d", seconds);
+  snprintf(hh, sizeof(hh), "%02d", g_editH);
+  snprintf(mm, sizeof(mm), "%02d", g_editM);
+  snprintf(ss, sizeof(ss), "%02d", g_editS);
 
   if (editState == EDIT_HOURS) {
     snprintf(tbuf, sizeof(tbuf), "< [%s]:%s:%s >", hh, mm, ss);
@@ -1198,11 +1197,9 @@ void drawDebugSTM32() {
 
 // --- Pomocnicza do rysowania czasu ---
 void printTime(bool edit) {
-  printVal(hours, edit && editState == EDIT_HOURS);
-  LCD_PRINT(F(":"));
-  printVal(minutes, edit && editState == EDIT_MINUTES);
-  LCD_PRINT(F(":"));
-  printVal(seconds, edit && editState == EDIT_SECONDS);
+  printVal(g_editH, edit && editState == EDIT_HOURS);
+  printVal(g_editM, edit && editState == EDIT_MINUTES);
+  printVal(g_editS, edit && editState == EDIT_SECONDS);
 }
 
 // --- Pomocnicza do printTime ---
@@ -2388,9 +2385,17 @@ void drawSystemResources() {
     // --- RAM INFO ---
     const uint32_t freeRam  = ESP.getFreeHeap();
 
-    // --- FLASH INFO ---
-    const uint32_t usedFlash = ESP.getSketchSize();
-    const uint32_t freeFlash = ESP.getFreeSketchSpace();
+    // --- FLASH INFO (cached — SPI flash reads freeze both CPU cores) ---
+    static uint32_t s_cachedUsedFlash = 0;
+    static uint32_t s_cachedFreeFlash = 0;
+    static bool s_flashCached = false;
+    if (!s_flashCached) {
+      s_cachedUsedFlash = ESP.getSketchSize();
+      s_cachedFreeFlash = ESP.getFreeSketchSpace();
+      s_flashCached = true;
+    }
+    const uint32_t usedFlash = s_cachedUsedFlash;
+    const uint32_t freeFlash = s_cachedFreeFlash;
 
     char buf[21];
 

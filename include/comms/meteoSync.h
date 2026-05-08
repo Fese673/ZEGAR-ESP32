@@ -13,6 +13,10 @@ struct WeatherData {
   uint8_t cloudCover;    // %
   uint16_t windDeg;      // degrees
   float windGust;        // m/s
+  float precipitation;   // mm
+  float uvIndex;         // UV index
+  uint32_t sunrise;      // unix time
+  uint32_t sunset;       // unix time
   uint32_t timestamp;    // Unix time
   bool valid;
 

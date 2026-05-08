@@ -45,11 +45,11 @@ void setOnDone(void (*cb)());
 void setPeriodicSyncIntervalMinutes(uint16_t minutes);
 uint16_t getPeriodicSyncIntervalMinutes();
 
-// Optional time references for the system clock.
-void setTimeRefs(int &hoursRef, int &minutesRef, int &secondsRef, unsigned long &lastTickRef);
-
 // NTP status
 unsigned long getLastNtpSyncTime();
 bool hasNtpSynced();
+
+// WiFi status (non-blocking)
+int8_t getRssi();
 
 }  // namespace WiFiSync

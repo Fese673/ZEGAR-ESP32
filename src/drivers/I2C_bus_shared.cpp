@@ -40,6 +40,8 @@ struct I2cRequest {
         WriteRead,
     };
 
+    static constexpr size_t kWriteBufSize = 64;
+
     std::atomic<uint8_t> refs{2};
     std::atomic<bool> completed{false};
     SemaphoreHandle_t done = nullptr;
@@ -48,7 +50,7 @@ struct I2cRequest {
     Op op = Op::Probe;
     TwoWire *wire = nullptr;
     uint8_t address7bit = 0;
-    const uint8_t *writeData = nullptr;
+    uint8_t writeDataBuf[kWriteBufSize];
     size_t writeLen = 0;
     uint8_t *readData = nullptr;
     size_t readLen = 0;
@@ -73,7 +75,6 @@ I2cRequest *acquireRequest()
             slot.op = I2cRequest::Op::Probe;
             slot.wire = nullptr;
             slot.address7bit = 0;
-            slot.writeData = nullptr;
             slot.writeLen = 0;
             slot.readData = nullptr;
             slot.readLen = 0;
@@ -112,7 +113,6 @@ void releaseRequest(I2cRequest *request)
 
     taskENTER_CRITICAL(&gI2cRequestPoolMux);
     request->wire = nullptr;
-    request->writeData = nullptr;
     request->writeLen = 0;
     request->readData = nullptr;
     request->readLen = 0;
@@ -154,7 +154,7 @@ void i2cWorkerTask(void *)
             case I2cRequest::Op::Write:
                 request->result = executeWrite(request->wire,
                                                request->address7bit,
-                                               request->writeData,
+                                               request->writeDataBuf,
                                                request->writeLen,
                                                request->sendStop,
                                                request->timeoutMs,
@@ -164,7 +164,7 @@ void i2cWorkerTask(void *)
             case I2cRequest::Op::WriteRead:
                 request->result = executeWriteRead(request->wire,
                                                    request->address7bit,
-                                                   request->writeData,
+                                                   request->writeDataBuf,
                                                    request->writeLen,
                                                    request->readData,
                                                    request->readLen,
@@ -227,9 +227,10 @@ bool submitRequest(I2cRequest *request)
         return false;
     }
 
-    const uint32_t timeoutMs = request->timeoutMs == 0 ? 1 : request->timeoutMs;
-    TickType_t waitTicks = pdMS_TO_TICKS(timeoutMs);
-    if (timeoutMs > 0 && waitTicks == 0) {
+    const uint32_t timeoutMs = (request->timeoutMs == 0) ? 1 : request->timeoutMs;
+    const uint32_t safetyMarginMs = 100;
+    TickType_t waitTicks = pdMS_TO_TICKS(timeoutMs + safetyMarginMs);
+    if (waitTicks == 0) {
         waitTicks = 1;
     }
 
@@ -333,7 +334,7 @@ bool executeProbe(TwoWire *wire, uint8_t address7bit, uint32_t timeoutMs, uint8_
         return false;
     }
 
-    wire->setTimeOut((uint16_t)(timeoutMs == 0 ? 1 : timeoutMs));
+    wire->setTimeOut((uint16_t)constrain(timeoutMs == 0UL ? 1UL : timeoutMs, 1UL, 65535UL));
 
     const uint8_t attempts = clampRetries(retries);
     bool ok = false;
@@ -370,7 +371,7 @@ bool executeWrite(TwoWire *wire,
         return false;
     }
 
-    wire->setTimeOut((uint16_t)(timeoutMs == 0 ? 1 : timeoutMs));
+    wire->setTimeOut((uint16_t)constrain(timeoutMs == 0UL ? 1UL : timeoutMs, 1UL, 65535UL));
 
     const uint8_t attempts = clampRetries(retries);
     bool ok = false;
@@ -413,7 +414,7 @@ bool executeWriteRead(TwoWire *wire,
         return false;
     }
 
-    wire->setTimeOut((uint16_t)(timeoutMs == 0 ? 1 : timeoutMs));
+    wire->setTimeOut((uint16_t)constrain(timeoutMs == 0UL ? 1UL : timeoutMs, 1UL, 65535UL));
 
     const uint8_t attempts = clampRetries(retries);
     bool ok = false;
@@ -664,8 +665,8 @@ bool write(TwoWire *wire,
             request->op = I2cRequest::Op::Write;
             request->wire = wire;
             request->address7bit = address7bit;
-            request->writeData = data;
-            request->writeLen = len;
+            request->writeLen = (len <= I2cRequest::kWriteBufSize) ? len : I2cRequest::kWriteBufSize;
+            memcpy(request->writeDataBuf, data, request->writeLen);
             request->sendStop = sendStop;
             request->timeoutMs = (timeoutMs == 0) ? 1U : timeoutMs;
             request->retries = retries;
@@ -697,8 +698,8 @@ bool writeRead(TwoWire *wire,
             request->op = I2cRequest::Op::WriteRead;
             request->wire = wire;
             request->address7bit = address7bit;
-            request->writeData = writeData;
-            request->writeLen = writeLen;
+            request->writeLen = (writeLen <= I2cRequest::kWriteBufSize) ? writeLen : I2cRequest::kWriteBufSize;
+            memcpy(request->writeDataBuf, writeData, request->writeLen);
             request->readData = readData;
             request->readLen = readLen;
             request->timeoutMs = (timeoutMs == 0) ? 1U : timeoutMs;

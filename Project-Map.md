@@ -47,52 +47,12 @@ hardware/
     └── ZEGAR ESP32-backups/
 
 include/
-├── headers.md            # public header guidance for cross-module integration
-├── config/               # board pins, secrets, temperature config
-│   ├── BoardPins.h
-│   ├── a2dp_config.h     # shared compile-time config aliases and board selection
-│   ├── SecretsConfig.h
-│   ├── TaskConfig.h
-│   └── TemperatureConfig.h
-├── core/                 # core application interfaces
-│   ├── app/
-│   │   ├── AppBoot.h
-│   │   ├── AppLoop.h
-│   │   ├── AppRuntime.h
-│   │   ├── AppSettings.h
-│   │   └── AppState.h
-│   ├── services/
-│   │   ├── BootIntroService.h
-│   │   ├── ClockAlarmService.h
-│   │   ├── ModeManager.h
-│   │   ├── RtcSyncService.h
-│   │   └── SystemResourcesService.h
-│   └── telemetry/
-│       ├── AppLog.h
-│       ├── LoopBaselineTelemetry.h
-│       ├── RamTelemetry.h
-│       ├── RuntimeTelemetry.h
-│       ├── StatsManager.h
-│       └── STM32_Data.h
-├── display/              # display driver and screen interfaces
-│   ├── LiquidCrystal_I2C.h
-│   ├── BMP280Screen.h
-│   ├── ENS160AHT21Screen.h
-│   ├── LCDIcons.h
-│   └── LCDMirror.h
-├── drivers/              # low-level hardware driver headers
-│   ├── I2C_bus_shared.h
-│   ├── ErriezDS3231.h
-│   ├── gpio/
-│   │   └── README.md
-│   ├── i2c/
-│   │   └── SharedBus.h
-│   └── spi/
-│       └── README.md
-├── games/
-│   ├── SafeCracker.h
-│   └── TANK-GAMES/
-│       └── TankGame.h
+├── audio/
+│   ├── AlarmMelodies.h
+│   ├── AlarmMelodyPrefs.h
+│   ├── AlarmMelodyPreview.h
+│   ├── AlarmRuntime.h
+│   └── AlarmTypes.h
 ├── bluetooth/
 │   ├── A2DPVolumeControl.h
 │   ├── AudioBT.h
@@ -109,12 +69,54 @@ include/
 │   ├── RadioModeSwitch.h
 │   ├── TelemetryComposer.h
 │   └── WiFiSync.h
-├── audio/
-│   ├── AlarmMelodies.h
-│   ├── AlarmMelodyPrefs.h
-│   ├── AlarmMelodyPreview.h
-│   ├── AlarmRuntime.h
-│   └── AlarmTypes.h
+├── config/
+│   ├── a2dp_config.h
+│   ├── BoardPins.h
+│   ├── SecretsConfig.h
+│   ├── TaskConfig.h
+│   └── TemperatureConfig.h
+├── core/
+│   ├── app/
+│   │   ├── AppBoot.h
+│   │   ├── AppLoop.h
+│   │   ├── AppRuntime.h
+│   │   ├── AppSettings.h
+│   │   └── AppState.h
+│   ├── events/
+│   │   ├── EventBus.h
+│   │   └── EventTypes.h
+│   ├── services/
+│   │   ├── BootIntroService.h
+│   │   ├── ClockAlarmService.h
+│   │   ├── ModeManager.h
+│   │   ├── RtcSyncService.h
+│   │   └── SystemResourcesService.h
+│   └── telemetry/
+│       ├── AppLog.h
+│       ├── LoopBaselineTelemetry.h
+│       ├── RamTelemetry.h
+│       ├── RuntimeTelemetry.h
+│       ├── StatsManager.h
+│       └── STM32_Data.h
+├── display/
+│   ├── BMP280Screen.h
+│   ├── ENS160AHT21Screen.h
+│   ├── LCDIcons.h
+│   ├── LCDMirror.h
+│   └── LiquidCrystal_I2C.h
+├── drivers/
+│   ├── gpio/
+│   │   └── README.md
+│   ├── i2c/
+│   │   └── SharedBus.h
+│   ├── spi/
+│   │   └── README.md
+│   ├── ErriezDS3231.h
+│   └── I2C_bus_shared.h
+├── games/
+│   ├── TANK-GAMES/
+│   │   └── TankGame.h
+│   └── SafeCracker.h
 ├── input/
 │   ├── Encoder.h
 │   └── touch_buzzer_test.h
@@ -122,24 +124,25 @@ include/
 │   ├── AHTxx.h
 │   ├── BMP280Sensor.h
 │   ├── ENS160AHT21Sensor.h
-│   ├── PMserial.h
 │   ├── PMS_Czujnik.h
+│   ├── PMserial.h
 │   └── RTCService.h
-└── ui/
-    ├── HomeRuntime.h
-    ├── UIState.h
-    ├── UI_Controller.h
-    └── UI_Draw.h
+├── ui/
+│   ├── HomeRuntime.h
+│   ├── UI_Controller.h
+│   ├── UI_Draw.h
+│   └── UIState.h
+└── headers.md
 
 scripts/
-├── count_loc.py                  # source line counting helper
-├── find_unused_static.py         # static symbol usage scanner
-├── generate_alarm_melodies.py    # build-time melody generation
-├── mqtt_firebase_bridge.py       # bridge/utility script for MQTT diagnostics
-└── scan_project_map.py           # workspace inventory generator / checks
+├── count_loc.py
+├── find_unused_static.py
+├── generate_alarm_melodies.py
+├── mqtt_firebase_bridge.py
+├── scan_project_map.py
+└── update_project_map.py
 
 src/
-├── main.cpp              # application entrypoint, setup() + loop()
 ├── audio/
 │   ├── AlarmMelodies.cpp
 │   ├── AlarmMelodies.generated.inc
@@ -155,23 +158,23 @@ src/
 │   ├── BluetoothA2DPSinkQueued.cpp
 │   └── BluetoothA2DPSource.cpp
 ├── comms/
+│   ├── esp_to_gution/
+│   │   ├── Config.h
+│   │   ├── EsptoGuitionCobs.cpp
+│   │   ├── EsptoGuitionCobs.h
+│   │   ├── EsptoGuitionState.cpp
+│   │   ├── EsptoGuitionState.h
+│   │   ├── EsptoGuitionTransport.cpp
+│   │   ├── EsptoGuitionTransport.h
+│   │   ├── Esptogution.cpp
+│   │   └── Esptogution.h
 │   ├── meteoSync.cpp
 │   ├── MQTTSync.cpp
 │   ├── NetworkOrchestrator.cpp
 │   ├── RadioModeSwitch.cpp
+│   ├── README.md
 │   ├── TelemetryComposer.cpp
-│   ├── WiFiSync.cpp
-│   ├── esp_to_gution/
-│   │   ├── Config.h
-│   │   ├── Esptogution.h
-│   │   ├── Esptogution.cpp
-│   │   ├── EsptoGuitionCobs.h
-│   │   ├── EsptoGuitionCobs.cpp
-│   │   ├── EsptoGuitionState.h
-│   │   ├── EsptoGuitionState.cpp
-│   │   ├── EsptoGuitionTransport.h
-│   │   └── EsptoGuitionTransport.cpp
-│   └── README.md
+│   └── WiFiSync.cpp
 ├── core/
 │   ├── app/
 │   │   ├── AppBoot.cpp
@@ -179,6 +182,8 @@ src/
 │   │   ├── AppRuntime.cpp
 │   │   ├── AppSettings.cpp
 │   │   └── AppState.cpp
+│   ├── events/
+│   │   └── EventBus.cpp
 │   ├── services/
 │   │   ├── BootIntroService.cpp
 │   │   ├── ClockAlarmService.cpp
@@ -203,27 +208,28 @@ src/
 │   ├── I2C_bus_shared.cpp
 │   └── README.md
 ├── games/
-│   ├── SafeCracker.cpp
-│   └── TANK-GAMES/
-│       └── TankGame.cpp
+│   ├── TANK-GAMES/
+│   │   └── TankGame.cpp
+│   └── SafeCracker.cpp
 ├── input/
 │   ├── Encoder.cpp
-│   ├── touch_buzzer_test.cpp
-│   └── README.md
+│   ├── README.md
+│   └── touch_buzzer_test.cpp
 ├── sensors/
 │   ├── AHTxx.cpp
 │   ├── BMP280Sensor.cpp
 │   ├── ENS160AHT21Sensor.cpp
-│   ├── PMserial.cpp
 │   ├── PMS_Czujnik.cpp
+│   ├── PMserial.cpp
 │   ├── README.md
 │   └── RTCService.cpp
-└── ui/
-    ├── HomeRuntime.cpp
-    ├── README.md
-    ├── UIState.cpp
-    ├── UI_Controller.cpp
-    └── UI_Draw.cpp
+├── ui/
+│   ├── HomeRuntime.cpp
+│   ├── README.md
+│   ├── UI_Controller.cpp
+│   ├── UI_Draw.cpp
+│   └── UIState.cpp
+└── main.cpp
 
 test/
 ├── test.md

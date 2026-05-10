@@ -34,9 +34,8 @@ void adjust(Target t, int dir);
 // Convenience: sprintf(buf, "%02d:%02d:%02d", h, m, s)
 int formatHms(char* buf, size_t size);
 
-// Push current ClockService time to ESP32 system time (settimeofday)
-// and schedule DS3231 RTC write. Call after manual time edit.
+// Push current ClockService time to ESP32 system time (settimeofday).
+// DS3231 RTC przechowuje UTC – write jest schedulowany przez RtcSyncService.
 void applyToSystemTime();
-void applyToRtc();
 
 }

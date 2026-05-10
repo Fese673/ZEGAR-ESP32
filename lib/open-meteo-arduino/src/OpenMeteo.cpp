@@ -34,7 +34,9 @@ static bool fetchAndParseJson(const String& url, JsonDocument& doc, size_t docSi
 
 bool getCurrentWeather(OM_CurrentWeather *structure, float latitude, float longitude, const char* apiLink)
 {
-    String url = "http://api.open-meteo.com/v1/forecast?latitude=" + String(latitude) + "&longitude=" + String(longitude) + apiLink;
+    char urlBuf[256];
+    snprintf(urlBuf, sizeof(urlBuf), "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f%s", latitude, longitude, apiLink);
+    String url = urlBuf;
 
     DynamicJsonDocument jsonDoc(3072);
     if (!fetchAndParseJson(url, jsonDoc, 3072) || jsonDoc["current"].isNull()) {

@@ -1,6 +1,51 @@
 # Archiwum Błędów - ZEGAR-ESP32
 ---
-### [ID: ERR_033] | CLOCK_SET_VALIDATION | IMPACT: MEDIUM
+### [ID: ERR_036] | I2C_BUS_RECOVERY | IMPACT: MEDIUM
+**Files:** `[I2C_bus_shared.cpp]`
+
+**PROBLEM:** Brak mechanizmu odblokowania magistrali I2C (Bus Recovery). Jeśli czujnik (np. AHT21) zostanie zakłócony w trakcie transmisji i zablokuje linię SCL w stanie niskim, magistrala I2C umiera do czasu twardego restartu. Objawia się to sekwencyjnymi timeoutami `I2cShared::lock()`.
+
+**CAUSE:** `lock()` tylko czeka na muteks FreeRTOS – nie ma interakcji z hardwarem. ESP32 I2C controller ma timeout ale nie potrafi automatycznie odzyskać szyny po "stuck SCL" (urządzenie slave trzyma linię zegara).
+
+**LOGIC_CHANGE:**
+- Dodano funkcję `recoverBus()`: konfiguruje SDA/SCL jako `OUTPUT_OPEN_DRAIN`, wysyła 9 impulsów SCL (standard I2C bus recovery), generuje STOP, przywraca `INPUT_PULLUP` i re-inicjuje `Wire.begin()`
+- `lock()`: zlicza sekwencyjne timeouty (`gConsecutiveLockTimeouts`). Po 3 z rzędu wywołuje `recoverBus()`
+- `initMaster()`: zapamiętuje piny SDA/SCL (`gBusSdaPin`, `gBusSclPin`) dla potrzeb recovery
+- Stałe: `kBusRecoveryToggleCount=9`, `kBusRecoveryThreshold=3`
+
+**VERIFICATION:** Kompilacja OK. Flash +348B, RAM +24B. Recovery odpala się automatycznie po 3 kolejnych timeoutach lock().
+---
+### [ID: ERR_035] | MQTT_MILLIS_WRAP | IMPACT: LOW
+**Files:** `[MQTTSync.cpp]`
+
+**PROBLEM:** `MQTTSync::update()` i `mqtt_reconnect()` używały wzorca `s_nextStateCheckMs = now + delay` z porównaniem `now < s_nextStateCheckMs`. Przy przepełnieniu `millis()` (po 49.7 dniach) dodawanie do `uint32_t` może dać wynik > `UINT32_MAX`, powodując wrap. Porównanie `now < (wrapped_value)` zwraca `false`, omijając delay → stany maszynowe MQTT przechodzą błyskawicznie przez Backoff/WaitingForWifi.
+
+**CAUSE:** Wzorzec `teraz + czas_oczekiwania` zamiast `teraz - poprzedni_czas >= czas_oczekiwania`. EventBus timery (ERR_018) były już poprawne, ale MQTT miał własną implementację delay.
+
+**LOGIC_CHANGE:**
+- Zastąpiono `s_nextStateCheckMs` parą `s_lastTransitionMs` + `s_delayMs`
+- Wszystkie `s_nextStateCheckMs = now + delay` → `s_lastTransitionMs = now; s_delayMs = delay`
+- Wszystkie `if (now < s_nextStateCheckMs) return` → `if (now - s_lastTransitionMs < s_delayMs) return`
+- Arytmetyka unsigned subtraction działa poprawnie przez wrap millis()
+
+**VERIFICATION:** Kompilacja OK. Delay w MQTT maszynie stanów odporny na wrap uint32_t.
+---
+**Files:** `[RTCService.cpp, RTCService.h, RtcSyncService.cpp, ClockService.h]`
+
+**PROBLEM:** (1) `RTCService::begin()` wołał `gRtc.begin()` i `gRtc.isRunning()` bez `I2cShared::lock` – otwarte okno kolizji I2C z worker taskiem. (2) `Config` zawierał redundantne pola `initI2cMaster`, `sdaPin`, `sclPin`, `i2cClockHz` które dublowały globalne I2C – w praktyce `initI2cMaster` zawsze `false`. (3) `tryRestoreTimeImpl()` wołał `RTCService::begin()` w pętli retry – waste, bo begin init powinien być one-shot. (4) `ClockService.h` deklarował `applyToRtc()` bez implementacji.
+
+**CAUSE:** (1) ERR_006 naprawił locki w getEpoch/setEpoch/getTm/setTm ale pominął `begin()`. (2) Config powstał zanim I2cShared został scentralizowany; parametry migrowały przez refactoringi. (3) Pętla retry w tryRestoreTimeImpl kopiowała oryginalny kod który potrzebował retry begin() przed centralizacją I2C. (4) applyToRtc pozostałość po dawnym API, nigdy nie zaimplementowana.
+
+**LOGIC_CHANGE:**
+- `RTCService::begin()`: dodano `I2cShared::lock/unlock` wokół `gRtc.begin()` i `gRtc.isRunning()` – brak okna kolizji
+- `RTCService::Config`: usunięto `initI2cMaster`, `sdaPin`, `sclPin`, `i2cClockHz` – RTC nie zarządza magistralą
+- `RTCService.h`: usunięto `#include "BoardPins.h"` – Config już nie używa stałych pinów
+- `RtcSyncService::tryRestoreTimeImpl()`: `RTCService::begin()` wołany raz przed pętlą, pętla retry tylko dla `getEpoch()`
+- `RtcSyncService.cpp`: usunięto `#include "BoardPins.h"` (nieużywany)
+- `ClockService.h`: usunięto deklarację `applyToRtc()` (martwy kod)
+
+**VERIFICATION:** Kompilacja OK. Zero kolizji I2C podczas init RTC. begin() zablokowany muteksem. Config czysty – 3 pola mniej.
+---
 **Files:** `[ClockService.cpp]`
 
 **PROBLEM:** `Clock::set(int h, int m, int s)` nie walidował zakresu. Wartości spoza zakresu (h≥24, m≥60, s≥60) powodowały wyświetlanie nieprawidłowego czasu (np. "25:00:00") i potencjalnie błędne działanie alarmu.

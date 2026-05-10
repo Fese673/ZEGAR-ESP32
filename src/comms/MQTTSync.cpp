@@ -81,7 +81,8 @@ enum class MqttConnectionState : uint8_t {
 };
 
 static MqttConnectionState s_state = MqttConnectionState::WaitingForWifi;
-static unsigned long s_nextStateCheckMs = 0;
+static unsigned long s_lastTransitionMs = 0;
+static unsigned long s_delayMs = 0;
 static unsigned long s_connectStartMs = 0;
 static uint8_t s_connectFailureCount = 0;
 static TaskHandle_t s_connectTask = nullptr;
@@ -94,6 +95,7 @@ static constexpr unsigned long MQTT_TCP_CONNECT_TIMEOUT_SEC = 3;
 static constexpr unsigned long MQTT_TLS_HANDSHAKE_TIMEOUT_SEC = 2;
 static constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 1;
 static constexpr uint16_t MQTT_KEEPALIVE_SEC = 15;
+static constexpr uint32_t MQTT_CONNECT_TASK_STACK_BYTES = 12288;
 
 // ============================================================================
 // Forward declarations
@@ -236,7 +238,8 @@ static bool mqtt_reconnect(unsigned long nowMs) {
     if (WiFi.status() != WL_CONNECTED) {
         LOG_I(TAG, "WiFi not connected state=waiting_for_link");
         s_state = MqttConnectionState::WaitingForWifi;
-        s_nextStateCheckMs = nowMs + MQTT_WIFI_RECOVERY_DELAY_MS;
+        s_lastTransitionMs = nowMs;
+        s_delayMs = MQTT_WIFI_RECOVERY_DELAY_MS;
         return false;
     }
 
@@ -250,7 +253,7 @@ static bool mqtt_reconnect(unsigned long nowMs) {
     BaseType_t created = xTaskCreatePinnedToCore(
         mqttConnectTask,
         "mqttConn",
-        4096,
+        MQTT_CONNECT_TASK_STACK_BYTES,
         nullptr,
         1,
         &s_connectTask,
@@ -285,7 +288,8 @@ static bool mqtt_reconnect(unsigned long nowMs) {
         if (s_connectFailureCount < 255) ++s_connectFailureCount;
 
         const unsigned long backoffMs = computeBackoffMs(s_connectFailureCount);
-        s_nextStateCheckMs = nowMs + backoffMs;
+        s_lastTransitionMs = nowMs;
+        s_delayMs = backoffMs;
         s_state = MqttConnectionState::Backoff;
 
         LOG_W(TAG, "Connection failed rc=%d elapsed_ms=%lu failures=%u backoff_ms=%lu", rc, elapsedMs, (unsigned)s_connectFailureCount, backoffMs);
@@ -317,7 +321,8 @@ void begin(const char* ssid, const char* password) {
 
     s_serviceStarted = false;
     s_connectFailureCount = 0;
-    s_nextStateCheckMs = 0;
+    s_lastTransitionMs = 0;
+    s_delayMs = 0;
     s_connectStartMs = 0;
     s_state = (WiFi.status() == WL_CONNECTED)
         ? MqttConnectionState::Idle
@@ -336,7 +341,8 @@ void startCore1Task() {
 
     s_serviceStarted = true;
     s_state = MqttConnectionState::WaitingForWifi;
-    s_nextStateCheckMs = millis() + MQTT_WIFI_RECOVERY_DELAY_MS;
+    s_lastTransitionMs = millis();
+    s_delayMs = MQTT_WIFI_RECOVERY_DELAY_MS;
     s_connectStartMs = 0;
     LOG_I(TAG, "Service started scope=main_loop");
     RAM_CHECKPOINT("MQTT_ON");
@@ -361,7 +367,8 @@ void stopCore1Task() {
 
     s_serviceStarted = false;
     s_state = MqttConnectionState::WaitingForWifi;
-    s_nextStateCheckMs = 0;
+    s_lastTransitionMs = 0;
+    s_delayMs = 0;
     s_connectStartMs = 0;
     s_pendingPayloadReady = false;
     s_pendingPayloadLength = 0;
@@ -497,12 +504,13 @@ void update() {
         }
 
         s_state = MqttConnectionState::WaitingForWifi;
-        s_nextStateCheckMs = now + MQTT_WIFI_RECOVERY_DELAY_MS;
+        s_lastTransitionMs = now;
+        s_delayMs = MQTT_WIFI_RECOVERY_DELAY_MS;
         return;
     }
 
     if (s_state == MqttConnectionState::WaitingForWifi || s_state == MqttConnectionState::Backoff) {
-        if (now < s_nextStateCheckMs) {
+        if (now - s_lastTransitionMs < s_delayMs) {
             return;
         }
 
@@ -536,7 +544,8 @@ void update() {
         if (s_connectFailureCount < 255) ++s_connectFailureCount;
 
         const unsigned long backoffMs = computeBackoffMs(s_connectFailureCount);
-        s_nextStateCheckMs = now + backoffMs;
+        s_lastTransitionMs = now;
+        s_delayMs = backoffMs;
         s_state = MqttConnectionState::Backoff;
 
         LOG_W(TAG, "Connection failed rc=%d elapsed_ms=%lu failures=%u backoff_ms=%lu",
@@ -563,7 +572,8 @@ void update() {
             }
 
             const unsigned long backoffMs = computeBackoffMs(s_connectFailureCount);
-            s_nextStateCheckMs = now + backoffMs;
+            s_lastTransitionMs = now;
+            s_delayMs = backoffMs;
             s_state = MqttConnectionState::Backoff;
 
             LOG_W(TAG, "Connection lost backoff_ms=%lu failures=%u", backoffMs, (unsigned)s_connectFailureCount);

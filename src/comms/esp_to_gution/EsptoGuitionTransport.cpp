@@ -3,6 +3,7 @@
 #include "EsptoGuitionCobs.h"
 #include "EsptoGuitionState.h"
 #include "Esptogution.h"
+#include "AppLog.h"
 #include <Arduino.h>
 
 namespace EsptoGuition {
@@ -137,7 +138,7 @@ void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
   if (s_serial == nullptr || payloadLength > kMaxPayloadBytes)
     return;
 
-  uint8_t frame[kFrameHeaderBytes + kMaxPayloadBytes + kFrameCrcBytes] = {};
+  static uint8_t frame[kFrameHeaderBytes + kMaxPayloadBytes + kFrameCrcBytes];
   uint8_t *cursor = frame;
   *cursor++ = type;
   *cursor++ = sequence;
@@ -154,10 +155,10 @@ void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
   *cursor++ = static_cast<uint8_t>(crc & 0xFFU);
   *cursor++ = static_cast<uint8_t>((crc >> 8) & 0xFFU);
 
-  uint8_t cobsBuffer[sizeof(frame) + 4] = {};
+  static uint8_t cobsBuffer[sizeof(frame) + 4];
   size_t cobsLen = cobsEncode(frame, cursor - frame, cobsBuffer);
 
-  uint8_t txBuffer[sizeof(cobsBuffer) + 2] = {};
+  static uint8_t txBuffer[sizeof(cobsBuffer) + 2];
   txBuffer[0] = 0x00;
   memcpy(txBuffer + 1, cobsBuffer, cobsLen);
   txBuffer[1 + cobsLen] = 0x00;
@@ -165,6 +166,9 @@ void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
   const size_t wireLen = cobsLen + 2;
   if (s_serial->availableForWrite() >= wireLen) {
     s_serial->write(txBuffer, wireLen);
+  } else {
+    LOG_W("UART", "Frame dropped type=%u seq=%u len=%u reason=tx_full",
+          (unsigned)type, (unsigned)sequence, (unsigned)payloadLength);
   }
 }
 

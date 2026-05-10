@@ -106,9 +106,10 @@ static bool doFetch() {
 }
 
 static void storeLatestAirQuality() {
-  String url = "http://air-quality-api.open-meteo.com/v1/air-quality?latitude="
-             + String(kLatitude) + "&longitude=" + String(kLongitude)
-             + kAirQualityApiLink;
+  char urlBuf[256];
+  snprintf(urlBuf, sizeof(urlBuf), "http://air-quality-api.open-meteo.com/v1/air-quality?latitude=%.4f&longitude=%.4f%s",
+           kLatitude, kLongitude, kAirQualityApiLink);
+  String url = urlBuf;
 
   WiFiClient client;
   client.setTimeout(5000UL);
@@ -129,8 +130,8 @@ static void storeLatestAirQuality() {
     return;
   }
 
-  DynamicJsonDocument doc(1024);
-    DeserializationError err = deserializeJson(doc, http.getStream());
+  StaticJsonDocument<1024> doc;
+  DeserializationError err = deserializeJson(doc, http.getStream());
   http.end();
 
   if (err != DeserializationError::Ok || doc["current"].isNull()) {

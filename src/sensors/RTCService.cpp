@@ -93,11 +93,6 @@ Status begin(const Config &config)
 
     I2cShared::setDiagnosticsEnabled(gConfig.enableI2cDiagnostics);
     I2cShared::resetStats();
-
-    if (gConfig.initI2cMaster) {
-        I2cShared::initMaster(gConfig.wire, gConfig.sdaPin, gConfig.sclPin, gConfig.i2cClockHz);
-    }
-
     gRtc.setTimeoutMs(gConfig.i2cTimeoutMs);
 
     if (!I2cShared::probe(gConfig.wire, DS3231_ADDR, gConfig.i2cTimeoutMs, gConfig.i2cRetries)) {
@@ -108,16 +103,31 @@ Status begin(const Config &config)
         return Status::DeviceNotFound;
     }
 
-    gDiag.initialized = true;
     gDiag.rtcDetected = true;
 
-    if (!gRtc.begin(*gConfig.wire)) {
+    if (!I2cShared::lock(gConfig.i2cTimeoutMs)) {
+        gDiag.initialized = false;
         gDiag.oscillatorRunning = false;
+        setLastStatus(Status::BusBusyTimeout);
+        return Status::BusBusyTimeout;
+    }
+
+    const bool rtcOk = gRtc.begin(*gConfig.wire);
+    if (rtcOk) {
+        gDiag.oscillatorRunning = gRtc.isRunning();
+    } else {
+        gDiag.oscillatorRunning = false;
+    }
+
+    I2cShared::unlock();
+
+    if (!rtcOk) {
+        gDiag.initialized = false;
         setLastStatus(Status::InternalError);
         return Status::InternalError;
     }
 
-    gDiag.oscillatorRunning = gRtc.isRunning();
+    gDiag.initialized = true;
 
     if (!gDiag.oscillatorRunning) {
         setLastStatus(Status::OscillatorStopped);

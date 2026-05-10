@@ -15,6 +15,8 @@
 namespace {
 
 constexpr char TAG[] = "I2C";
+constexpr uint8_t kBusRecoveryToggleCount = 9;
+constexpr uint8_t kBusRecoveryThreshold = 3;
 
 #ifdef ARDUINO_ARCH_ESP32
 SemaphoreHandle_t gI2cMutex = nullptr;
@@ -28,6 +30,9 @@ bool gDiagEnabled = false;
 uint32_t gTimeoutCount = 0;
 uint32_t gNackCount = 0;
 uint32_t gErrorCount = 0;
+uint8_t gConsecutiveLockTimeouts = 0;
+int gBusSdaPin = -1;
+int gBusSclPin = -1;
 
 #ifdef ARDUINO_ARCH_ESP32
 constexpr uint32_t kI2cQueueSubmitTimeoutMs = 5;
@@ -98,6 +103,7 @@ I2cRequest *acquireRequest()
         }
     }
     taskEXIT_CRITICAL(&gI2cRequestPoolMux);
+    TELEMETRY_INC(i2c_pool_empty);
     return nullptr;
 }
 
@@ -457,14 +463,25 @@ bool executeWriteRead(TwoWire *wire,
             continue;
         }
 
+        size_t bytesRead = 0;
         for (size_t idx = 0; idx < readLen; idx++) {
             if (!wire->available()) {
-                if (gDiagEnabled) {
-                    ++gErrorCount;
-                }
                 break;
             }
             readData[idx] = (uint8_t)wire->read();
+            bytesRead++;
+        }
+
+        if (bytesRead != readLen) {
+            if (gDiagEnabled) {
+                ++gErrorCount;
+            }
+#ifdef ARDUINO_ARCH_ESP32
+            if (i + 1 < attempts) {
+                vTaskDelay(1);
+            }
+#endif
+            continue;
         }
 
         ok = true;
@@ -475,12 +492,53 @@ bool executeWriteRead(TwoWire *wire,
     return ok;
 }
 
+#ifdef ARDUINO_ARCH_ESP32
+static void recoverBus()
+{
+    if (gBusSclPin < 0 || gBusSdaPin < 0) {
+        return;
+    }
+
+    LOG_W(TAG, "Bus recovery: toggling SCL %u times", (unsigned)kBusRecoveryToggleCount);
+
+    pinMode(gBusSdaPin, OUTPUT_OPEN_DRAIN);
+    pinMode(gBusSclPin, OUTPUT_OPEN_DRAIN);
+
+    digitalWrite(gBusSdaPin, HIGH);
+
+    for (uint8_t i = 0; i < kBusRecoveryToggleCount; ++i) {
+        digitalWrite(gBusSclPin, LOW);
+        delayMicroseconds(5);
+        digitalWrite(gBusSclPin, HIGH);
+        delayMicroseconds(5);
+    }
+
+    digitalWrite(gBusSclPin, HIGH);
+    delayMicroseconds(5);
+    digitalWrite(gBusSdaPin, LOW);
+    delayMicroseconds(5);
+    digitalWrite(gBusSclPin, LOW);
+
+    pinMode(gBusSclPin, INPUT_PULLUP);
+    pinMode(gBusSdaPin, INPUT_PULLUP);
+
+    Wire.begin(gBusSdaPin, gBusSclPin);
+
+    gConsecutiveLockTimeouts = 0;
+
+    LOG_W(TAG, "Bus recovery completed");
+}
+#endif
+
 }  // namespace
 
 namespace I2cShared {
 
 bool initMaster(TwoWire *wire, int sdaPin, int sclPin, uint32_t clockHz, bool wireAlreadyStarted)
 {
+    gBusSdaPin = sdaPin;
+    gBusSclPin = sclPin;
+
     if (wire == nullptr) {
         return false;
     }
@@ -586,12 +644,18 @@ bool lock(uint32_t timeoutMs)
     }
 
     if (xSemaphoreTakeRecursive(gI2cMutex, ticks) != pdTRUE) {
+        ++gConsecutiveLockTimeouts;
+        if (gConsecutiveLockTimeouts >= kBusRecoveryThreshold) {
+            recoverBus();
+        }
         if (gDiagEnabled) {
             ++gTimeoutCount;
         }
         TELEMETRY_INC(i2c_timeouts);
         return false;
     }
+
+    gConsecutiveLockTimeouts = 0;
 
     if (gI2cOwnerDepth == 0) {
         gI2cOwnerTask = xTaskGetCurrentTaskHandle();
@@ -604,7 +668,7 @@ bool lock(uint32_t timeoutMs)
 void unlock()
 {
 #ifdef ARDUINO_ARCH_ESP32
-    if (gI2cMutex != nullptr) {
+    if (gI2cMutex != nullptr && isHeldByCurrentTask()) {
         if (gI2cOwnerDepth > 0) {
             --gI2cOwnerDepth;
             if (gI2cOwnerDepth == 0) {
@@ -665,7 +729,12 @@ bool write(TwoWire *wire,
             request->op = I2cRequest::Op::Write;
             request->wire = wire;
             request->address7bit = address7bit;
-            request->writeLen = (len <= I2cRequest::kWriteBufSize) ? len : I2cRequest::kWriteBufSize;
+            if (len > I2cRequest::kWriteBufSize) {
+                LOG_W(TAG, "Write truncated: requested=%u max=%u", (unsigned)len, (unsigned)I2cRequest::kWriteBufSize);
+                request->writeLen = I2cRequest::kWriteBufSize;
+            } else {
+                request->writeLen = len;
+            }
             memcpy(request->writeDataBuf, data, request->writeLen);
             request->sendStop = sendStop;
             request->timeoutMs = (timeoutMs == 0) ? 1U : timeoutMs;
@@ -698,7 +767,12 @@ bool writeRead(TwoWire *wire,
             request->op = I2cRequest::Op::WriteRead;
             request->wire = wire;
             request->address7bit = address7bit;
-            request->writeLen = (writeLen <= I2cRequest::kWriteBufSize) ? writeLen : I2cRequest::kWriteBufSize;
+            if (writeLen > I2cRequest::kWriteBufSize) {
+                LOG_W(TAG, "WriteRead truncated: requested=%u max=%u", (unsigned)writeLen, (unsigned)I2cRequest::kWriteBufSize);
+                request->writeLen = I2cRequest::kWriteBufSize;
+            } else {
+                request->writeLen = writeLen;
+            }
             memcpy(request->writeDataBuf, writeData, request->writeLen);
             request->readData = readData;
             request->readLen = readLen;

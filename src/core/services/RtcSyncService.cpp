@@ -6,7 +6,6 @@
 #include <time.h>
 
 #include "AppLog.h"
-#include "BoardPins.h"
 #include "ClockService.h"
 #include "RTCService.h"
 
@@ -97,31 +96,34 @@ void tryRestoreSystemTimeFromDs3231() {
 }
 
 static void tryRestoreTimeImpl(int& hours, int& minutes, int& seconds, unsigned long& lastTick) {
+  // RTC przechowuje czas w UTC. System time (settimeofday) też UTC.
+  // ClockService nakłada strefę czasową (CET/CEST) dla wyświetlania lokalnego.
+  // nigdy nie zapisuj czasu lokalnego do DS3231.
   RTCService::Config rtcCfg;
   rtcCfg.wire = &Wire;
-  rtcCfg.sdaPin = BoardPins::kI2cSda;
-  rtcCfg.sclPin = BoardPins::kI2cScl;
-  rtcCfg.i2cClockHz = BoardPins::kI2cClockHz;
   rtcCfg.i2cTimeoutMs = 10;
   rtcCfg.i2cRetries = 2;
-  rtcCfg.initI2cMaster = false;
   rtcCfg.enableI2cDiagnostics = true;
 
+  // Inicjalizacja RTC (one-shot, nie w pętli retry)
+  const RTCService::Status beginStatus = RTCService::begin(rtcCfg);
+  if (beginStatus == RTCService::Status::DeviceNotFound) {
+    LOG_W(TAG, "DS3231 not found action=skip");
+    return;
+  }
+
+  if (beginStatus == RTCService::Status::OscillatorStopped) {
+    LOG_W(TAG, "DS3231 oscillator stopped action=try_epoch");
+  } else if (beginStatus != RTCService::Status::Ok) {
+    LOG_W(TAG, "DS3231 begin failed status=%s action=skip",
+          RTCService::statusToString(beginStatus));
+    return;
+  } else {
+    LOG_I(TAG, "DS3231 ready");
+  }
+
+  // Pętla retry tylko dla odczytu epoch – begin() już zadziałał
   for (uint8_t attempt = 1; attempt <= kRtcRestoreAttempts; ++attempt) {
-    const RTCService::Status beginStatus = RTCService::begin(rtcCfg);
-    if (beginStatus == RTCService::Status::DeviceNotFound) {
-      LOG_W(TAG, "Begin status=%s action=skip attempt=%u", RTCService::statusToString(beginStatus), (unsigned)attempt);
-      return;
-    }
-
-    if (beginStatus == RTCService::Status::OscillatorStopped) {
-      LOG_W(TAG, "Begin status=%s action=try_epoch attempt=%u", RTCService::statusToString(beginStatus), (unsigned)attempt);
-    } else if (beginStatus != RTCService::Status::Ok) {
-      LOG_W(TAG, "Begin status=%s action=read_fallback attempt=%u", RTCService::statusToString(beginStatus), (unsigned)attempt);
-    } else {
-      LOG_I(TAG, "Begin status=%s attempt=%u", RTCService::statusToString(beginStatus), (unsigned)attempt);
-    }
-
     time_t epoch = 0;
     const RTCService::Status readStatus = RTCService::getEpoch(&epoch);
     const RTCService::Diagnostics& diag = RTCService::getDiagnostics();
@@ -154,10 +156,7 @@ static void tryRestoreTimeImpl(int& hours, int& minutes, int& seconds, unsigned 
 
     const bool retryableStatus =
         readStatus == RTCService::Status::BusBusyTimeout ||
-        readStatus == RTCService::Status::ReadFailed ||
-        readStatus == RTCService::Status::InternalError ||
-        beginStatus == RTCService::Status::InternalError ||
-        beginStatus == RTCService::Status::BusBusyTimeout;
+        readStatus == RTCService::Status::ReadFailed;
     if (attempt < kRtcRestoreAttempts && retryableStatus) {
       vTaskDelay(pdMS_TO_TICKS(kRtcRestoreRetryDelayMs));
       continue;

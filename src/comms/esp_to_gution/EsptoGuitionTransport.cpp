@@ -36,26 +36,6 @@ void sendAck(uint8_t sequence, uint8_t ackCode, uint8_t relatedType) {
   sendRawFrame(kTypeAck, sequence, payload, sizeof(payload));
 }
 
-void sendHelloAck(uint8_t sequence) {
-  uint8_t buf[11];
-  uint8_t *c = buf;
-  *c++ = kProtocolVersion;
-  *c++ = kDeviceRoleSensor;
-  // bootId little-endian
-  *c++ = static_cast<uint8_t>(s_bootId & 0xFF);
-  *c++ = static_cast<uint8_t>((s_bootId >> 8) & 0xFF);
-  *c++ = static_cast<uint8_t>((s_bootId >> 16) & 0xFF);
-  *c++ = static_cast<uint8_t>((s_bootId >> 24) & 0xFF);
-  // uptimeMs little-endian
-  uint32_t uptime = static_cast<uint32_t>(millis());
-  *c++ = static_cast<uint8_t>(uptime & 0xFF);
-  *c++ = static_cast<uint8_t>((uptime >> 8) & 0xFF);
-  *c++ = static_cast<uint8_t>((uptime >> 16) & 0xFF);
-  *c++ = static_cast<uint8_t>((uptime >> 24) & 0xFF);
-  *c++ = static_cast<uint8_t>(s_syncState);
-  sendRawFrame(kTypeHelloAck, sequence, buf, static_cast<uint16_t>(c - buf));
-}
-
 void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
                  uint16_t payloadLength) {
   switch (type) {
@@ -86,6 +66,26 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
     handleReceivedSettings(payload, payloadLength);
     sendAck(sequence, kAckOk, type);
     break;
+  case kTypeMusicCommand:
+    handleReceivedMusicCommand(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  case kTypeMusicVolume:
+    handleReceivedMusicVolume(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  case kTypeMusicEQ:
+    handleReceivedMusicEQ(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  case kTypeMusicRequest:
+    handleReceivedMusicRequest(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  case kTypeRadioMode:
+    handleReceivedRadioModeSwitch(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
   default:
     sendAck(sequence, kAckBadType, type);
     break;
@@ -93,6 +93,24 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
 }
 
 } // namespace
+
+void sendHelloAck(uint8_t sequence) {
+  uint8_t buf[11];
+  uint8_t *c = buf;
+  *c++ = kProtocolVersion;
+  *c++ = kDeviceRoleSensor;
+  *c++ = static_cast<uint8_t>(s_bootId & 0xFF);
+  *c++ = static_cast<uint8_t>((s_bootId >> 8) & 0xFF);
+  *c++ = static_cast<uint8_t>((s_bootId >> 16) & 0xFF);
+  *c++ = static_cast<uint8_t>((s_bootId >> 24) & 0xFF);
+  uint32_t uptime = static_cast<uint32_t>(millis());
+  *c++ = static_cast<uint8_t>(uptime & 0xFF);
+  *c++ = static_cast<uint8_t>((uptime >> 8) & 0xFF);
+  *c++ = static_cast<uint8_t>((uptime >> 16) & 0xFF);
+  *c++ = static_cast<uint8_t>((uptime >> 24) & 0xFF);
+  *c++ = static_cast<uint8_t>(s_syncState);
+  sendRawFrame(kTypeHelloAck, sequence, buf, static_cast<uint16_t>(c - buf));
+}
 
 void beginSerial(HardwareSerial &serialPort, uint32_t baudRate, int rxPin,
                  int txPin) {
@@ -115,30 +133,12 @@ void beginSerial(HardwareSerial &serialPort, uint32_t baudRate, int rxPin,
   resetRx();
 }
 
-void sendHelloAck(uint8_t sequence) {
-  uint8_t buf[11];
-  uint8_t *c = buf;
-  *c++ = kProtocolVersion;
-  *c++ = kDeviceRoleSensor;
-  *c++ = static_cast<uint8_t>(s_bootId & 0xFF);
-  *c++ = static_cast<uint8_t>((s_bootId >> 8) & 0xFF);
-  *c++ = static_cast<uint8_t>((s_bootId >> 16) & 0xFF);
-  *c++ = static_cast<uint8_t>((s_bootId >> 24) & 0xFF);
-  uint32_t uptime = static_cast<uint32_t>(millis());
-  *c++ = static_cast<uint8_t>(uptime & 0xFF);
-  *c++ = static_cast<uint8_t>((uptime >> 8) & 0xFF);
-  *c++ = static_cast<uint8_t>((uptime >> 16) & 0xFF);
-  *c++ = static_cast<uint8_t>((uptime >> 24) & 0xFF);
-  *c++ = static_cast<uint8_t>(s_syncState);
-  sendRawFrame(kTypeHelloAck, sequence, buf, static_cast<uint16_t>(c - buf));
-}
-
 void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
                   uint16_t payloadLength) {
   if (s_serial == nullptr || payloadLength > kMaxPayloadBytes)
     return;
 
-  static uint8_t frame[kFrameHeaderBytes + kMaxPayloadBytes + kFrameCrcBytes];
+  uint8_t frame[kFrameHeaderBytes + kMaxPayloadBytes + kFrameCrcBytes];
   uint8_t *cursor = frame;
   *cursor++ = type;
   *cursor++ = sequence;
@@ -155,10 +155,10 @@ void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
   *cursor++ = static_cast<uint8_t>(crc & 0xFFU);
   *cursor++ = static_cast<uint8_t>((crc >> 8) & 0xFFU);
 
-  static uint8_t cobsBuffer[sizeof(frame) + 4];
+  uint8_t cobsBuffer[sizeof(frame) + 4];
   size_t cobsLen = cobsEncode(frame, cursor - frame, cobsBuffer);
 
-  static uint8_t txBuffer[sizeof(cobsBuffer) + 2];
+  uint8_t txBuffer[sizeof(cobsBuffer) + 2];
   txBuffer[0] = 0x00;
   memcpy(txBuffer + 1, cobsBuffer, cobsLen);
   txBuffer[1 + cobsLen] = 0x00;

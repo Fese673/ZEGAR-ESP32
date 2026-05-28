@@ -103,7 +103,7 @@ I2cRequest *acquireRequest()
         }
     }
     taskEXIT_CRITICAL(&gI2cRequestPoolMux);
-    TELEMETRY_INC(i2c_pool_empty);
+    TELEMETRY_INC(i2c_queue_full);
     return nullptr;
 }
 
@@ -499,6 +499,14 @@ static void recoverBus()
         return;
     }
 
+    // Acquire the mutex before touching the bus. If another task holds it,
+    // skip recovery — we cannot safely toggle SCL under an active transaction.
+    if (gI2cMutex == nullptr || xSemaphoreTakeRecursive(gI2cMutex, 0) != pdTRUE) {
+        LOG_W(TAG, "Bus recovery deferred: mutex held by another task");
+        gConsecutiveLockTimeouts = 0;
+        return;
+    }
+
     LOG_W(TAG, "Bus recovery: toggling SCL %u times", (unsigned)kBusRecoveryToggleCount);
 
     pinMode(gBusSdaPin, OUTPUT_OPEN_DRAIN);
@@ -525,6 +533,7 @@ static void recoverBus()
     Wire.begin(gBusSdaPin, gBusSclPin);
 
     gConsecutiveLockTimeouts = 0;
+    xSemaphoreGiveRecursive(gI2cMutex);
 
     LOG_W(TAG, "Bus recovery completed");
 }

@@ -80,12 +80,38 @@ static void handleWiFiEvent(arduino_event_id_t event, arduino_event_info_t info)
       wifiConnectedByTask.store(true);
       wifiFailedByTask.store(false);
       wifiDisconnectReason.store(0);
+#if defined(ENABLE_WIFI_DIAGNOSTICS)
+      LOG_D(TAG, "IP=%d.%d.%d.%d GW=%d.%d.%d.%d DNS=%d.%d.%d.%d RSSI=%d",
+        WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3],
+        WiFi.gatewayIP()[0], WiFi.gatewayIP()[1], WiFi.gatewayIP()[2], WiFi.gatewayIP()[3],
+        WiFi.dnsIP()[0], WiFi.dnsIP()[1], WiFi.dnsIP()[2], WiFi.dnsIP()[3],
+        WiFi.RSSI());
+      {
+        IPAddress resolved;
+        if (WiFi.hostByName("open-meteo.com", resolved))
+          LOG_D(TAG, "DNS=OK open-meteo.com -> %d.%d.%d.%d", resolved[0], resolved[1], resolved[2], resolved[3]);
+        else
+          LOG_W(TAG, "DNS=FAIL open-meteo.com");
+      }
+      {
+        WiFiClient probe;
+        if (probe.connect("1.1.1.1", 80)) {
+          LOG_D(TAG, "TCP=OK 1.1.1.1:80");
+          probe.stop();
+        } else {
+          LOG_W(TAG, "TCP=FAIL 1.1.1.1:80");
+        }
+      }
+#endif
       break;
 
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       wifiDisconnectReason.store(info.wifi_sta_disconnected.reason);
       wifiConnectedByTask.store(false);
       wifiFailedByTask.store(true);
+#if defined(ENABLE_WIFI_DIAGNOSTICS)
+      LOG_W(TAG, "DISCONNECTED reason=%d", info.wifi_sta_disconnected.reason);
+#endif
       break;
 
     default:
@@ -150,11 +176,14 @@ static void applyBackoff(unsigned long now, uint8_t failures) {
 
 // Task handle for WiFi.begin() offload
 static std::atomic<TaskHandle_t> wifiBeginTaskHandle{NULL};
+static std::atomic<bool> s_wifiInitAbort{false};
 
 // Complete WiFi init task — runs ALL WiFi hardware on Core 1
 // WiFi.mode(), WiFi.begin(), and connection wait — fully non-blocking for Core 0
 static void wifiInitTask(void* param) {
   LOG_I(TAG, "WiFi init task started core=%d", (int)TaskConfig::WifiInitTask::kCore);
+
+  if (s_wifiInitAbort.load(std::memory_order_acquire)) { goto abort_task; }
 
   // Step 1: WiFi driver init (this is the 2-8s blocker on Core 0 — now safe here)
   WiFi.mode(WIFI_STA);
@@ -163,12 +192,20 @@ static void wifiInitTask(void* param) {
   LOG_I(TAG, "WiFi init task mode=STA done=true");
   RAM_CHECKPOINT("WIFI_DRIVER_ON");
 
+  if (s_wifiInitAbort.load(std::memory_order_acquire)) { goto abort_task; }
+
   vTaskDelay(50 / portTICK_PERIOD_MS);
 
-  // Step 2: Start connection
+  // Step 2: Force DNS 1.1.1.1, rest from DHCP
+  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, IPAddress(1,1,1,1), IPAddress(1,0,0,1));
+
+  if (s_wifiInitAbort.load(std::memory_order_acquire)) { goto abort_task; }
+
+  // Step 3: Start connection
   WiFi.begin(ssidCopy, passCopy);
   LOG_I(TAG, "WiFi begin called waiting_for_events=true");
 
+abort_task:
   wifiBeginTaskHandle.store(NULL, std::memory_order_release);
   vTaskDelete(NULL);
 }
@@ -292,10 +329,23 @@ void stop() {
   wifiFailureCount = 0;
   ntpFailureCount = 0;
 
+  // Signal the init task to bail out early instead of force-killing it
+  // mid-WiFi-driver call (which would leave the WiFi stack in an undefined state).
+  s_wifiInitAbort.store(true, std::memory_order_release);
+
+  unsigned long waitStart = millis();
+  while (wifiBeginTaskHandle.load(std::memory_order_acquire) != NULL &&
+         (millis() - waitStart) < 5000UL) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+
+  // Force kill only as last resort
   TaskHandle_t killHandle = wifiBeginTaskHandle.exchange(NULL, std::memory_order_acq_rel);
   if (killHandle != NULL) {
     vTaskDelete(killHandle);
   }
+
+  s_wifiInitAbort.store(false, std::memory_order_release);
 
   if (wifiEventHandlerInstalled) {
     WiFi.removeEvent(wifiEventHandler);
@@ -451,6 +501,9 @@ void update() {
          timeinfo.tm_min,
          timeinfo.tm_sec,
          timeinfo.tm_isdst);
+#if defined(ENABLE_WIFI_DIAGNOSTICS)
+      LOG_D(TAG, "epoch=%lu", (unsigned long)time(nullptr));
+#endif
 
       state = SyncState::Idle;
       if (onDoneCb) onDoneCb();

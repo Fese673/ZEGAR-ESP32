@@ -319,7 +319,9 @@ void runLoop() {
   serviceEncoderInput();
   BootIntroService::service();
   EventBus::process();
+  audioBT_serviceDeferred();
   EsptoGuition::update();
+  STM32data_update();  // non-blocking, 50Hz PPG stream
   ClockAlarmService::serviceAlarmPlayback(BUZZER_PIN, ALARM_DURATION_MS);
 
   LoopBaselineTelemetry::onLoopEnd(nowMs, loopStartUs, micros());
@@ -343,7 +345,7 @@ void initEventHandlers() {
   EventBus::addTimer(EV_UI_OVERLAY,     10);
   EventBus::addTimer(EV_SENSOR_READ,    200);
   EventBus::addTimer(EV_CLOCK_TICK,     1000);
-  EventBus::addTimer(EV_UI_REFRESH,     100);
+  EventBus::addTimer(EV_UI_REFRESH,    1000);
   EventBus::addTimer(EV_DIAGNOSTICS,    2000, false, 500);
   EventBus::addTimer(EV_MQTT_PUBLISH,   5000);
   EventBus::addTimer(EV_BOOT_LOGGING,   5000, true);

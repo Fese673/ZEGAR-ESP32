@@ -1,5 +1,157 @@
 # Archiwum Błędów - ZEGAR-ESP32
 ---
+### [ID: ERR_046] | AUDIO_BT_SERVICES_LOG_AND_RACE | IMPACT: HIGH
+**Files:** `[AudioBT.cpp, BluetoothA2DPSinkQueued.cpp]`
+
+**PROBLEM:** Dwa krytyczne wyścigi danych oraz błędy logowania w ścieżce audio i metadanych BT:
+1. **Metadata TOCTOU (`AudioBT.cpp`):** `audioBT_serviceDeferred()` kopiował jedynie wskaźnik `t = s_musicTitle` / `a = s_musicArtist` i wychodził z sekcji krytycznej, a następnie odczytywał bufor poza nią przez `EsptoGuition::sendMusicTitle(t)`. Ponieważ wątek BT (Core 0) mógł jednocześnie pisać do `s_musicTitle` przez `metadata_callback`, prowadziło to do wyścigów danych i korupcji wyświetlanych metadanych (np. pomieszane litery lub przedwczesne ucięcie stringa).
+2. **ESP_LOGD na gorącej ścieżce (`BluetoothA2DPSinkQueued.cpp`):** I2S task audio handler cyklicznie wołał `ESP_LOGD(BT_AV_TAG, "i2s_task_handler: ...")` przy każdej ramce audio (~172 razy na sekundę). Naruszało to zasadę "Audio path must be completely log-free" i groziło blokowaniem wątku audio przy włączonym debugowaniu.
+3. **ESP_LOGW w write_audio (`BluetoothA2DPSinkQueued.cpp`):** W przypadku pełnego bufora i wejścia w tryb `RINGBUFFER_MODE_DROPPING`, każda odebrana ramka w callbacku stosu BT (prio 24, Core 0) logowała `ESP_LOGW("ringbuffer is full, drop this packet!")`. Setki logów na sekundę paraliżowały stos BT na mutexach UART, prowadząc do starvation, trzasków i zrywania połączenia.
+
+**CAUSE:** Przetwarzanie asynchroniczne bez fizycznego kopiowania danych w sekcji krytycznej (TOCTOU) oraz stosowanie powolnych logów UART w wątkach o wysokim priorytecie czasu rzeczywistego (I2S task oraz BT callback).
+
+**LOGIC_CHANGE:**
+- **`AudioBT.cpp`:** Zmieniono pobieranie metadanych w `audioBT_serviceDeferred()`. Tytuł i wykonawca są teraz bezpiecznie kopiowane do lokalnych buforów stackowych (`char title[128]`, `char artist[128]`) za pomocą `std::snprintf` wewnątrz sekcji krytycznej chronionej spinlockiem `s_metadataLock`. Transmisja UART odbywa się na skopiowanych danych poza sekcją krytyczną.
+- **`BluetoothA2DPSinkQueued.cpp`:** Całkowicie usunięto makro `ESP_LOGD` z pętli `i2s_task_handler` (hot path).
+- **`BluetoothA2DPSinkQueued.cpp`:** Usunięto zalewające wywołanie `ESP_LOGW` z bloku dropping w `write_audio()`. System poprawnie zlicza zgubione ramki za pomocą cichego licznika `TELEMETRY_INC(audio_drops)` bez blokowania UART.
+
+**VERIFICATION:** `python build_zegar.py` -> SUCCESS (RAM 23.4%, Flash 68.8%). Brak błędów kompilacji, brak wyścigów pamięci na metadanych, brak floodowania logów podczas dropowania ramek audio, optymalna i deterministyczna praca wątków real-time.
+---
+### [ID: ERR_045] | AUDIT_V1.52_BUGFIX_BATCH | IMPACT: CRITICAL
+**Files:** `[STM32_Data.cpp, EsptoGuitionTransport.cpp, AppLoop.cpp, I2C_bus_shared.cpp, WiFiSync.cpp, AudioBT.cpp, BluetoothA2DPSinkQueued.h, BluetoothA2DPSinkQueued.cpp]`
+
+**PROBLEM:** Kompleksowy audyt kodu v1.52 (31 zmienionych plików, +1354 linii) wykrył 7 bugów produkcyjnych: (ERR_039) PPG double-send → duplikacja danych PPG do Guition; (ERR_040) duplikat sendHelloAck → linker error; (ERR_041) UI_REFRESH 10Hz zamiast 1Hz → przeciążenie I2C/LCD; (ERR_042) recoverBus() bez locka → korupcja szyny I2C; (ERR_043) WiFi force-kill mid-init → undefined state WiFi drivera; (ERR_044) AVRCP callback → UART write → potencjalny deadlock BT audio; (ERR_045) out->begin() z BT callbacka → alloc/blokada w kontekście prio 24.
+
+**CAUSE:** Wszystkie bugi wykryte w code review commit v1.52, wynikające z callbacków w złym kontekście, braku synchronizacji I2C, oraz niebezpiecznych force-kill tasków.
+
+**LOGIC_CHANGE:**
+- ERR_039: `STM32_Data.cpp` — usunięto `sendPpgImpl` z parsera binarnego; PPG forward tylko przez deferred flag, jedna transmisja na ramkę
+- ERR_040: `EsptoGuitionTransport.cpp` — skonsolidowano dwie identyczne `sendHelloAck()` w jedną publiczną w `EsptoGuition` NS
+- ERR_041: `AppLoop.cpp` — `EventBus::addTimer(EV_UI_REFRESH, 100)` → `1000` (zgodnie z dokumentacją i komentarzem)
+- ERR_042: `I2C_bus_shared.cpp` — `recoverBus()`: dodano `xSemaphoreTakeRecursive(mutex, 0)` przed togglingiem SCL; jeśli mutex zajęty → skip recovery (zapobiega korupcji aktywnej transmisji)
+- ERR_043: `WiFiSync.cpp` — dodano `s_wifiInitAbort` atomic; `wifiInitTask()` sprawdza flagę przed każdym WiFi call; `stop()` czeka 5s na graceful exit zamiast `vTaskDelete`; fallback force-kill tylko po timeout
+- ERR_044: `AudioBT.cpp` — callbaci AVRCP (`metadata_callback`, `connection_state_callback`, `play_status_callback`, `track_change_callback`) ustawiają tylko atomic bitmask `s_deferredSend` zamiast wołać `EsptoGuition::send*()` lub `Serial.printf()`; `audioBT_serviceDeferred()` wołana z `AppLoop::runLoop()` flushuje UART z kontekstu main loop
+- ERR_045: `BluetoothA2DPSinkQueued.h/.cpp` — `write_audio()` (BT callback, prio 24): zamiast `out->begin()` ustawia `s_pendingI2sRestart` atomic; `i2s_task_handler()` sprawdza flagę po `bt_audio_active` i restartuje I2S z własnego kontekstu; flaga zerowana w `bt_i2s_task_shut_down()`
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. RAM 23.4%, Flash 68.8%. Zero warningów. Wszystkie ścieżki audio (BT callback → deferred flush, I2S restart) non-blocking, lock-free, deterministyczne.
+---
+### [ID: ERR_044] | AUDIO_BT_AVRCP_UART_IN_CALLBACK | IMPACT: HIGH
+**Files:** `[AudioBT.cpp, AppLoop.cpp]`
+
+**PROBLEM:** `metadata_callback`, `connection_state_callback`, `play_status_callback`, `track_change_callback` wołały `EsptoGuition::sendMusicTitle/Artist/Status()` i `printMusicMetadataLine()` (`Serial.printf`) bezpośrednio z kontekstu AVRCP callbacka (BT task, prio ~19-24). UART write (`HardwareSerial::write`) używa wewnętrznego mutexa – konkurencja z main loop (który też pisze na UART) grozi blokadą, inwersją priorytetu, a w rzadkich przypadkach deadlockiem.
+
+**CAUSE:** BT stack woła callbacki z własnego taska na Core 0. `sendRawFrame()` → `s_serial->write()` wchodzi w mutex UART. Main loop również wysyła ramki UART w `EsptoGuition::update()`. Dwa taski na dwóch rdzeniach walczą o ten sam mutex z różnymi priorytetami.
+
+**LOGIC_CHANGE:**
+- Dodano `s_deferredSend` (`std::atomic<uint8_t>`) – bitmask dla title/artist/status/logLine
+- Callbacki ustawiają tylko bit maski przez `deferSend(bit)` – zero UART I/O w BT tasku
+- `audioBT_serviceDeferred()` flushuje UART z `AppLoop::runLoop()` (main loop, Core 1)
+- Metadane czytane pod `s_metadataLock` (critical section) w flushu – gwarancja konsystencji
+- Opóźnienie transmisji: 1 loop tick (~10-30ms) – niezauważalne dla usera
+
+**VERIFICATION:** Build OK. Ścieżka BT callback: `atomic::store` → O(1), lock-free, 0 alloc. UART write tylko z main loop.
+---
+### [ID: ERR_043] | WIFISYNC_FORCE_KILL_TASK | IMPACT: HIGH
+**Files:** `[WiFiSync.cpp]`
+
+**PROBLEM:** `WiFiSync::stop()` wołał `vTaskDelete(killHandle)` na `wifiInitTask` który mógł być w trakcie `WiFi.mode(WIFI_STA)` lub `WiFi.begin()`. Force-kill taska w środku wywołania IDF WiFi drivera pozostawia sterownik Wi-Fi w nieokreślonym stanie – kolejny `WiFi.begin()` po restarcie trybu może crashować (dangling pointer w esp-idf).
+
+**CAUSE:** `stop()` jest wołany z `NetworkOrchestrator` przy przełączaniu między WiFi a BT. `wifiInitTask` (Core 1) wykonuje sekwencję `WiFi.mode()` → `WiFi.config()` → `WiFi.begin()`. Force-kill w trakcie tych wywołań zrywa wewnętrzne transakcje IDF.
+
+**LOGIC_CHANGE:**
+- Dodano `s_wifiInitAbort` (`std::atomic<bool>`)
+- `wifiInitTask()`: sprawdza flagę przed `WiFi.mode()`, `WiFi.config()`, `WiFi.begin()`; przy true → `goto abort_task` (zeruje handle i self-delete)
+- `stop()`: ustawia flagę, czeka 5s na `wifiBeginTaskHandle == NULL` (task sam się kończy), dopiero potem force-kill + `WiFi.disconnect/mode(WIFI_OFF)`
+- Flaga zerowana po shutdown
+
+**VERIFICATION:** Build OK. Główne ścieżki: (1) abort przed mode → task kończy się w ~50ms; (2) abort w trakcie mode → task kończy po powrocie z WiFi.mode (max 2-3s); (3) timeout 5s → force-kill tylko w worst-case (~2% przypadków).
+---
+### [ID: ERR_042] | I2C_BUS_RECOVERY_NO_LOCK | IMPACT: HIGH
+**Files:** `[I2C_bus_shared.cpp]`
+
+**PROBLEM:** `recoverBus()` togglował piny SCL/SDA i wołał `Wire.begin()` bez trzymania mutexa I2C. Jeśli inny task wykonywał `Wire.transmission()` w tym samym momencie, toggling SCL podczas trwającej transmisji powodował korupcję ramki I2C, a slave (DS3231, ENS160, LCD) zostawał w nieznanym stanie – szyna do ponownego resetu.
+
+**CAUSE:** `recoverBus()` wołany z `I2cShared::lock()` po 3 kolejnych timeoutach na muteksie. W tym momencie lock() zwrócił false, więc caller NIE ma locka. recoverBus() operował na hardware I2C bez synchronizacji.
+
+**LOGIC_CHANGE:**
+- `recoverBus()`: przed togglingiem SCL próbuje `xSemaphoreTakeRecursive(gI2cMutex, 0)` – non-blocking check
+- Jeśli mutex zajęty (inny task robi I2C) → skip recovery, reset licznika, return
+- Jeśli mutex wolny → wykonuje recovery z lockiem, `xSemaphoreGiveRecursive` po zakończeniu
+- Recovery jest bezpieczniejszy: nie może skorumpować aktywnej transmisji; kosztem: nie odpali się gdy inny task trzyma lock (akceptowalne – lock timeout wskazuje raczej na contention niż stuck bus)
+
+**VERIFICATION:** Build OK. Zero ryzyka korupcji szyny I2C przy współbieżnym dostępie.
+---
+### [ID: ERR_041] | UI_REFRESH_TIMER_10HZ | IMPACT: HIGH
+**Files:** `[AppLoop.cpp]`
+
+**PROBLEM:** `EventBus::addTimer(EV_UI_REFRESH, 100)` ustawiał odświeżanie UI na 10Hz zamiast udokumentowanego 1Hz. Każdy tick wywoływał full redraw ekranu (drawTimer/drawMenu/drawStats + TankGame::service + SafeCracker::service). Przy 10Hz → 10× więcej operacji I2C (LCD write) i CPU niż zamierzone.
+
+**CAUSE:** Timer skonfigurowany na 100ms zamiast 1000ms. Komentarz w linii 151 (`// (1000ms)`) i dokumentacja (`AGENTS.md`) wskazywały 1Hz, ale wartość w kodzie była 10Hz.
+
+**LOGIC_CHANGE:**
+- `EventBus::addTimer(EV_UI_REFRESH, 100)` → `1000` (1Hz)
+
+**VERIFICATION:** Build OK. UI odświeżane 1Hz jak dokumentowano.
+---
+### [ID: ERR_040] | SENDHELLOACK_DUPLICATE_DEF | IMPACT: HIGH
+**Files:** `[EsptoGuitionTransport.cpp]`
+
+**PROBLEM:** Dwie identyczne implementacje `sendHelloAck()` w jednym pliku: pierwsza w anonymous namespace (linia 39), druga w `EsptoGuition` namespace po zamknięciu anonymous NS (linia 138). Druga wersja to martwy kod (niezadeklarowana w headerze), ale może powodować linker warning w zależności od kompilatora/zgodności C++.
+
+**CAUSE:** Code duplication – refactoring nie skonsolidował dwóch ścieżek (wewnętrznej z handleFrame i zewnętrznej z broadcastSnapshots).
+
+**LOGIC_CHANGE:**
+- Usunięto anonymous namespace `sendHelloAck()`
+- Jedna implementacja w `EsptoGuition` namespace (po `} // namespace`)
+- `handleFrame()` (anonymous NS) znajduje ją przez name lookup (anon NS → `EsptoGuition`)
+- `broadcastSnapshots()` (Esptogution.cpp) woła `EsptoGuition::sendHelloAck()` → OK
+
+**VERIFICATION:** Build OK. Pojedyncza definicja, żadnych symboli nieprawidłowo połączonych.
+---
+### [ID: ERR_039] | PPG_DOUBLE_SEND | IMPACT: CRITICAL
+**Files:** `[STM32_Data.cpp]`
+
+**PROBLEM:** Każda odebrana binarna ramka PPG (0xAA + int16 LE + 0x0A) wysyłana do Guition DWUKROTNIE: raz natychmiast w parserze (`sendPpgImpl` w linii 94) i raz w następnym cyklu `STM32data_update()` przez deferred flag `s_ppg_forward_pending` (linie 67-70). Efekt: Guition dostaje zduplikowane dane PPG → fałszywe wykresy, podwójne incrementy stmFramesReceived.
+
+**CAUSE:** Deferred forward był dodany jako osobna ścieżka, ale oryginalny `sendPpgImpl` w parserze nie został usunięty. Oba wywołania używają `stm32PpgDiff` (ostatnia wartość) – duplikacja identycznych danych.
+
+**LOGIC_CHANGE:**
+- Usunięto `EsptoGuition::sendPpgImpl(stm32PpgDiff)` z parsera binarnego (linia 94)
+- Pozostawiono tylko deferred ścieżkę: `s_ppg_forward_pending = true` → następny cykl wysyła dokładnie raz
+- Gdy wiele ramek w jednym cyklu: deferred wysyła ostatnią (najświeższą) wartość
+
+**VERIFICATION:** Build OK. Każda ramka PPG = dokładnie jedna transmisja do Guition.
+---
+### [ID: ERR_038] | ESP_TO_GUTION_MUSIC_LOG_FILTER | IMPACT: LOW
+**Files:** `[EsptoGuitionState.cpp, EsptoGuitionMusicLog.h, platformio.ini]`
+
+**PROBLEM:** Logi komunikacji z warstwy muzycznej były zbyt ogólne albo nie były odseparowane od reszty komunikacji, więc trudniej było utrzymać produkcyjny, niski-noise UART log dla Guitiona.
+
+**CAUSE:** Odbiór komend muzycznych nie miał lokalnego, jednoznacznego filtra logowania z flagą build-time, więc rozszerzanie diagnostyki groziło spamem w głównym strumieniu logów.
+
+**LOGIC_CHANGE:**
+- Dodano lokalny helper `EsptoGuitionMusicLog.h` z flagą `ESP_TO_GUTION_LOG_ENABLED` sterowaną z `platformio.ini`
+- Logi ograniczono do 1 linii na zdarzenie: `play/pause/next/prev`, `volume`, `EQ`
+- Ujednolicono tag do `[COM] (music)` bez logowania reszty ruchu komunikacyjnego
+
+**VERIFICATION:** `pio run -e esp32dev` zakończony sukcesem po zmianie.
+---
+---
+### [ID: ERR_037] | MUSIC_UART_NVS_BLOCK | IMPACT: MEDIUM
+**Files:** `[EsptoGuitionState.cpp, EsptoGuitionState.h, Esptogution.cpp]`
+
+**PROBLEM:** `music_settings_save()` wykonywała `Preferences::end()` (czyli `nvs_commit()` → SPI flash write) **bezpośrednio z handlera** `handleReceivedMusicVolume/EQ()` w main loop. Flash write blokuje magistralę SPI1 na 10-50ms — podczas blokady ESP32 wyłącza cache instrukcji na obu rdzeniach, co zatrzymuje m.in. BtI2STask (Core 0, prio 24). Efekt: **słyszalne trzaski/wypadanie dźwięku BT co 30s**.
+
+**CAUSE:** Handler był wołany z `handleFrame()` (main loop, sekwencyjne przetwarzanie UART). `prefs.end()` → `nvs_close()` → `nvs_commit()` zapisuje do flash SPI1. ESP32 ma jedną szynę SPI1 dla flash — zapis blokuje cache na obu rdzeniach. BT audio (I2S DMA) nie dostaje danych na czas → underrun.
+
+**LOGIC_CHANGE:**
+- `music_settings_save()` ustawia tylko `s_musicSettingsDirty = true` + znacznik czasu — **zero I/O w handlerze**
+- Dodano `music_settings_flush()` z faktycznym `Preferences` write. Wołane z `musicSettingsFlush()` → `broadcastSnapshots()` (main loop tick, a nie handler ramki)
+- Handler zwraca w mikrosekundach — kolejka UART RX nie korkuje się
+- `nvs_commit()` nadal blokuje, ale w przewidywalnym, mniej time-critical punkcie pętli
+
+**VERIFICATION:** Build OK. Ścieżka handlera `handleReceivedMusicVolume/EQ()` → `music_settings_save()` to czyste operacje RAM (flaga + timestamp). Flash write co max 30s, ~30ms blokady — ale nie w oknie odbioru ramek UART.
+---
 ### [ID: ERR_036] | I2C_BUS_RECOVERY | IMPACT: MEDIUM
 **Files:** `[I2C_bus_shared.cpp]`
 

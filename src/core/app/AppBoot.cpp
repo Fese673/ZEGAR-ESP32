@@ -17,6 +17,7 @@
 #include "ENS160AHT21Screen.h"
 #include "ENS160AHT21Sensor.h"
 #include "comms/esp_to_gution/Esptogution.h"
+#include "comms/esp_to_gution/EsptoGuitionState.h"
 #include "HomeRuntime.h"
 #include "LCDIcons.h"
 #include "LCDMirror.h"
@@ -206,6 +207,7 @@ void initPersistenceAndConfig(RuntimeContext& ctx) {
   PMS5003Sensor::setEnabled(pmsEnabled);
 
   RadioModeSwitch::begin();
+  EsptoGuition::musicSettingsInit();
   restoreRtcHandoffTime(ctx, millis(), false);
 }
 

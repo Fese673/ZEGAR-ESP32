@@ -24,7 +24,7 @@ constexpr UBaseType_t kTaskPriority = TaskConfig::MeteoSyncTask::kPriority;
 constexpr BaseType_t kTaskCore = TaskConfig::MeteoSyncTask::kCore;
 
 static constexpr char kCurrentApiLink[] = CURRENT_API_LINK;
-static constexpr char kAirQualityApiLink[] = "&current=european_aqi,pm2_5,pm10,carbon_dioxide&timeformat=unixtime";
+static constexpr char kAirQualityApiLink[] = "&current=european_aqi,pm2_5,pm10,carbon_dioxide,nitrogen_dioxide&timeformat=unixtime";
 
 static portMUX_TYPE s_stateMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE s_aqMux = portMUX_INITIALIZER_UNLOCKED;
@@ -42,7 +42,7 @@ WeatherData::WeatherData()
     timestamp(0), valid(false) {}
 
 AirQualityData::AirQualityData()
-  : europeanAqi(0), pm25(0), pm10(0), co2(0), timestamp(0), valid(false) {}
+  : europeanAqi(0), pm25(0), pm10(0), co2(0), no2UgM3(0), timestamp(0), valid(false) {}
 
 static bool copyLatestSnapshot(WeatherData& out) {
   taskENTER_CRITICAL(&s_stateMux);
@@ -124,6 +124,9 @@ static void storeLatestAirQuality() {
   http.setTimeout(5000UL);
 
   const int code = http.GET();
+#if defined(ENABLE_WIFI_DIAGNOSTICS)
+  LOG_D(TAG_METEO, "HTTP code=%d err=%s", code, http.errorToString(code).c_str());
+#endif
   if (code <= 0) {
     LOG_W(TAG_METEO, "AQ fetch failed, code=%d", code);
     http.end();
@@ -144,6 +147,7 @@ static void storeLatestAirQuality() {
   aq.pm25 = doc["current"]["pm2_5"] | 0.0f;
   aq.pm10 = doc["current"]["pm10"] | 0.0f;
   aq.co2 = doc["current"]["carbon_dioxide"] | 0.0f;
+  aq.no2UgM3 = doc["current"]["nitrogen_dioxide"] | 0.0f;
   aq.timestamp = doc["current"]["time"] | 0U;
   aq.valid = true;
 
@@ -151,8 +155,8 @@ static void storeLatestAirQuality() {
   s_latestAirQuality = aq;
   taskEXIT_CRITICAL(&s_aqMux);
 
-  LOG_I(TAG_METEO, "AQ OK: AQI=%u PM2.5=%.1f PM10=%.1f CO2=%.0f",
-        (unsigned)aq.europeanAqi, aq.pm25, aq.pm10, aq.co2);
+  LOG_I(TAG_METEO, "AQ OK: AQI=%u PM2.5=%.1f PM10=%.1f CO2=%.0f NO2=%.1f",
+        (unsigned)aq.europeanAqi, aq.pm25, aq.pm10, aq.co2, aq.no2UgM3);
 }
 
 static void fetchTask(void* param) {

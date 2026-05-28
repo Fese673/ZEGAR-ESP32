@@ -1,9 +1,12 @@
 #include "STM32_Data.h"
+#include "comms/esp_to_gution/Esptogution.h"
 
 // Global variables
 int bpmNumber = 0;
 int spo2Number = 0;
 bool stmDataUpdated = false;
+int16_t stm32PpgDiff = 0;
+bool stm32PpgActive = false;
 
 // (opcjonalne) statystyki / info
 unsigned long stmLastReceivedMs = 0;
@@ -13,7 +16,7 @@ unsigned long stmFramesReceived = 0;
 static Stream *stmSerial = nullptr;
 static EspSoftwareSerial::UART *stmSoftwareSerial = nullptr;
 
-// Bufor do składania przychodzącej linii (bez dynamicznego String)
+// --- Parser tekstowy BPM:xxx,SPO2:yyy ---
 static const size_t RECV_BUF_SIZE = 128;
 static char recvBuf[RECV_BUF_SIZE];
 static size_t recvIndex = 0;
@@ -21,6 +24,15 @@ static size_t recvIndex = 0;
 // Timeout na niedokończoną ramkę (jeśli ciąg znaków jest przerywany długo)
 static const unsigned long FRAME_TIMEOUT_MS = 1500;
 static unsigned long lastByteReceiveMs = 0;
+
+// --- Parser binarny PPG: 0xAA + int16 LE + 0x0A ---
+static const uint8_t PPG_FRAME_HEAD = 0xAA;
+static const uint8_t PPG_FRAME_TAIL = 0x0A;
+static bool s_ppg_frame_started = false;
+static uint8_t s_ppg_frame_buf[2];
+static uint8_t s_ppg_frame_index = 0;
+static unsigned long s_ppg_last_diff_ms = 0;
+static bool s_ppg_forward_pending = false;
 
 // Funkcja inicjualizujaca wskazany UART
 // Wybór obywa sie dzięki HardwareSerial & serialPort który przekazuje port jako referencje 
@@ -39,96 +51,107 @@ void STM32data_begin(int rxPin, int txPin, uint32_t baudRate) {
     stmDataUpdated = false;
 }
 
-// Rzeczywista funkcja bibloteki
-// Odczyt odebranych danych z formy tekstowej
-// I wyodrębnienie ich do zmiennych które będziemy mogli
-// Użyć do wyświetlenia na segmentowych modułach 
-// Funkcja non-blocking wywoływana w loop()
 void STM32data_update() {
-    if (!stmSerial) return; // UART nie ustawiony
+    if (!stmSerial) return;
 
-    // 1) Jeśli mamy w buforze jakiś fragment i minął timeout - porzuć fragment
-    if (recvIndex > 0) {
-        if ((millis() - lastByteReceiveMs) > FRAME_TIMEOUT_MS) {
-            // Porzucamy częściową ramkę (bez blokowania)
-            recvIndex = 0;
-            recvBuf[0] = '\0';
-        }
+    // Timeout na fragment tekstowy
+    if (recvIndex > 0 && (millis() - lastByteReceiveMs) > FRAME_TIMEOUT_MS) {
+        recvIndex = 0;
+        recvBuf[0] = '\0';
     }
 
-    // Odczytaj wszystkie dostępne bajty (nie czekamy)
+    // PPG aktywny jeśli ramka była w ostatnich 500ms
+    stm32PpgActive = (millis() - s_ppg_last_diff_ms < 500UL);
+
+    // Forward pending PPG diff z poprzedniego cyklu (jeśli sendRawFrame deferred)
+    if (s_ppg_forward_pending) {
+        s_ppg_forward_pending = false;
+        EsptoGuition::sendPpgImpl(stm32PpgDiff);
+    }
+
     while (stmSerial->available() > 0) {
-        int cInt = stmSerial->read(); // zwraca -1 jeśli brak, inaczej 0..255
+        int cInt = stmSerial->read();
         if (cInt < 0) break;
-        char c = (char)cInt;
+        uint8_t c = (uint8_t)cInt;
 
-        lastByteReceiveMs = millis(); // aktualizujemy czas ostatniego bajtu
+        lastByteReceiveMs = millis();
 
-        // Jeżeli mamy koniec linii -> parsuj
+        // --- Parser binarny PPG (priorytet) ---
+        if (s_ppg_frame_started) {
+            if (s_ppg_frame_index < 2) {
+                s_ppg_frame_buf[s_ppg_frame_index++] = c;
+                continue;
+            }
+            if (c == PPG_FRAME_TAIL && s_ppg_frame_index == 2) {
+                // Kompletna ramka: 0xAA + lo + hi + 0x0A
+                stm32PpgDiff = (int16_t)(s_ppg_frame_buf[0] | (s_ppg_frame_buf[1] << 8));
+                s_ppg_frame_started = false;
+                s_ppg_frame_index = 0;
+                s_ppg_last_diff_ms = millis();
+
+                // Forward deferred to next cycle — avoids UART write
+                // from the receive hot path (single send per frame).
+                s_ppg_forward_pending = true;
+
+                stmFramesReceived++;
+                stmLastReceivedMs = s_ppg_last_diff_ms;
+                continue; // pomiń parser tekstowy dla tych bajtów
+            }
+            // Błąd ramki — reset
+            s_ppg_frame_started = false;
+            s_ppg_frame_index = 0;
+        }
+
+        if (c == PPG_FRAME_HEAD) {
+            s_ppg_frame_started = true;
+            s_ppg_frame_index = 0;
+            continue;
+        }
+
+        // --- Parser tekstowy BPM:xxx,SPO2:yyy (tylko dla bajtów spoza ramki binarnej) ---
         if (c == '\n') {
-            // Zakończ bufor poprawnym terminatorem C-string
             if (recvIndex >= RECV_BUF_SIZE) recvIndex = RECV_BUF_SIZE - 1;
             recvBuf[recvIndex] = '\0';
 
-            // Usuń spacje/CR z końca i początku (prosta trim)
-            // Trim right (usuń \r i spacje z końca)
             while (recvIndex > 0 && (recvBuf[recvIndex - 1] == '\r' || recvBuf[recvIndex - 1] == ' ')) {
                 recvIndex--;
                 recvBuf[recvIndex] = '\0';
             }
 
-            // Teraz mamy pełną linię w recvBuf
-            // Parsowanie bez użycia String (łatwe i szybkie)
-            // Oczekujemy formatu: BPM:64,SPO2:97
             char *commaPtr = strchr(recvBuf, ',');
             if (commaPtr != NULL) {
-                // rozdzielenie na dwie części - zastępujemy przecinek '\0'
                 *commaPtr = '\0';
-                char *bpmPart = recvBuf;         // "BPM:64"
-                char *spo2Part = commaPtr + 1;   // "SPO2:97"
+                char *bpmPart = recvBuf;
+                char *spo2Part = commaPtr + 1;
 
-                // znajdź ':'
                 char *colonB = strchr(bpmPart, ':');
                 char *colonS = strchr(spo2Part, ':');
 
                 if (colonB != NULL && colonS != NULL) {
-                    // przesuwamy wskazanie na tekst liczby
-                    char *bpmValStr = colonB + 1;
-                    char *spo2ValStr = colonS + 1;
+                    int parsedBpm = atoi(colonB + 1);
+                    int parsedSpo2 = atoi(colonS + 1);
 
-                    // prosta konwersja na int (atoi jest OK tutaj)
-                    int parsedBpm = atoi(bpmValStr);
-                    int parsedSpo2 = atoi(spo2ValStr);
-
-                    // dodatkowa walidacja (opcjonalnie): zakresy sensowne
                     if (parsedBpm >= 0 && parsedBpm <= 300 && parsedSpo2 >= 0 && parsedSpo2 <= 100) {
                         bpmNumber = parsedBpm;
                         spo2Number = parsedSpo2;
-
-                        // oznaczamy, że mamy nowe dane
                         stmDataUpdated = true;
 
-                        // statystyki
-                        stmFramesReceived++;
-                        stmLastReceivedMs = millis();
+                        // Forward BPM/SpO2 do Gution natychmiast (heartbeat rate)
+                        EsptoGuition::sendBpmStatus(parsedBpm, parsedSpo2);
                     }
                 }
             }
 
-            // wyczyść bufor do następnej ramki
             recvIndex = 0;
             recvBuf[0] = '\0';
         } else {
-            // 4) normalny bajt — dodaj do bufora, ale pilnuj rozmiaru
             if (recvIndex < (RECV_BUF_SIZE - 1)) {
-                recvBuf[recvIndex++] = c;
+                recvBuf[recvIndex++] = (char)c;
                 recvBuf[recvIndex] = '\0';
             } else {
-                // bufor przepełniony — porzuć całość (albo możesz przesunąć, ale proste porzucenie)
                 recvIndex = 0;
                 recvBuf[0] = '\0';
             }
         }
-    } // koniec while available
+    }
 }
-// wersję non-blocking

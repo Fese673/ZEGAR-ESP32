@@ -7,8 +7,12 @@
 #include "TaskConfig.h"
 #include "AppLog.h"
 #include "RamTelemetry.h"
+#include "../comms/esp_to_gution/Esptogution.h"
+#include "../comms/esp_to_gution/EsptoGuitionState.h"
+#include "EQFilter.h"
 
 #include <atomic>
+
 
 #if A2DP_I2S_AUDIOTOOLS
 static audio_tools::I2SStream s_audioStream;
@@ -38,10 +42,173 @@ constexpr int kI2sTicks = 10;
 
 static BluetoothA2DPSinkQueued s_a2dp;
 static std::atomic<bool> s_connected{false};
+static std::atomic<bool> s_isPlaying{false};
 static bool s_audioInitialized = false;
+static uint32_t s_musicPlayingTimeMs = 0;
+static char s_musicTitle[128] = {0};
+static char s_musicArtist[128] = {0};
+static char s_musicAlbum[128] = {0};
+static char s_musicTrack[32] = {0};
+static char s_musicTracks[32] = {0};
+static char s_musicGenre[64] = {0};
+static portMUX_TYPE s_metadataLock = portMUX_INITIALIZER_UNLOCKED;
+
+// Deferred UART sends from BT callbacks (AVRCP runs on a BT task, not the main loop).
+// Callbacks set bits; audioBT_serviceDeferred() flushes them from the main loop.
+static std::atomic<uint8_t> s_deferredSend{0};
+enum DeferredBtSend : uint8_t {
+    kSendTitle     = 1 << 0,
+    kSendArtist    = 1 << 1,
+    kSendStatus    = 1 << 2,
+    kSendLogLine   = 1 << 3,
+};
+
+static void deferSend(DeferredBtSend bit) {
+    s_deferredSend.store(s_deferredSend.load(std::memory_order_relaxed) | static_cast<uint8_t>(bit),
+                         std::memory_order_release);
+}
+
+void resetMusicMetadata() {
+    s_musicPlayingTimeMs = 0;
+    s_musicTitle[0] = '\0';
+    s_musicArtist[0] = '\0';
+    s_musicAlbum[0] = '\0';
+    s_musicTrack[0] = '\0';
+    s_musicTracks[0] = '\0';
+    s_musicGenre[0] = '\0';
+}
+
+const char *metadataAttrName(uint8_t attrId) {
+    switch (attrId) {
+        case ESP_AVRC_MD_ATTR_TITLE:
+            return "title";
+        case ESP_AVRC_MD_ATTR_ARTIST:
+            return "artist";
+        case ESP_AVRC_MD_ATTR_ALBUM:
+            return "album";
+        case ESP_AVRC_MD_ATTR_TRACK_NUM:
+            return "track";
+        case ESP_AVRC_MD_ATTR_NUM_TRACKS:
+            return "tracks";
+        case ESP_AVRC_MD_ATTR_GENRE:
+            return "genre";
+        case ESP_AVRC_MD_ATTR_PLAYING_TIME:
+            return "playing_time";
+        default:
+            return "attr";
+    }
+}
+
+void copyMetadataField(char *destination, size_t destinationSize, const uint8_t *text) {
+    if (destination == nullptr || destinationSize == 0) {
+        return;
+    }
+
+    destination[0] = '\0';
+    if (text == nullptr) {
+        return;
+    }
+
+    const char *source = reinterpret_cast<const char *>(text);
+    std::snprintf(destination, destinationSize, "%s", source);
+}
+
+void printMusicMetadataLine() {
+    char durationText[16] = {0};
+    if (s_musicPlayingTimeMs > 0) {
+        const uint32_t totalSeconds = s_musicPlayingTimeMs / 1000U;
+        const uint32_t minutes = totalSeconds / 60U;
+        const uint32_t seconds = totalSeconds % 60U;
+        std::snprintf(durationText, sizeof(durationText), "%02lu:%02lu",
+                      static_cast<unsigned long>(minutes),
+                      static_cast<unsigned long>(seconds));
+    } else {
+        std::snprintf(durationText, sizeof(durationText), "n/a");
+    }
+
+    Serial.printf("[BT][I] Track title=%s artist=%s album=%s track=%s tracks=%s genre=%s duration=%s\r\n",
+                  (s_musicTitle[0] != '\0') ? s_musicTitle : "n/a",
+                  (s_musicArtist[0] != '\0') ? s_musicArtist : "n/a",
+                  (s_musicAlbum[0] != '\0') ? s_musicAlbum : "n/a",
+                  (s_musicTrack[0] != '\0') ? s_musicTrack : "n/a",
+                  (s_musicTracks[0] != '\0') ? s_musicTracks : "n/a",
+                  (s_musicGenre[0] != '\0') ? s_musicGenre : "n/a",
+                  durationText);
+}
+
+void metadata_callback(uint8_t attrId, const uint8_t *text) {
+    if (text == nullptr) {
+        return;
+    }
+
+    switch (attrId) {
+        case ESP_AVRC_MD_ATTR_TITLE:
+            portENTER_CRITICAL(&s_metadataLock);
+            copyMetadataField(s_musicTitle, sizeof(s_musicTitle), text);
+            portEXIT_CRITICAL(&s_metadataLock);
+            deferSend(kSendTitle);
+            break;
+        case ESP_AVRC_MD_ATTR_ARTIST:
+            portENTER_CRITICAL(&s_metadataLock);
+            copyMetadataField(s_musicArtist, sizeof(s_musicArtist), text);
+            portEXIT_CRITICAL(&s_metadataLock);
+            deferSend(kSendArtist);
+            break;
+        case ESP_AVRC_MD_ATTR_ALBUM:
+            copyMetadataField(s_musicAlbum, sizeof(s_musicAlbum), text);
+            break;
+        case ESP_AVRC_MD_ATTR_TRACK_NUM:
+            copyMetadataField(s_musicTrack, sizeof(s_musicTrack), text);
+            break;
+        case ESP_AVRC_MD_ATTR_NUM_TRACKS:
+            copyMetadataField(s_musicTracks, sizeof(s_musicTracks), text);
+            break;
+        case ESP_AVRC_MD_ATTR_GENRE:
+            copyMetadataField(s_musicGenre, sizeof(s_musicGenre), text);
+            break;
+        case ESP_AVRC_MD_ATTR_PLAYING_TIME:
+            s_musicPlayingTimeMs = static_cast<uint32_t>(std::strtoul(reinterpret_cast<const char *>(text), nullptr, 10));
+            break;
+        default:
+            break;
+    }
+
+    deferSend(kSendLogLine);
+}
 
 void connection_state_callback(esp_a2d_connection_state_t state, void*) {
-    s_connected.store(state == ESP_A2D_CONNECTION_STATE_CONNECTED);
+    const bool wasConnected = s_connected.load();
+    const bool nowConnected = (state == ESP_A2D_CONNECTION_STATE_CONNECTED);
+    s_connected.store(nowConnected);
+
+    if (state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+        s_isPlaying.store(false);
+    }
+
+    if (nowConnected != wasConnected) {
+        if (!nowConnected) {
+            portENTER_CRITICAL(&s_metadataLock);
+            resetMusicMetadata();
+            portEXIT_CRITICAL(&s_metadataLock);
+            deferSend(kSendTitle);
+            deferSend(kSendArtist);
+        }
+        deferSend(kSendStatus);
+    }
+}
+
+void play_status_callback(esp_avrc_playback_stat_t playback) {
+    bool playing = (playback == ESP_AVRC_PLAYBACK_PLAYING);
+    s_isPlaying.store(playing);
+    deferSend(kSendStatus);
+}
+
+void track_change_callback(uint8_t *) {
+    portENTER_CRITICAL(&s_metadataLock);
+    resetMusicMetadata();
+    portEXIT_CRITICAL(&s_metadataLock);
+    deferSend(kSendTitle);
+    deferSend(kSendArtist);
 }
 
 void reduceBtLogNoise() {
@@ -98,6 +265,9 @@ void configureSink() {
     s_a2dp.set_i2s_stack_size(TaskConfig::BtI2STask::kStackBytes);
     s_a2dp.set_i2s_write_size_upto(kI2sWriteSizeUpto);
     s_a2dp.set_i2s_ticks(kI2sTicks);
+    s_a2dp.set_avrc_metadata_callback(metadata_callback);
+    s_a2dp.set_avrc_rn_playstatus_callback(play_status_callback);
+    s_a2dp.set_avrc_rn_track_change_callback(track_change_callback);
 
     // Keep BT control and audio on Core 0; encoder, I2C, and WiFi stay on Core 1.
     s_a2dp.set_task_core(TaskConfig::BtAppTask::kCore);
@@ -143,6 +313,7 @@ bool audioBT_init() {
     }
 
     s_connected.store(false);
+    resetMusicMetadata();
     reduceBtLogNoise();
 
 #if A2DP_I2S_AUDIOTOOLS
@@ -194,6 +365,10 @@ bool audioBT_init() {
     }
 
     s_audioInitialized = true;
+    
+    // Apply initial volume from NVS settings
+    audioBT_setVolume(EsptoGuition::getMusicVolume());
+
     RAM_CHECKPOINT("AUDIO_ON");
     return true;
 }
@@ -215,25 +390,27 @@ TaskHandle_t audioBT_getI2STaskHandle() {
 }
 
 bool audioBT_play() {
-    if (!s_audioInitialized) {
+    if (!s_audioInitialized || !s_connected.load()) {
         return false;
     }
 
     s_a2dp.play();
+    s_isPlaying.store(true);
     return true;
 }
 
 bool audioBT_pause() {
-    if (!s_audioInitialized) {
+    if (!s_audioInitialized || !s_connected.load()) {
         return false;
     }
 
     s_a2dp.pause();
+    s_isPlaying.store(false);
     return true;
 }
 
 bool audioBT_previous() {
-    if (!s_audioInitialized) {
+    if (!s_audioInitialized || !s_connected.load()) {
         return false;
     }
 
@@ -242,7 +419,7 @@ bool audioBT_previous() {
 }
 
 bool audioBT_next() {
-    if (!s_audioInitialized) {
+    if (!s_audioInitialized || !s_connected.load()) {
         return false;
     }
 
@@ -267,3 +444,68 @@ bool audioBT_volumeUp() {
     s_a2dp.volume_up();
     return true;
 }
+
+const char* audioBT_getTitle() {
+    return s_musicTitle;
+}
+
+const char* audioBT_getArtist() {
+    return s_musicArtist;
+}
+
+void audioBT_copyMetadata(char* title, size_t titleSize, char* artist, size_t artistSize) {
+    portENTER_CRITICAL(&s_metadataLock);
+    snprintf(title, titleSize, "%s", s_musicTitle);
+    snprintf(artist, artistSize, "%s", s_musicArtist);
+    portEXIT_CRITICAL(&s_metadataLock);
+}
+
+bool audioBT_isPlaying() {
+    return s_isPlaying.load();
+}
+
+void audioBT_setVolume(uint8_t vol) {
+    if (!s_audioInitialized) return;
+    if (vol > 100) vol = 100;
+    s_a2dp.set_volume(vol * 127 / 100);
+    EsptoGuition::sendMusicVolumeState(vol);
+}
+
+void audioBT_serviceDeferred() {
+    const uint8_t pending = s_deferredSend.exchange(0, std::memory_order_acq_rel);
+    if (pending == 0) return;
+
+    if (pending & kSendTitle) {
+        char title[128];
+        portENTER_CRITICAL(&s_metadataLock);
+        std::snprintf(title, sizeof(title), "%s", s_musicTitle);
+        portEXIT_CRITICAL(&s_metadataLock);
+        EsptoGuition::sendMusicTitle(title);
+    }
+    if (pending & kSendArtist) {
+        char artist[128];
+        portENTER_CRITICAL(&s_metadataLock);
+        std::snprintf(artist, sizeof(artist), "%s", s_musicArtist);
+        portEXIT_CRITICAL(&s_metadataLock);
+        EsptoGuition::sendMusicArtist(artist);
+    }
+    if (pending & kSendStatus) {
+        const bool connected = s_connected.load(std::memory_order_acquire);
+        const bool playing   = s_isPlaying.load(std::memory_order_acquire);
+        EsptoGuition::sendMusicStatus(connected, playing);
+    }
+    if (pending & kSendLogLine) {
+        printMusicMetadataLine();
+    }
+}
+
+void audioBT_setEQ(uint8_t bass, uint8_t mid, uint8_t treble) {
+    if (bass > 100) bass = 100;
+    if (mid > 100) mid = 100;
+    if (treble > 100) treble = 100;
+
+    updateEQFilters(bass, mid, treble);
+
+    EsptoGuition::sendMusicEQState(bass, mid, treble);
+}
+

@@ -3,6 +3,9 @@
 #include "EsptoGuitionState.h"
 #include "EsptoGuitionTransport.h"
 #include "AppSettings.h"
+#include "STM32_Data.h"
+#include "RadioModeSwitch.h"
+#include <atomic>
 
 namespace EsptoGuition {
 
@@ -10,13 +13,16 @@ using namespace Config;
 
 uint32_t s_broadcastIntervalMs = kDefaultBroadcastIntervalMs;
 uint32_t s_lastBroadcastMs = 0;
-uint8_t s_sequence = 0;
+std::atomic<uint8_t> s_sequence{0};
 
 WeatherPayload s_lastSentWeather;
 OutdoorWeatherPayload s_lastSentOutdoorWeather;
 PmsPayload s_lastSentPms;
 WifiPayload s_lastSentWifi;
+StatusBlePayload s_lastSentBle;
+StatusBellPayload s_lastSentBell;
 SystemResourcesPayload s_lastSentResources;
+uint8_t s_lastSentRadioMode = 0xFF; // force first send
 unsigned long s_lastTimeSentS = 0;
 
 namespace {
@@ -45,7 +51,7 @@ void sendWeather(uint8_t sequence) {
   WeatherPayload payload;
   if (!buildWeatherPayload(payload, millis())) return;
 
-  uint8_t buffer[16] = {};
+  uint8_t buffer[18] = {};
   uint8_t *cursor = buffer;
   appendS16(cursor, payload.temperatureCx100);
   appendU16(cursor, payload.humidityPctX100);
@@ -53,6 +59,7 @@ void sendWeather(uint8_t sequence) {
   appendU16(cursor, payload.eco2);
   appendU32(cursor, payload.sampleAgeMs);
   appendU8(cursor, payload.flags);
+  appendU16(cursor, payload.tvoc);
 
   sendRawFrame(kTypeIndoorWeather, sequence, buffer, static_cast<uint16_t>(cursor - buffer));
 }
@@ -84,6 +91,7 @@ void sendOutdoorWeather(uint8_t sequence) {
   appendU8(cursor, payload.sunsetMin);
   appendU32(cursor, payload.sampleAgeMs);
   appendU8(cursor, payload.flags);
+  appendU16(cursor, payload.no2UgM3);
 
   sendRawFrame(kTypeOutdoorWeather, sequence, buffer, static_cast<uint16_t>(cursor - buffer));
 }
@@ -137,6 +145,22 @@ void sendWifiStatus(uint8_t sequence) {
   sendRawFrame(kTypeWifiStatus, sequence, buffer, static_cast<uint16_t>(cursor - buffer));
 }
 
+void sendStatusBle(uint8_t sequence) {
+  StatusBlePayload payload;
+  if (!buildStatusBlePayload(payload)) return;
+
+  uint8_t buffer[1] = { payload.value };
+  sendRawFrame(kTypeStatusBle, sequence, buffer, sizeof(buffer));
+}
+
+void sendStatusBell(uint8_t sequence) {
+  StatusBellPayload payload;
+  if (!buildStatusBellPayload(payload)) return;
+
+  uint8_t buffer[1] = { payload.value };
+  sendRawFrame(kTypeStatusBell, sequence, buffer, sizeof(buffer));
+}
+
 void broadcastSnapshots(unsigned long nowMs) {
   if (nowMs - s_lastBroadcastMs < s_broadcastIntervalMs) {
     return;
@@ -156,7 +180,7 @@ void broadcastSnapshots(unsigned long nowMs) {
                   (currentWeather.humidityPctX100 != s_lastSentWeather.humidityPctX100) ||
                   (currentWeather.pressureHpaX10 != s_lastSentWeather.pressureHpaX10);
     if (changed) {
-      sendWeather(s_sequence++);
+      sendWeather(s_sequence.fetch_add(1, std::memory_order_relaxed));
       s_lastSentWeather = currentWeather;
       lastKeepaliveMs = nowMs;
     }
@@ -170,7 +194,7 @@ void broadcastSnapshots(unsigned long nowMs) {
                   (currentOutdoor.humidityPctX100 != s_lastSentOutdoorWeather.humidityPctX100) ||
                   (currentOutdoor.pressureHpaX10 != s_lastSentOutdoorWeather.pressureHpaX10);
     if (changed || periodElapsed) {
-      sendOutdoorWeather(s_sequence++);
+      sendOutdoorWeather(s_sequence.fetch_add(1, std::memory_order_relaxed));
       s_lastSentOutdoorWeather = currentOutdoor;
       lastOutdoorCheckMs = nowMs;
       lastKeepaliveMs = nowMs;
@@ -183,7 +207,7 @@ void broadcastSnapshots(unsigned long nowMs) {
                  (currentPms.pm25 != s_lastSentPms.pm25) ||
                  (currentPms.pm10 != s_lastSentPms.pm10);
     if (changed) {
-      sendPms(s_sequence++);
+      sendPms(s_sequence.fetch_add(1, std::memory_order_relaxed));
       s_lastSentPms = currentPms;
       lastKeepaliveMs = nowMs;
     }
@@ -192,7 +216,7 @@ void broadcastSnapshots(unsigned long nowMs) {
   TimePayload currentTime;
   if (buildTimePayload(currentTime)) {
     if (currentTime.unixSeconds != s_lastTimeSentS) {
-      sendTime(s_sequence++);
+      sendTime(s_sequence.fetch_add(1, std::memory_order_relaxed));
       s_lastTimeSentS = currentTime.unixSeconds;
       lastKeepaliveMs = nowMs;
     }
@@ -212,13 +236,62 @@ void broadcastSnapshots(unsigned long nowMs) {
                           (currentWifi.ip[3] != s_lastSentWifi.ip[3]);
                           
       if (stateChanged || rssiChanged) {
-        sendWifiStatus(s_sequence++);
+        sendWifiStatus(s_sequence.fetch_add(1, std::memory_order_relaxed));
         s_lastSentWifi = currentWifi;
         lastWifiSendMs = nowMs;
         lastKeepaliveMs = nowMs;
       } else {
         // Zaktualizuj czas nawet jeśli nie wysłano, żeby nie odpytywać WiFi co każdą pętlę
         lastWifiSendMs = nowMs;
+      }
+    }
+  }
+
+  {
+    static unsigned long lastBleSendMs = 0;
+    if (nowMs - lastBleSendMs >= 2000UL) {
+      lastBleSendMs = nowMs;
+      StatusBlePayload currentBle;
+      if (buildStatusBlePayload(currentBle)) {
+        if (currentBle.value != s_lastSentBle.value) {
+          sendStatusBle(s_sequence.fetch_add(1, std::memory_order_relaxed));
+          s_lastSentBle = currentBle;
+          lastKeepaliveMs = nowMs;
+        }
+      }
+    }
+  }
+
+  {
+    static unsigned long lastBellSendMs = 0;
+    if (nowMs - lastBellSendMs >= 2000UL) {
+      lastBellSendMs = nowMs;
+      StatusBellPayload currentBell;
+      if (buildStatusBellPayload(currentBell)) {
+        if (currentBell.value != s_lastSentBell.value) {
+          sendStatusBell(s_sequence.fetch_add(1, std::memory_order_relaxed));
+          s_lastSentBell = currentBell;
+          lastKeepaliveMs = nowMs;
+        }
+      }
+    }
+  }
+
+  {
+    static unsigned long lastRadioModeSendMs = 0;
+    if (nowMs - lastRadioModeSendMs >= 2000UL) {
+      lastRadioModeSendMs = nowMs;
+      RadioModeSwitchState currentMode = RadioModeSwitch::getCurrentState();
+      uint8_t modeByte;
+      switch (currentMode) {
+        case RADIO_STATE_WIFI:  modeByte = 0; break;
+        case RADIO_STATE_BT:    modeByte = 1; break;
+        default:                modeByte = 2; break;
+      }
+      if (modeByte != s_lastSentRadioMode) {
+        sendRadioModeState(s_sequence.fetch_add(1, std::memory_order_relaxed));
+        s_lastSentRadioMode = modeByte;
+        lastKeepaliveMs = nowMs;
       }
     }
   }
@@ -233,7 +306,7 @@ void broadcastSnapshots(unsigned long nowMs) {
                     (currentRes.core1Cpu != s_lastSentResources.core1Cpu) ||
                     ramChanged;
       if (changed) {
-        sendSystemResources(s_sequence++);
+        sendSystemResources(s_sequence.fetch_add(1, std::memory_order_relaxed));
         s_lastSentResources = currentRes;
         lastKeepaliveMs = nowMs;
       }
@@ -242,24 +315,40 @@ void broadcastSnapshots(unsigned long nowMs) {
 
   if (nowMs - lastKeepaliveMs >= kKeepaliveIntervalMs) {
     lastKeepaliveMs = nowMs;
-    sendHelloAck(s_sequence++);
+    sendHelloAck(s_sequence.fetch_add(1, std::memory_order_relaxed));
   }
 
   if (nowMs - lastSafetyRefreshMs >= kSafetyRefreshIntervalMs) {
     lastSafetyRefreshMs = nowMs;
-    sendWeather(s_sequence++);
-    sendOutdoorWeather(s_sequence++);
-    sendPms(s_sequence++);
-    sendTime(s_sequence++);
-    sendWifiStatus(s_sequence++);
-    sendSystemResources(s_sequence++);
-    sendSettings(s_sequence++);
+    sendWeather(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    sendOutdoorWeather(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    sendPms(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    sendTime(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    sendWifiStatus(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    sendSystemResources(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    sendSettings(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    sendStatusBle(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    sendStatusBell(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    sendRadioModeState(s_sequence.fetch_add(1, std::memory_order_relaxed));
     buildWeatherPayload(s_lastSentWeather, nowMs);
     buildOutdoorWeatherPayload(s_lastSentOutdoorWeather, nowMs);
     buildPmsPayload(s_lastSentPms, nowMs);
     buildWifiPayload(s_lastSentWifi);
+    buildStatusBlePayload(s_lastSentBle);
+    buildStatusBellPayload(s_lastSentBell);
     buildSystemResourcesPayload(s_lastSentResources);
+    {
+      RadioModeSwitchState mode = RadioModeSwitch::getCurrentState();
+      switch (mode) {
+        case RADIO_STATE_WIFI:  s_lastSentRadioMode = 0; break;
+        case RADIO_STATE_BT:    s_lastSentRadioMode = 1; break;
+        default:                s_lastSentRadioMode = 2; break;
+      }
+    }
   }
+
+  // Deferred NVS flush — actual flash write happens here (not in UART handler)
+  EsptoGuition::musicSettingsFlush();
 }
 
 void sendSystemResources(uint8_t sequence) {
@@ -317,8 +406,76 @@ void sendSettings(uint8_t sequence) {
   sendRawFrame(kTypeSettings, sequence, payload, sizeof(payload));
 }
 
+void sendPpgImpl(int16_t diff) {
+  uint8_t buffer[3];
+  uint8_t seq = s_sequence.fetch_add(1, std::memory_order_relaxed);
+  buffer[0] = seq;
+  buffer[1] = static_cast<uint8_t>(diff & 0xFF);
+  buffer[2] = static_cast<uint8_t>((diff >> 8) & 0xFF);
+  sendRawFrame(kTypePpg, seq, buffer, sizeof(buffer));
+}
+
+void sendBpmStatus(int bpm, int spo2) {
+  uint8_t buf[2] = { static_cast<uint8_t>(bpm),
+                     static_cast<uint8_t>(spo2) };
+  sendRawFrame(kTypeBpmStatus, s_sequence.fetch_add(1, std::memory_order_relaxed), buf, sizeof(buf));
+}
+
+void sendMusicTitle(const char* title) {
+  uint8_t buf[128];
+  buf[0] = 0;
+  size_t len = strlen(title);
+  if (len > 120) len = 120;
+  buf[1] = static_cast<uint8_t>(len);
+  if (len > 0) memcpy(buf + 2, title, len);
+  sendRawFrame(kTypeMusicMetadata, s_sequence.fetch_add(1, std::memory_order_relaxed), buf, static_cast<uint16_t>(2 + len));
+}
+
+void sendMusicArtist(const char* artist) {
+  uint8_t buf[128];
+  buf[0] = 1;
+  size_t len = strlen(artist);
+  if (len > 120) len = 120;
+  buf[1] = static_cast<uint8_t>(len);
+  if (len > 0) memcpy(buf + 2, artist, len);
+  sendRawFrame(kTypeMusicMetadata, s_sequence.fetch_add(1, std::memory_order_relaxed), buf, static_cast<uint16_t>(2 + len));
+}
+
+void sendMusicStatus(bool connected, bool playing) {
+  uint8_t buf[1] = {
+    static_cast<uint8_t>((connected ? 0x01U : 0) | (playing ? 0x02U : 0))
+  };
+  sendRawFrame(kTypeMusicStatus, s_sequence.fetch_add(1, std::memory_order_relaxed), buf, 1);
+}
+
+void sendMusicVolumeState(uint8_t volume) {
+  if (volume > 100) volume = 100;
+  uint8_t buf[1] = { volume };
+  sendRawFrame(kTypeMusicVolumeState, s_sequence.fetch_add(1, std::memory_order_relaxed), buf, 1);
+}
+
+void sendMusicEQState(uint8_t bass, uint8_t mid, uint8_t treble) {
+  if (bass > 100) bass = 100;
+  if (mid > 100) mid = 100;
+  if (treble > 100) treble = 100;
+  uint8_t buf[3] = { bass, mid, treble };
+  sendRawFrame(kTypeMusicEQState, s_sequence.fetch_add(1, std::memory_order_relaxed), buf, 3);
+}
+
+void sendRadioModeState(uint8_t sequence) {
+  RadioModeSwitchState mode = RadioModeSwitch::getCurrentState();
+  uint8_t modeByte;
+  switch (mode) {
+    case RADIO_STATE_WIFI:  modeByte = 0; break;
+    case RADIO_STATE_BT:    modeByte = 1; break;
+    default:                modeByte = 2; break; // TRANSITIONING
+  }
+  uint8_t buf[1] = { modeByte };
+  sendRawFrame(kTypeRadioMode, sequence, buf, 1);
+}
+
 uint8_t nextSequence() {
-  return s_sequence++;
+  return s_sequence.fetch_add(1, std::memory_order_relaxed);
 }
 
 } // namespace EsptoGuition

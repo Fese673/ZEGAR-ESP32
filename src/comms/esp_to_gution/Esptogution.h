@@ -15,10 +15,23 @@ constexpr uint8_t kTypeSetSettings = 0x05;
 constexpr uint8_t kTypeSystemResources = 0x06;
 constexpr uint8_t kTypeWifiStatus = 0x07;
 constexpr uint8_t kTypeOutdoorWeather = 0x08;
+constexpr uint8_t kTypePpg = 0x09;
+constexpr uint8_t kTypeBpmStatus = 0x0A;
+constexpr uint8_t kTypeStatusBle = 0x0B;
+constexpr uint8_t kTypeStatusBell = 0x0C;
 constexpr uint8_t kTypeRequest = 0x10;
 constexpr uint8_t kTypeConfig = 0x11;
 constexpr uint8_t kTypeHello    = 0x20;
 constexpr uint8_t kTypeHelloAck = 0x21;
+constexpr uint8_t kTypeMusicMetadata = 0x30;
+constexpr uint8_t kTypeMusicStatus = 0x31;
+constexpr uint8_t kTypeMusicCommand = 0x32;
+constexpr uint8_t kTypeMusicVolume = 0x33;
+constexpr uint8_t kTypeMusicEQ = 0x34;
+constexpr uint8_t kTypeMusicRequest = 0x35;
+constexpr uint8_t kTypeMusicVolumeState = 0x36;
+constexpr uint8_t kTypeMusicEQState = 0x37;
+constexpr uint8_t kTypeRadioMode = 0x38;
 constexpr uint8_t kTypeAck = 0xFF;
 
 // Stany synchronizacji – identyczne po obu stronach
@@ -61,6 +74,16 @@ void sendPms(uint8_t sequence = 0);
 void sendTime(uint8_t sequence = 0);
 void sendWifiStatus(uint8_t sequence = 0);
 void sendOutdoorWeather(uint8_t sequence = 0);
+void sendPpgImpl(int16_t diff);
+void sendBpmStatus(int bpm, int spo2);
+void sendStatusBle(uint8_t sequence = 0);
+void sendStatusBell(uint8_t sequence = 0);
+void sendMusicTitle(const char* title);
+void sendMusicArtist(const char* artist);
+void sendMusicStatus(bool connected, bool playing);
+void sendMusicVolumeState(uint8_t volume);
+void sendMusicEQState(uint8_t bass, uint8_t mid, uint8_t treble);
+void sendRadioModeState(uint8_t sequence = 0);
 uint8_t nextSequence();
 
 } // namespace EsptoGuition

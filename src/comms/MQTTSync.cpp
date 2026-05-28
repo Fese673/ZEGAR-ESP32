@@ -292,7 +292,8 @@ static bool mqtt_reconnect(unsigned long nowMs) {
         s_delayMs = backoffMs;
         s_state = MqttConnectionState::Backoff;
 
-        LOG_W(TAG, "Connection failed rc=%d elapsed_ms=%lu failures=%u backoff_ms=%lu", rc, elapsedMs, (unsigned)s_connectFailureCount, backoffMs);
+        LOG_W(TAG, "Connection failed rc=%d wifi=%s elapsed_ms=%lu failures=%u backoff_ms=%lu", rc,
+              WiFi.status() == WL_CONNECTED ? "UP" : "DOWN", elapsedMs, (unsigned)s_connectFailureCount, backoffMs);
         return false;
     }
 
@@ -548,8 +549,8 @@ void update() {
         s_delayMs = backoffMs;
         s_state = MqttConnectionState::Backoff;
 
-        LOG_W(TAG, "Connection failed rc=%d elapsed_ms=%lu failures=%u backoff_ms=%lu",
-              rc, elapsedMs, (unsigned)s_connectFailureCount, backoffMs);
+        LOG_W(TAG, "Connection failed rc=%d wifi=%s elapsed_ms=%lu failures=%u backoff_ms=%lu", rc,
+              WiFi.status() == WL_CONNECTED ? "UP" : "DOWN", elapsedMs, (unsigned)s_connectFailureCount, backoffMs);
         return;
     }
 

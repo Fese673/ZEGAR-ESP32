@@ -11,6 +11,7 @@ struct WeatherPayload {
   uint16_t eco2 = 0;
   uint32_t sampleAgeMs = 0;
   uint8_t flags = 0;
+  uint16_t tvoc = 0;
 };
 
 struct OutdoorWeatherPayload {
@@ -35,6 +36,7 @@ struct OutdoorWeatherPayload {
   uint8_t sunsetMin = 0;
   uint32_t sampleAgeMs = 0;
   uint8_t flags = 0;
+  uint16_t no2UgM3 = 0;
 };
 
 struct PmsPayload {
@@ -76,13 +78,31 @@ struct WifiPayload {
   uint8_t ip[4] = {0, 0, 0, 0};
 };
 
+struct StatusBlePayload {
+  uint8_t value; // 0 = OFF, 1 = ON+connected
+};
+
+struct StatusBellPayload {
+  uint8_t value; // 0 = off, 1 = armed, 2 = ringing
+};
+
 bool buildWeatherPayload(WeatherPayload &out, unsigned long nowMs);
 bool buildOutdoorWeatherPayload(OutdoorWeatherPayload &out, unsigned long nowMs);
 bool buildPmsPayload(PmsPayload &out, unsigned long nowMs);
 bool buildTimePayload(TimePayload &out);
 bool buildWifiPayload(WifiPayload &out);
 bool buildSystemResourcesPayload(SystemResourcesPayload &out);
+bool buildStatusBlePayload(StatusBlePayload &out);
+bool buildStatusBellPayload(StatusBellPayload &out);
 
 void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength);
+void handleReceivedMusicCommand(const uint8_t* payload, uint16_t payloadLength);
+void handleReceivedMusicVolume(const uint8_t* payload, uint16_t payloadLength);
+void handleReceivedMusicEQ(const uint8_t* payload, uint16_t payloadLength);
+void handleReceivedMusicRequest(const uint8_t* payload, uint16_t payloadLength);
+void handleReceivedRadioModeSwitch(const uint8_t* payload, uint16_t payloadLength);
+void musicSettingsInit();
+void musicSettingsFlush();
+uint8_t getMusicVolume();
 
 } // namespace EsptoGuition

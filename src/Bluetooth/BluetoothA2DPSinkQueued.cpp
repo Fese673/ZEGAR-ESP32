@@ -2,6 +2,7 @@
 #include "BluetoothA2DPSinkQueued.h"
 
 #include "RuntimeTelemetry.h"
+#include "EQFilter.h"
 
 #if IS_VALID_PLATFORM
 
@@ -10,6 +11,7 @@ void BluetoothA2DPSinkQueued::bt_i2s_task_start_up(void) {
     ringbuffer_mode.store(RINGBUFFER_MODE_PREFETCHING);
     bt_audio_active.store(false);
     needs_ringbuffer_reset.store(false);
+    s_pendingI2sRestart.store(false, std::memory_order_relaxed);
     if ((s_i2s_write_semaphore = xSemaphoreCreateBinary()) == nullptr) {
         ESP_LOGE(BT_APP_TAG, "%s, Semaphore create failed", __func__);
         return;
@@ -35,6 +37,7 @@ void BluetoothA2DPSinkQueued::bt_i2s_task_start_up(void) {
 void BluetoothA2DPSinkQueued::bt_i2s_task_shut_down(void) {
     bt_audio_active.store(false);
     needs_ringbuffer_reset.store(false);
+    s_pendingI2sRestart.store(false, std::memory_order_relaxed);
     if (s_bt_i2s_task_handle) {
         vTaskDelete(s_bt_i2s_task_handle);
         s_bt_i2s_task_handle = nullptr;
@@ -92,6 +95,16 @@ void BluetoothA2DPSinkQueued::i2s_task_handler(void *arg) {
             continue;
         }
 
+        // Deferred I2S restart requested by write_audio() — run from I2S task context
+        if (s_pendingI2sRestart.exchange(false, std::memory_order_acq_rel)) {
+            if (out->begin()) {
+                is_i2s_active.store(true, std::memory_order_release);
+                ESP_LOGI(BT_AV_TAG, "i2s restarted via deferred request");
+            } else {
+                ESP_LOGE(BT_APP_TAG, "i2s deferred restart failed");
+            }
+        }
+
         if (is_starting.load()){
             // wait for ringbuffer to be filled
             if (pdTRUE != xSemaphoreTake(s_i2s_write_semaphore,
@@ -106,6 +119,9 @@ void BluetoothA2DPSinkQueued::i2s_task_handler(void *arg) {
             if (!bt_audio_active.load()) {
                 continue;
             }
+            s_bassFilter.reset();
+            s_midFilter.reset();
+            s_trebleFilter.reset();
             is_starting.store(false);
         }
         // xSemaphoreTake was succeeding here, so we have the buffer filled up
@@ -128,8 +144,52 @@ void BluetoothA2DPSinkQueued::i2s_task_handler(void *arg) {
 
         // if i2s is not active we just consume the buffer w/o output
         if (is_i2s_active.load() && is_output){
+            int16_t *samples = reinterpret_cast<int16_t*>(data);
+            int n = (item_size / 2) & ~1; // stereo frame aligned
+
+            int bassIdx = s_bassFilter.activeIdx.load(std::memory_order_acquire);
+            int midIdx = s_midFilter.activeIdx.load(std::memory_order_acquire);
+            int trebleIdx = s_trebleFilter.activeIdx.load(std::memory_order_acquire);
+
+            const BiquadCoeffs &cBass = s_bassFilter.coeffs[bassIdx];
+            const BiquadCoeffs &cMid = s_midFilter.coeffs[midIdx];
+            const BiquadCoeffs &cTreble = s_trebleFilter.coeffs[trebleIdx];
+
+            bool applyBass = !cBass.bypass;
+            bool applyMid = !cMid.bypass;
+            bool applyTreble = !cTreble.bypass;
+
+            if (n >= 2 && (applyBass || applyMid || applyTreble)) {
+                for (int i = 0; i < n; i += 2) {
+                    float l = static_cast<float>(samples[i]);
+                    float r = static_cast<float>(samples[i+1]);
+
+                    if (applyBass) {
+                        l = s_bassFilter.processLeft(l, cBass);
+                        r = s_bassFilter.processRight(r, cBass);
+                    }
+                    if (applyMid) {
+                        l = s_midFilter.processLeft(l, cMid);
+                        r = s_midFilter.processRight(r, cMid);
+                    }
+                    if (applyTreble) {
+                        l = s_trebleFilter.processLeft(l, cTreble);
+                        r = s_trebleFilter.processRight(r, cTreble);
+                    }
+
+                    // Soft-Clipping Guard
+                    if (l > 32767.0f) l = 32767.0f;
+                    else if (l < -32768.0f) l = -32768.0f;
+
+                    if (r > 32767.0f) r = 32767.0f;
+                    else if (r < -32768.0f) r = -32768.0f;
+
+                    samples[i] = static_cast<int16_t>(l);
+                    samples[i+1] = static_cast<int16_t>(r);
+                }
+            }
+
             size_t written = i2s_write_data(data, item_size);
-            ESP_LOGD(BT_AV_TAG, "i2s_task_handler: %d->%d", item_size, written);
             if (written==0){
                 ESP_LOGE(BT_APP_TAG, "i2s_write_data failed %d->%d", item_size, written);
             } else if (written < item_size) {
@@ -157,18 +217,17 @@ size_t BluetoothA2DPSinkQueued::write_audio(const uint8_t *data, size_t size)
     }
 
     // This should not really happen!
+    // Defer the I2S restart to i2s_task_handler (safe context) instead of
+    // calling out->begin() from the BT callback (priority 24).
     if (!is_i2s_active.load()){
-        ESP_LOGW(BT_APP_TAG, "i2s is not active: we try to activate it");
-        if (!out->begin()) {
-            TELEMETRY_INC(audio_drops);
-            ESP_LOGW(BT_APP_TAG, "audio output begin failed, drop audio packet");
-            return 0;
-        }
+        s_pendingI2sRestart.store(true, std::memory_order_release);
+        TELEMETRY_INC(audio_drops);
+        ESP_LOGW(BT_APP_TAG, "i2s inactive: deferred restart requested");
+        return 0;
     }
 
     if (ringbuffer_mode.load() == RINGBUFFER_MODE_DROPPING) {
         TELEMETRY_INC(audio_drops);
-        ESP_LOGW(BT_APP_TAG, "ringbuffer is full, drop this packet!");
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
         vRingbufferGetInfo(s_ringbuf_i2s, nullptr, nullptr, nullptr, nullptr, &item_size);
 #else

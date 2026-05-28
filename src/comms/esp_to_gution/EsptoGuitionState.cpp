@@ -1,4 +1,5 @@
 #include "EsptoGuitionState.h"
+#include "Esptogution.h"
 #include "Config.h"
 #include <math.h>
 #include <string.h>
@@ -18,6 +19,12 @@
 #include "UI_Draw.h"
 #include "core/telemetry/RamTelemetry.h"
 #include "core/telemetry/RuntimeTelemetry.h"
+#include "AudioBT.h"
+#include "EsptoGuitionMusicLog.h"
+#include "AlarmRuntime.h"
+#include "AppState.h"
+#include "ModeManager.h"
+#include "RadioModeSwitch.h"
 
 extern uint8_t heapUsageCore0Percent;
 extern uint8_t heapUsageCore1Percent;
@@ -70,6 +77,7 @@ struct SyntheticWeatherState {
   uint16_t humidityPctX100 = 5000;
   uint16_t pressureHpaX10 = 10130;
   uint16_t eco2 = 600;
+  uint16_t tvoc = 100;
   unsigned long lastUpdateMs = 0;
 };
 
@@ -128,6 +136,7 @@ void buildSyntheticWeatherPayload(WeatherPayload &out) {
     s_weatherState.humidityPctX100 = changeByPercent(s_weatherState.humidityPctX100, Config::kSyntheticChangePercent, 0, 10000);
     s_weatherState.pressureHpaX10 = changeByPercent(s_weatherState.pressureHpaX10, Config::kSyntheticChangePercent, 8700, 10840);
     s_weatherState.eco2 = changeByPercent(s_weatherState.eco2, Config::kSyntheticChangePercent, 400, 2000);
+    s_weatherState.tvoc = changeByPercent(s_weatherState.tvoc, Config::kSyntheticChangePercent, 0, 1000);
     s_weatherState.lastUpdateMs = nowMs;
   }
 
@@ -135,8 +144,9 @@ void buildSyntheticWeatherPayload(WeatherPayload &out) {
   out.humidityPctX100 = s_weatherState.humidityPctX100;
   out.pressureHpaX10 = s_weatherState.pressureHpaX10;
   out.eco2 = s_weatherState.eco2;
+  out.tvoc = s_weatherState.tvoc;
   out.sampleAgeMs = random(0, 5000);
-  out.flags = 0x47U;
+  out.flags = 0xC7U;  // bits: temp|hum|press|eco2|tvoc|ens160
 }
 
 void buildSyntheticPmsPayload(PmsPayload &out) {
@@ -249,6 +259,8 @@ bool buildWeatherPayload(WeatherPayload &out, unsigned long nowMs) {
   out.humidityPctX100 = humValid ? static_cast<uint16_t>(lroundf(humidityPct * 100.0f)) : 0;
   out.pressureHpaX10 = pressureValid ? static_cast<uint16_t>(lroundf(pressureHpa * 10.0f)) : 0;
   out.eco2 = eco2Valid ? eco2 : 0;
+  out.tvoc = ENS160AHT21Screen::runtimeData.hasGasSample
+    ? ENS160AHT21Screen::runtimeData.tvoc : 0;
   out.sampleAgeMs = latestWeatherAgeMs(nowMs);
   out.flags = 0;
   if (tempValid) out.flags |= 0x01U;
@@ -258,6 +270,7 @@ bool buildWeatherPayload(WeatherPayload &out, unsigned long nowMs) {
   if (ENS160AHT21Screen::runtimeData.hasClimateSample) out.flags |= 0x10U;
   if (BMP280Screen::runtimeData.hasPressure) out.flags |= 0x20U;
   if (eco2Valid) out.flags |= 0x40U;
+  if (ENS160AHT21Screen::runtimeData.hasGasSample) out.flags |= 0x80U;
 
   return true;
 }
@@ -284,17 +297,20 @@ bool buildOutdoorWeatherPayload(OutdoorWeatherPayload &out, unsigned long nowMs)
     out.precipitationMmX10 = static_cast<uint8_t>(lroundf(wd.precipitation * 10.0f));
     out.uvIndexX10 = static_cast<uint8_t>(lroundf(wd.uvIndex * 10.0f));
     flags |= 0x40U;
+    bool hasSunrise = false;
     if (wd.sunrise != 0) {
       const uint32_t sunriseLocal = wd.sunrise + getLocalTimeOffset(static_cast<time_t>(wd.sunrise));
-      out.sunriseHour = static_cast<uint8_t>((sunriseLocal / 3600UL) % 24UL);
-      out.sunriseMin = static_cast<uint8_t>((sunriseLocal / 60UL) % 60UL);
+      const uint8_t h = static_cast<uint8_t>((sunriseLocal / 3600UL) % 24UL);
+      const uint8_t m = static_cast<uint8_t>((sunriseLocal / 60UL) % 60UL);
+      if (h < 24 && m < 60) { out.sunriseHour = h; out.sunriseMin = m; hasSunrise = true; }
     }
     if (wd.sunset != 0) {
       const uint32_t sunsetLocal = wd.sunset + getLocalTimeOffset(static_cast<time_t>(wd.sunset));
-      out.sunsetHour = static_cast<uint8_t>((sunsetLocal / 3600UL) % 24UL);
-      out.sunsetMin = static_cast<uint8_t>((sunsetLocal / 60UL) % 60UL);
+      const uint8_t h = static_cast<uint8_t>((sunsetLocal / 3600UL) % 24UL);
+      const uint8_t m = static_cast<uint8_t>((sunsetLocal / 60UL) % 60UL);
+      if (h < 24 && m < 60) { out.sunsetHour = h; out.sunsetMin = m; }
     }
-    flags |= 0x80U;
+    if (wd.sunrise != 0 || wd.sunset != 0) flags |= 0x80U;
     out.sampleAgeMs = (wd.timestamp != 0)
       ? static_cast<uint32_t>(nowMs - min(static_cast<unsigned long>(wd.timestamp * 1000UL), nowMs))
       : 0;
@@ -306,6 +322,7 @@ bool buildOutdoorWeatherPayload(OutdoorWeatherPayload &out, unsigned long nowMs)
     out.pm10UgM3 = static_cast<uint16_t>(lroundf(aq.pm10 * 100.0f));
     out.co2Ppm = static_cast<uint16_t>(lroundf(aq.co2));
     out.aqi = (aq.europeanAqi < 255) ? static_cast<uint8_t>(aq.europeanAqi) : 255;
+    out.no2UgM3 = static_cast<uint16_t>(lroundf(aq.no2UgM3));
     flags |= 0x20U;
   }
 
@@ -442,6 +459,169 @@ void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength) {
     localPrefs.end();
     requestUiFullRedraw();
   }
+}
+
+bool buildStatusBlePayload(StatusBlePayload &out) {
+  if (!ModeManager::isBtOn()) {
+    out.value = 0;
+    return true;
+  }
+  if (audioBT_isConnected()) {
+    out.value = 2; // ON + connected
+  } else {
+    out.value = 1; // ON but not connected
+  }
+  return true;
+}
+
+namespace {
+
+uint8_t s_musicVolume = 50;
+uint8_t s_musicBass = 50;
+uint8_t s_musicMid = 50;
+uint8_t s_musicTreble = 50;
+unsigned long s_musicLastWriteMs = 0;
+volatile bool s_musicSettingsDirty = false;
+
+void music_settings_save() {
+    s_musicSettingsDirty = true;
+}
+
+void music_settings_flush() {
+    if (!s_musicSettingsDirty) return;
+    unsigned long now = millis();
+    if (now - s_musicLastWriteMs < 30000UL) return;
+    s_musicLastWriteMs = now;
+    s_musicSettingsDirty = false;
+    Preferences prefs;
+    prefs.begin("zegar", false);
+    prefs.putUChar("musicVol", s_musicVolume);
+    prefs.putUChar("musicBass", s_musicBass);
+    prefs.putUChar("musicMid", s_musicMid);
+    prefs.putUChar("musicTreble", s_musicTreble);
+    prefs.end();
+}
+
+void music_settings_load() {
+    Preferences prefs;
+    prefs.begin("zegar", true);
+    s_musicVolume = prefs.getUChar("musicVol", 50);
+    s_musicBass = prefs.getUChar("musicBass", 50);
+    s_musicMid = prefs.getUChar("musicMid", 50);
+    s_musicTreble = prefs.getUChar("musicTreble", 50);
+    prefs.end();
+    
+    // Apply loaded EQ settings immediately to the Bluetooth EQ variables
+    audioBT_setEQ(s_musicBass, s_musicMid, s_musicTreble);
+    
+    // Apply loaded volume settings
+    audioBT_setVolume(s_musicVolume);
+
+    if (s_musicLastWriteMs == 0) {
+        s_musicLastWriteMs = millis() - 30000UL;
+    }
+}
+
+} // namespace
+
+void musicSettingsInit() {
+    music_settings_load();
+}
+
+void musicSettingsFlush() {
+    music_settings_flush();
+}
+
+void handleReceivedMusicCommand(const uint8_t* payload, uint16_t payloadLength) {
+    if (payload == nullptr || payloadLength < 1) return;
+    switch (payload[0]) {
+  case 0:
+    MusicLog::receivedCommand(payload[0]);
+    audioBT_play();
+    break;
+  case 1:
+    MusicLog::receivedCommand(payload[0]);
+    audioBT_pause();
+    break;
+  case 2:
+    MusicLog::receivedCommand(payload[0]);
+    audioBT_next();
+    break;
+  case 3:
+    MusicLog::receivedCommand(payload[0]);
+    audioBT_previous();
+    break;
+    default: break;
+    }
+}
+
+void handleReceivedMusicVolume(const uint8_t* payload, uint16_t payloadLength) {
+    if (payload == nullptr || payloadLength < 1) return;
+    uint8_t vol = payload[0];
+    if (vol > 100) vol = 100;
+    s_musicVolume = vol;
+  MusicLog::receivedVolume(vol);
+    audioBT_setVolume(vol);
+    music_settings_save();
+}
+
+void handleReceivedMusicEQ(const uint8_t* payload, uint16_t payloadLength) {
+    if (payload == nullptr || payloadLength < 3) return;
+    s_musicBass = (payload[0] > 100) ? 100 : payload[0];
+    s_musicMid = (payload[1] > 100) ? 100 : payload[1];
+    s_musicTreble = (payload[2] > 100) ? 100 : payload[2];
+  MusicLog::receivedEQ(s_musicBass, s_musicMid, s_musicTreble);
+    audioBT_setEQ(s_musicBass, s_musicMid, s_musicTreble);
+    music_settings_save();
+}
+
+void handleReceivedMusicRequest(const uint8_t* payload, uint16_t payloadLength) {
+    if (payload == nullptr || payloadLength < 1) return;
+    uint8_t flags = payload[0];
+
+    if (flags & 0x01U) {
+        char title[128], artist[128];
+        audioBT_copyMetadata(title, sizeof(title), artist, sizeof(artist));
+        sendMusicTitle(title);
+        sendMusicArtist(artist);
+    }
+    if (flags & 0x02U) {
+        sendMusicStatus(audioBT_isConnected(), audioBT_isPlaying());
+    }
+    if (flags & 0x04U) {
+        sendMusicVolumeState(s_musicVolume);
+    }
+    if (flags & 0x08U) {
+        sendMusicEQState(s_musicBass, s_musicMid, s_musicTreble);
+    }
+}
+
+void handleReceivedRadioModeSwitch(const uint8_t* payload, uint16_t payloadLength) {
+    if (payload == nullptr || payloadLength < 1) return;
+    if (payload[0] != 0xFF) return; // only toggle command
+    RadioModeSwitchState current = RadioModeSwitch::getCurrentState();
+    if (current == RADIO_STATE_WIFI) {
+        RadioModeSwitch::requestModeSwitch_BT();
+    } else if (current == RADIO_STATE_BT) {
+        RadioModeSwitch::requestModeSwitch_WiFi();
+    }
+    // RADIO_STATE_TRANSITIONING -> ignore (already switching)
+}
+
+bool buildStatusBellPayload(StatusBellPayload &out) {
+  const AlarmRuntime::State &alarm = AlarmRuntime::state();
+  if (alarm.alarmRinging) {
+    out.value = 2;
+  } else if (alarm.alarmEnabled) {
+    out.value = 1;
+  } else {
+    out.value = 0;
+  }
+  return true;
+}
+
+uint8_t getMusicVolume() {
+    return s_musicVolume;
 }
 
 } // namespace EsptoGuition

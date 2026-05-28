@@ -85,6 +85,7 @@ class BluetoothA2DPSinkQueued : public BluetoothA2DPSink {
   std::atomic_bool is_starting{true};
   std::atomic_bool bt_audio_active{false};
   std::atomic_bool needs_ringbuffer_reset{false};
+  std::atomic<bool> s_pendingI2sRestart{false};
   size_t i2s_write_size_upto = 240 * 6;
   int i2s_ticks = 20;
   int ringbuffer_prefetch_percent = RINGBUF_PREFETCH_PERCENT;

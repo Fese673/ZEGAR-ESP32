@@ -28,6 +28,7 @@ struct AirQualityData {
   float pm25;
   float pm10;
   float co2;
+  float no2UgM3;
   uint32_t timestamp;
   bool valid;
 

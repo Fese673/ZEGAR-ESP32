@@ -3,12 +3,9 @@
 ## Build & Run
 
 ```powershell
-pio run -e esp32dev
-pio run -t upload -e esp32dev
-pio device monitor -e esp32dev
+build_zegar.py
 ```
 
-PlatformIO binary: `C:\Users\PC\.platformio\penv\Scripts\pio.exe`
 
 No CI, no unit tests, no linter. Validation is build + serial monitor.
 

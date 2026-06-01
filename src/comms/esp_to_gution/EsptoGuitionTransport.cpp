@@ -3,6 +3,7 @@
 #include "EsptoGuitionCobs.h"
 #include "EsptoGuitionState.h"
 #include "Esptogution.h"
+#include "TimeSyncProtocol.h"
 #include "AppLog.h"
 #include <Arduino.h>
 
@@ -41,7 +42,7 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
   switch (type) {
   case kTypeHello:
     // Guition się zgłosił – odpowiadamy HELLO_ACK i od razu wysyłamy pełny stan
-    // (Real-time Sync)
+    // (Real-time Sync) + alarmy + timer
     sendHelloAck(sequence);
     s_syncState = kSyncPeerDetected;
 
@@ -52,6 +53,11 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
     EsptoGuition::sendTime(EsptoGuition::nextSequence());
     EsptoGuition::sendWifiStatus(EsptoGuition::nextSequence());
     EsptoGuition::sendSystemResources(EsptoGuition::nextSequence());
+
+    // NOWE: alarmy + timer + stan dzwonka
+    TimeSync::sendAlarmList();
+    TimeSync::sendTimerState();
+    EsptoGuition::sendStatusBell(EsptoGuition::nextSequence());
     break;
   case kTypeRequest:
     if (payloadLength >= 1) {
@@ -59,6 +65,8 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
         EsptoGuition::sendSettings(sequence);
       } else if (payload[0] == kTypeSystemResources) {
         EsptoGuition::sendSystemResources(sequence);
+      } else if (payload[0] == TimeSync::kTypeAlarmList) {
+        TimeSync::sendAlarmList();
       }
     }
     break;
@@ -84,6 +92,27 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
     break;
   case kTypeRadioMode:
     handleReceivedRadioModeSwitch(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  // NOWE: TimeSyncProtocol — ramki Gution→Zegar
+  case TimeSync::kTypeAlarmList:
+    TimeSync::handleAlarmListSync(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  case TimeSync::kTypeSetAlarm:
+    TimeSync::handleSetAlarm(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  case TimeSync::kTypeTimerCmd:
+    TimeSync::handleTimerCmd(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  case TimeSync::kTypeAlarmAction:
+    TimeSync::handleAlarmAction(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  case TimeSync::kTypeStopwatchCmd:
+    TimeSync::handleStopwatchCmd(payload, payloadLength);
     sendAck(sequence, kAckOk, type);
     break;
   default:

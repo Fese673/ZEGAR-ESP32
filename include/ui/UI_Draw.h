@@ -45,10 +45,8 @@ extern unsigned long timerDurationMs;
 extern int timerUiCursor;   // 0=CZAS, 1=PRESETY
 extern int timerPresetIndex; // 0=2m, 1=15m, 2=45m
 
-// Stoper (Stopwatch)
-extern bool stoperRunning;
-extern unsigned long stoperStart;
-extern unsigned long stoperElapsed;
+// Stoper (Stopwatch) — via StopwatchService
+#include "StopwatchService.h"
 
 
 // LCD object (your main must define it, e.g. LiquidCrystal_I2C lcd(...))

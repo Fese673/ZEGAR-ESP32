@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Esp.h>
 #include <Wire.h>
+#include <Preferences.h>
 
 #include "AppLog.h"
 #include "AppRuntime.h"
@@ -12,6 +13,7 @@
 #include "BMP280Sensor.h"
 #include "BootIntroService.h"
 #include "ClockAlarmService.h"
+#include "AlarmRuntime.h"
 #include "ENS160AHT21Sensor.h"
 #include "Encoder.h"
 #include "core/events/EventBus.h"
@@ -38,6 +40,7 @@
 #include "UI_Controller.h"
 #include "UI_Draw.h"
 #include "meteoSync.h"
+#include "TimerService.h"
 
 namespace AppLoop {
 namespace {
@@ -144,6 +147,7 @@ static void onSensorRead(const Event&) {
 
 static void onClockTick(const Event&) {
   ClockAlarmService::tickClock(CLOCK_TICK_MS, BUZZER_PIN);
+  TimerService::tick(BUZZER_PIN);
   RtcSyncService::processPendingWrite();
   meteoSync::update();
 }
@@ -323,6 +327,16 @@ void runLoop() {
   EsptoGuition::update();
   STM32data_update();  // non-blocking, 50Hz PPG stream
   ClockAlarmService::serviceAlarmPlayback(BUZZER_PIN, ALARM_DURATION_MS);
+  TimerService::servicePlayback(BUZZER_PIN, ALARM_DURATION_MS);
+
+  // Deferred NVS flush — zapis do Flash z głównej pętli, nie z UART RX
+  if (g_nvsAlarmsDirty) {
+    g_nvsAlarmsDirty = false;
+    Preferences prefs;
+    prefs.begin("zegar", false);
+    AlarmRuntime::saveAllAlarms(prefs);
+    prefs.end();
+  }
 
   LoopBaselineTelemetry::onLoopEnd(nowMs, loopStartUs, micros());
 }

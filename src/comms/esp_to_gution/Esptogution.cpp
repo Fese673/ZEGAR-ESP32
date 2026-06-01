@@ -5,6 +5,8 @@
 #include "AppSettings.h"
 #include "STM32_Data.h"
 #include "RadioModeSwitch.h"
+#include "TimeSyncProtocol.h"
+#include "StopwatchService.h"
 #include <atomic>
 
 namespace EsptoGuition {
@@ -313,6 +315,26 @@ void broadcastSnapshots(unsigned long nowMs) {
     }
   }
 
+  // Timer state — co 1 sekundę
+  {
+    static unsigned long lastTimerStateMs = 0;
+    if (nowMs - lastTimerStateMs >= 1000UL) {
+      lastTimerStateMs = nowMs;
+      TimeSync::sendTimerState();
+    }
+  }
+
+  // Stopwatch state — co 100ms gdy nie IDLE (lub do pierwszej synchronizacji)
+  {
+    static unsigned long lastStopwatchMs = 0;
+    if (nowMs - lastStopwatchMs >= 100UL) {
+      lastStopwatchMs = nowMs;
+      if (StopwatchService::isRunning() || StopwatchService::getElapsedMs() > 0) {
+        TimeSync::sendStopwatchState();
+      }
+    }
+  }
+
   if (nowMs - lastKeepaliveMs >= kKeepaliveIntervalMs) {
     lastKeepaliveMs = nowMs;
     sendHelloAck(s_sequence.fetch_add(1, std::memory_order_relaxed));
@@ -330,6 +352,9 @@ void broadcastSnapshots(unsigned long nowMs) {
     sendStatusBle(s_sequence.fetch_add(1, std::memory_order_relaxed));
     sendStatusBell(s_sequence.fetch_add(1, std::memory_order_relaxed));
     sendRadioModeState(s_sequence.fetch_add(1, std::memory_order_relaxed));
+    TimeSync::sendAlarmList();
+    TimeSync::sendTimerState();
+    TimeSync::sendStopwatchState();
     buildWeatherPayload(s_lastSentWeather, nowMs);
     buildOutdoorWeatherPayload(s_lastSentOutdoorWeather, nowMs);
     buildPmsPayload(s_lastSentPms, nowMs);

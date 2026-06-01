@@ -25,6 +25,7 @@
 #include "AppState.h"
 #include "ModeManager.h"
 #include "RadioModeSwitch.h"
+#include "TimerService.h"
 
 extern uint8_t heapUsageCore0Percent;
 extern uint8_t heapUsageCore1Percent;
@@ -609,11 +610,8 @@ void handleReceivedRadioModeSwitch(const uint8_t* payload, uint16_t payloadLengt
 }
 
 bool buildStatusBellPayload(StatusBellPayload &out) {
-  const AlarmRuntime::State &alarm = AlarmRuntime::state();
-  if (alarm.alarmRinging) {
-    out.value = 2;
-  } else if (alarm.alarmEnabled) {
-    out.value = 1;
+  if (AlarmRuntime::isAnyAlarmArmed() || TimerService::isRinging()) {
+    out.value = AlarmRuntime::state().alarmRinging || TimerService::isRinging() ? 2 : 1;
   } else {
     out.value = 0;
   }

@@ -15,6 +15,8 @@
 #include "AlarmMelodyPrefs.h"
 #include "AlarmRuntime.h"
 #include "AlarmMelodyPreview.h"
+#include "core/services/TimerService.h"
+#include "comms/TimeSyncProtocol.h"
 #include "touch_buzzer_test.h"
 #include "SafeCracker.h"
 #include "TANK-GAMES/TankGame.h"
@@ -24,6 +26,7 @@
 #include "RtcSyncService.h"
 #include "UI_Draw.h"
 #include "UIState.h"
+#include "StopwatchService.h"
 
 extern Preferences s_prefs;
 
@@ -183,9 +186,6 @@ int& selectedAlarmIndex = ui.selectedAlarmIndex;
 int& alarmEditCursor = ui.alarmEditCursor;
 bool& pmsScreenDirty = ui.pmsScreenDirty;
 
-int& alarmHour = alarmRuntime.alarmHour;
-int& alarmMinute = alarmRuntime.alarmMinute;
-bool& alarmEnabled = alarmRuntime.alarmEnabled;
 bool& alarmRinging = alarmRuntime.alarmRinging;
 unsigned long& alarmStartTime = alarmRuntime.alarmStartTime;
 AlarmEntry (&alarms)[AlarmRuntime::kMaxAlarms] = alarmRuntime.alarms;
@@ -289,6 +289,21 @@ static inline void drawStoperSafe() { callDraw(s_callbacks.drawStoper); }
 static inline void drawDebugSTM32Safe() { callDraw(s_callbacks.drawDebugSTM32); }
 static inline void drawStatsSafe() { callDraw(s_callbacks.drawStats); }
 static inline void updateSevenSegSafe() { callDraw(s_callbacks.updateSevenSeg); }
+
+static void beginAlarmEditSession() {
+  g_alarmEditActive = true;
+  TimeSync::sendEditLock(true);
+}
+
+static void endAlarmEditSession() {
+  g_alarmEditActive = false;
+  TimeSync::sendEditLock(false);
+}
+
+static void publishAlarmList() {
+  TimeSync::sendAlarmList();
+}
+
 static inline void setHomeUiProfileSafe(uint8_t profileIndex) {
   if (s_callbacks.setHomeUiProfile) {
     s_callbacks.setHomeUiProfile(profileIndex);
@@ -305,7 +320,7 @@ static inline void markBmp280DirtyAndDrawStats() {
   drawStatsSafe();
 }
 
-static void persistAlarmAt(int idx) {
+static void persistAlarmAtNoSync(int idx) {
   char keyH[12];
   char keyM[12];
   char keyE[12];
@@ -317,11 +332,17 @@ static void persistAlarmAt(int idx) {
   s_prefs.putBool(keyE, alarms[idx].enabled);
 }
 
+static void persistAlarmAt(int idx) {
+  persistAlarmAtNoSync(idx);
+  publishAlarmList();
+}
+
 static void persistAllAlarms() {
   s_prefs.putUShort("alarmCount", (uint16_t)alarmsCount);
   for (int k = 0; k < alarmsCount; ++k) {
-    persistAlarmAt(k);
+    persistAlarmAtNoSync(k);
   }
+  publishAlarmList();
 }
 
 static void removeAlarmAt(int index) {
@@ -407,6 +428,7 @@ static bool ensureSelectedAlarmIndexValid() {
   }
 
   appState = STATE_ALARMS_LIST;
+  endAlarmEditSession();
   drawStatsSafe();
   return false;
 }
@@ -628,16 +650,15 @@ static bool handleMainMenuClick() {
       drawTimerSafe();
       return true;
 
-    case 2:  // Stoper
-      appState      = STATE_STOPER;
-      stoperRunning = false;
-      stoperElapsed = 0;
+    case 2:  // Stoper — wejście na ekran (bez resetu)
+      appState = STATE_STOPER;
       drawStoperSafe();
       return true;
 
     case 3:  // Budzik (lista budzików)
       s_alarmReturnState = STATE_MENU;
       appState = STATE_ALARMS_LIST;
+      endAlarmEditSession();
       if (alarmsMenuIndex < 0) alarmsMenuIndex = 0;
       if (alarmsMenuIndex > alarmsCount) alarmsMenuIndex = alarmsCount;
       drawStatsSafe();
@@ -1245,8 +1266,10 @@ void ui_handleEvent(EncoderEvent e) {
         // If actively editing time fields, apply changes; otherwise move the cursor
         if (editState == EDIT_HOURS) {
           alarms[selectedAlarmIndex].hour = (alarms[selectedAlarmIndex].hour + dir + 24) % 24;
+          publishAlarmList();
         } else if (editState == EDIT_MINUTES) {
           alarms[selectedAlarmIndex].minute = (alarms[selectedAlarmIndex].minute + dir + 60) % 60;
+          publishAlarmList();
         } else {
           // move cursor between CZAS(0), STATUS(1), USUN(2)
           alarmEditCursor = constrain(alarmEditCursor + dir, 0, 2);
@@ -1336,12 +1359,10 @@ void ui_handleEvent(EncoderEvent e) {
     // --- LOGIKA POZOSTAŁYCH STANÓW ---
 
     if (appState == STATE_STOPER) {
-      if (!stoperRunning) {
-        stoperRunning = true;
-        stoperStart   = millis();
+      if (!StopwatchService::isRunning()) {
+        StopwatchService::start();
       } else {
-        stoperRunning  = false;
-        stoperElapsed += millis() - stoperStart;
+        StopwatchService::stop();
       }
       drawStoperSafe();
       return;
@@ -1374,7 +1395,7 @@ void ui_handleEvent(EncoderEvent e) {
     if (appState == STATE_TIMER) {
       if (timerRunning) {
         // Click while running: stop countdown.
-        timerRunning = false;
+        TimerService::stop();
         editState = EDIT_DONE;
         drawTimerSafe();
         return;
@@ -1399,10 +1420,14 @@ void ui_handleEvent(EncoderEvent e) {
       // Manual edit progression: HOURS -> MINUTES -> SECONDS -> START
       editState = static_cast<EditState>(editState + 1);
       if (editState > EDIT_SECONDS) {
-        timerDurationMs = (unsigned long)timerSetHours * 3600000UL + (unsigned long)timerSetMinutes * 60000UL + (unsigned long)timerSetSeconds * 1000UL;
-        if (timerDurationMs > 0) {
-          timerStartMillis = millis();
-          timerRunning = true;
+        const uint32_t durationSec =
+            static_cast<uint32_t>(timerSetHours) * 3600UL +
+            static_cast<uint32_t>(timerSetMinutes) * 60UL +
+            static_cast<uint32_t>(timerSetSeconds);
+        if (durationSec > 0U) {
+          TimerService::start(durationSec);
+        } else {
+          TimerService::stop();
         }
         editState = EDIT_DONE;
       }
@@ -1418,6 +1443,7 @@ void ui_handleEvent(EncoderEvent e) {
         appState = STATE_ALARM_EDIT;
         editState = EDIT_DONE; // not actively editing time yet
         alarmEditCursor = 0; // start with CZAS selected
+        beginAlarmEditSession();
         drawStatsSafe();
       } else {
         // add new alarm (if room)
@@ -1435,6 +1461,7 @@ void ui_handleEvent(EncoderEvent e) {
           appState = STATE_ALARM_EDIT;
           editState = EDIT_DONE;
           alarmEditCursor = 0;
+          beginAlarmEditSession();
           drawStatsSafe();
         }
       }
@@ -1460,6 +1487,7 @@ void ui_handleEvent(EncoderEvent e) {
         } else {
           // delete selected alarm immediately (no confirmation)
           removeAlarmAt(selectedAlarmIndex);
+          endAlarmEditSession();
           appState = STATE_ALARMS_LIST;
           drawStatsSafe();
         }
@@ -1471,6 +1499,7 @@ void ui_handleEvent(EncoderEvent e) {
         // finish edit: persist alarm and return to list
         persistAlarmAt(selectedAlarmIndex);
         editState = EDIT_DONE;
+        endAlarmEditSession();
         appState = STATE_ALARMS_LIST;
         drawStatsSafe();
       }
@@ -1636,7 +1665,7 @@ void ui_handleEvent(EncoderEvent e) {
 
       case STATE_TIMER:
         // Long press in TIMER: stop timer (if running) and return to main menu
-        timerRunning = false;
+        TimerService::stop();
         appState = STATE_MENU;
         drawMenuSafe();
         return;
@@ -1652,7 +1681,11 @@ void ui_handleEvent(EncoderEvent e) {
         return;
 
       case STATE_ALARM_EDIT:
-        // Edycja budzika -> powrót do listy (bez dodatkowego zapisu)
+        // Edycja budzika -> zapis i powrót do listy
+        if (selectedAlarmIndex >= 0 && selectedAlarmIndex < alarmsCount) {
+          persistAlarmAt(selectedAlarmIndex);
+        }
+        endAlarmEditSession();
         appState = STATE_ALARMS_LIST;
         drawStatsSafe();
         return;
@@ -1685,11 +1718,13 @@ void ui_handleEvent(EncoderEvent e) {
         return;
 
       case STATE_STOPER:
-      case STATE_DEBUG_STM32:
-        // Inne wyjścia -> MENU
+        // Long press in STOPER: reset and return to menu
+        StopwatchService::reset();
+        TimeSync::sendStopwatchState();
         appState = STATE_MENU;
         drawMenuSafe();
         return;
+      case STATE_DEBUG_STM32:
 
       default:
         // Fallback (cokolwiek innego) -> MENU

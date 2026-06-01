@@ -16,7 +16,6 @@ namespace {
 AlarmRuntime::State& alarmRuntime = AlarmRuntime::mutableState();
 AlarmEntry (&alarms)[AlarmRuntime::kMaxAlarms] = alarmRuntime.alarms;
 int& alarmsCount = alarmRuntime.alarmsCount;
-bool& alarmEnabled = alarmRuntime.alarmEnabled;
 bool& alarmRinging = alarmRuntime.alarmRinging;
 unsigned long& alarmStartTime = alarmRuntime.alarmStartTime;
 const int& settingsAlarmMelodyIndex = AppSettings::state().alarmMelodyIndex;
@@ -25,9 +24,6 @@ const bool& buzzerEnabled = AppSettings::state().buzzerEnabled;
 }  // namespace
 
 extern bool timerRunning;
-extern unsigned long timerStartMillis;
-extern unsigned long timerDurationMs;
-
 extern EditState editState;
 
 extern void updateSevenSeg();
@@ -121,11 +117,21 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
       for (int i = 0; i < alarmsCount; ++i) {
         if (!alarms[i].enabled) continue;
 
+        // Sprawdź dayMask — czy dziś ma dzwonić?
+        // tm_wday: 0=Nd, 1=Pn..6=So → maska bit0=Pn..bit6=Nd
+        const int dayBit = (timeInfo.tm_wday + 6) % 7;
+        if ((alarms[i].dayMask & (1 << dayBit)) == 0) continue;
+
         if (alarms[i].hour == Clock::hours() &&
             alarms[i].minute == currentMinute &&
             alarms[i].lastTriggerDay != (uint16_t)today) {
+          // SingleShot — wyłącz po odpaleniu (DOPIERO tutaj, po potwierdzeniu czasu)
+          if (alarms[i].flags & 0x01) {
+            alarms[i].enabled = false;
+          }
           alarmStartTime = millis();
           alarms[i].lastTriggerDay = (uint16_t)today;
+          alarmRuntime.ringingAlarmIndex = i; // zapamiętaj KTÓRY dzwoni
           if (buzzerEnabled) {
             alarmRinging = true;
             AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, buzzerPin);
@@ -133,21 +139,6 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
           break;
         }
       }
-    }
-  }
-
-  if (timerRunning) {
-    const unsigned long elapsed = millis() - timerStartMillis;
-    if (elapsed >= timerDurationMs) {
-      timerRunning = false;
-      alarmStartTime = millis();
-      if (buzzerEnabled) {
-        alarmRinging = true;
-        AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, buzzerPin);
-      }
-      editState = EDIT_HOURS;
-      timerStartMillis = 0;
-      timerDurationMs = 0;
     }
   }
 }
@@ -193,7 +184,12 @@ void serviceAlarmPlayback(uint8_t buzzerPin, unsigned long alarmDurationMs) {
     if (millis() - alarmStartTime >= alarmDurationMs) {
       AlarmMelodies::stop(buzzerPin);
       alarmRinging = false;
-      alarmEnabled = false;
+      // Wyłącz konkretny alarm który dzwonił (nie legacy alarmEnabled)
+      int idx = alarmRuntime.ringingAlarmIndex;
+      if (idx >= 0 && idx < alarmsCount) {
+        alarms[idx].enabled = false;
+      }
+      alarmRuntime.ringingAlarmIndex = -1;
       updateSevenSeg();
       return;
     }

@@ -1,5 +1,140 @@
 # Archiwum Błędów - ZEGAR-ESP32
 ---
+### [ID: ERR_054] | ALARM_FULL_LIST_SYNC | IMPACT: HIGH
+**Files:** `[UI_Controller.cpp, TimeSyncProtocol.h, TimeSyncProtocol.cpp, EsptoGuitionTransport.cpp, timer_synchro.h, timer_synchro.cpp, alarm_ui.cpp]`
+
+**PROBLEM:** Edycja alarmów na enkoderze i w Gution żyła własnym życiem. Zegar wysyłał pełny stan tylko okresowo, a Gution nie wypychał pełnej listy po lokalnej zmianie. Efekt był niedeterministyczny: synchronizacja wyglądała na działającą dopiero po bezpieczeństwie co 5 minut.
+
+**CAUSE:** Brak jednego, pełnego modelu synchronizacji listy alarmów. Lokalna edycja modyfikowała kopie stanu zamiast zawsze przechodzić przez pełny sync-list, a Zegar nie miał inbound handlera do odtworzenia całej listy z zachowaniem `lastTriggerDay`.
+
+**LOGIC_CHANGE:**
+- Zegar: `UI_Controller.cpp` teraz wysyła pełną listę po każdej lokalnej zmianie alarmu i używa `sendEditLock(true/false)` przy wejściu/wyjściu z edycji.
+- Zegar: `TimeSyncProtocol.cpp` dodał `handleAlarmListSync()` z mapowaniem po polach alarmu, żeby zachować `lastTriggerDay` przy replace whole list.
+- Gution: `timer_synchro.cpp` dodaje `sendAlarmList()`, a `alarm_ui.cpp` wypycha pełną listę po add/edit/delete/toggle.
+- Transport: `EsptoGuitionTransport.cpp` akceptuje nową ramkę `kTypeAlarmList` od Gution.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. `python build_guition.py` → SUCCESS.
+---
+### [ID: ERR_053] | TIMER_ONE_WAY_SYNC | IMPACT: HIGH
+**Files:** `[UI_Controller.cpp]`
+
+**PROBLEM:** Minutnik był spójny tylko w jedną stronę. Gution potrafił wysłać start/stop do Zegara, ale zmiany z enkodera nie zawsze trafiały do tego samego, wspólnego toru stanu po stronie Zegara.
+
+**CAUSE:** UI timera na Zegarze omijało `TimerService` i mutowało legacy globals bez gwarantowanego, natychmiastowego pushu stanu przez warstwę serwisu.
+
+**LOGIC_CHANGE:**
+- Start/stop timera w `STATE_TIMER` zostały przepięte na `TimerService::start()` i `TimerService::stop()`.
+- TimerService pozostaje jedynym miejscem, które aktualizuje globalny stan i publikuje `sendTimerState()` do Gution.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. `python build_guition.py` → SUCCESS.
+---
+### [ID: ERR_052] | STOPWATCH_RESET_DESYNC | IMPACT: HIGH
+**Files:** `[UI_Controller.cpp]`
+
+**PROBLEM:** Po wyjściu z LCD20x4 enkoderem stoper resetował się lokalnie, ale Gution nie dostawał natychmiastowego resetu i potrafił pokazywać stary stan.
+
+**CAUSE:** Ścieżka resetu stopera na Zegarze kończyła się na `StopwatchService::reset()`, ale nie publikowała od razu nowego stanu do HMI.
+
+**LOGIC_CHANGE:**
+- Long-press w `STATE_STOPER` robi teraz `StopwatchService::reset()` i natychmiast `TimeSync::sendStopwatchState()`.
+- Gution dostaje reset bez czekania na kolejny okresowy broadcast.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. `python build_guition.py` → SUCCESS.
+---
+### [ID: ERR_051] | STOPWATCH_CMD_START_RESETS_ELAPSED | IMPACT: HIGH
+**Files:** `[TimeSyncProtocol.cpp]`
+
+**PROBLEM:** `handleStopwatchCmd(0)` zerował `stoperElapsed = 0` przy każdym START. Pauza → wznowienie kasowało dotychczasowy czas. Przy RESET z Gution gdy stoper na Zegarze był RUNNING, reset też nie działał poprawnie (desync).
+
+**LOGIC_CHANGE:**
+- `handleStopwatchCmd(0)`: usunięto `stoperElapsed = 0`. START tylko ustawia `stoperStart = millis()` i `stoperRunning = true`. Elapsed zachowany dla resume.
+- `handleStopwatchCmd(2)`: nadal zeruje wszystko (RESET = full clear).
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS.
+
+---
+### [ID: ERR_050] | STOPWATCH_NO_SYNC | IMPACT: HIGH
+**Files:** `[TimeSyncProtocol.cpp, Esptogution.cpp, EsptoGuitionTransport.cpp]`
+
+**PROBLEM:** Stoper (stopwatch) nie miał żadnej komunikacji między Zegarem a Gution. Dwa niezależne stopery działające osobno. Timer (minutnik) też miał problem: Gution nigdy nie wysyłał komend do Zegara przy starcie z GUI.
+
+**ROOT CAUSE:** Brak protokołu komunikacyjnego dla stopera (0x15/0x16). Timer_ui.cpp na Gution uruchamiał lokalny timer bez wołania `sendTimerCmd()` — Zegar nigdy nie był powiadamiany.
+
+**LOGIC_CHANGE:**
+- `TimeSyncProtocol.h/.cpp`: Dodano `kTypeStopwatchState=0x15` (Z→G) i `kTypeStopwatchCmd=0x16` (G→Z). `sendStopwatchState()` pakuje stan (0=IDLE,1=RUNNING,2=STOPPED)+elapsedMs. `handleStopwatchCmd()` obsługuje START/STOP/RESET na globalach `stoperRunning/stoperElapsed/stoperStart`. Po każdej komendzie timera natychmiastowe `sendTimerState()`+`sendStatusBell()`.
+- `Esptogution.cpp`: Broadcast stopwatch co 100ms gdy nie IDLE.
+- `EsptoGuitionTransport.cpp`: Handler ramki 0x16.
+- Gution: `CommunicationProtocol.h` — `StopwatchState` struct, `sendStopwatchCmd()`, `getLastTimerState()`, `getLastStopwatchState()`.
+- Gution: `CommunicationState.h/.cpp` — `StopwatchState` storage + apply/consume (mutex wzór jak TimerState).
+- Gution: `UartTransport.cpp` — handler `kTypeStopwatchState`.
+- Gution: `timer_ui.cpp` — `on_start_stop_minutnik` wysyła `sendTimerCmd(0, target)`; `timer_ui_cb()` wyświetla zdalny `TimerState` z Zegara gdy aktywny (fallback do lokalnego).
+- Gution: `stopwatch_ui.cpp` — przyciski wysyłają `sendStopwatchCmd(0/1/2)`; `stopwatch_timer_cb()` wyświetla zdalny `StopwatchState` gdy aktywny.
+
+**PRZEPŁYW PO FIXIE:**
+1. Start timera na Gution → `sendTimerCmd(0, dur)` → Zegar: TimerService::start() → immediate `sendTimerState()` → Gution: wyświetla remote state (<200ms). Zegar LCD pokazuje timer od razu.
+2. Start stopera na Gution → `sendStopwatchCmd(0)` → Zegar: ustawia stoperRunning=true → immediately `sendStopwatchState()` → broadcast co 100ms → Gution: wyświetla zdalny elapsedMs.
+3. Start na Zegarze → broadcast co 1s (timer) / 100ms (stoper) → Gution wyświetla.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. `python build_guition.py` → SUKCES.
+
+---
+**Files:** `[EsptoGuitionState.cpp, TimerService.cpp, UI_Controller.cpp]`
+
+**PROBLEM:** Trzy błędy wykryte w pierwszej implementacji przed audytem:
+1. **`buildStatusBellPayload()` używał `alarmRuntime.alarmEnabled` — nigdy nie ustawianego** (`EsptoGuitionState.cpp:612`): Pole `alarmEnabled` w `AlarmRuntime::State` było legacy boolean, inicjalizowane `false` i NIGDY nie zmieniane na `true`. `StatusBell` nigdy nie raportował stanu 1 (alarm uzbrojony) mimo że alarmy były włączone przez `alarms[i].enabled`.
+2. **Timer `pause()` nie aktualizował `timerDurationMs` dla LCD** (`TimerService.cpp:50`): Po pauzie `s_remainingMs` był poprawnie skracany, ale global `timerDurationMs` (dla LCD 20x4) pozostawał na pierwotnej wartości. Po wznowieniu `timerDurationMs` nie był przywracany do `s_remainingMs`. Pasek postępu na LCD pokazywał zły czas.
+3. **`g_alarmEditActive` nie resetowany po usunięciu alarmu i zapisie** (`UI_Controller.cpp:1498,1512`): Przy delete i click-finish zapomniano wyczyścić flagę `g_alarmEditActive` i wysłać `sendEditLock(false)`. Po tych operacjach Gution pozostawał trwale zablokowany (kłódka), a nowe `SetAlarm` były odrzucane.
+
+**CAUSE:** Legacy boolean nieużywany; zapomniana synchronizacja globali `timerDurationMs` z `s_remainingMs`; pominięty unlock w ścieżkach delete i click-finish.
+
+**LOGIC_CHANGE:**
+- `EsptoGuitionState.cpp`: `buildStatusBellPayload` iteruje `alarms[i].enabled` zamiast czytać `alarmRuntime.alarmEnabled`.
+- `TimerService.cpp`: `pause()` zapisuje `timerDurationMs = s_remainingMs`; `resume()` przywraca `timerDurationMs = s_remainingMs`.
+- `UI_Controller.cpp`: Dodano `g_alarmEditActive=false; sendEditLock(false)` w delete (cursor=3) i click-finish (EDIT_MINUTES).
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. StatusBell=1 pojawia się gdy alarm włączony. LCD 20x4 pokazuje poprawny czas po pauzie/wznowieniu. Gution odblokowuje się po usunięciu lub zapisaniu alarmu.
+
+---
+### [ID: ERR_048] | TIMESYNC_BUGFIX_BATCH_CRITICAL | IMPACT: CRITICAL
+**Files:** `[ClockAlarmService.cpp, TimeSyncProtocol.cpp, AlarmRuntime.cpp, TimerService.cpp, UI_Controller.cpp]`
+
+**PROBLEM:** Cztery krytyczne/wysokie błędy w implementacji synchronizacji alarmów i timera z Gution:
+1. **Single-shot wyłączał alarm PRZED sprawdzeniem czasu** (`ClockAlarmService.cpp:127`): Flaga `singleShot` była sprawdzana w każdej iteracji pętli tickClock, na zewnątrz bloku porównania godziny/minuty. Alarm jednorazowy był wyłączany przy pierwszej zmianie minuty, zanim nadszedł jego czas — nigdy nie zadzwonił.
+2. **Błędna identyfikacja dzwoniącego alarmu przy snooze/dismiss** (`TimeSyncProtocol.cpp:155`): Pętla wyszukująca dzwoniący alarm znajdowała pierwszy z `!enabled` (ręcznie wyłączony przez użytkownika), zamiast faktycznie dzwoniącego. Snooze modyfikował zły alarm, a prawdziwy dzwonił dalej.
+3. **`lastTriggerDay` nie persistowany do NVS** (`AlarmRuntime.cpp`): Pominięty w `saveAlarm()`, zawsze resetowany do `UINT16_MAX` w `loadAllAlarms()`. Po resecie ESP32 alarm odpalony o 7:00 odpalał się ponownie — duplikat.
+4. **Long-press z edycji alarmu gubił zmiany** (`UI_Controller.cpp:1706`): Wyjście z `STATE_ALARM_EDIT` przez long-press nie persistowało zmian czasu/dni do NVS i nie wysyłało aktualizacji do Gution.
+
+**CAUSE:** Single-shot check przed blokiem czasu; brak dedykowanego `ringingAlarmIndex`; pominięcie klucza `almT%d` przy NVS save/load; brak `persistAlarmAt()` przy long-press.
+
+**LOGIC_CHANGE:**
+- `ClockAlarmService.cpp`: Przeniesiono `if (flags & 0x01)` do wnętrza bloku `if (hour==minute==lastTriggerDay)`. Dodano `alarmRuntime.ringingAlarmIndex = i` przy odpaleniu i `= -1` przy auto-stop.
+- `AlarmRuntime.h`: Dodano `int ringingAlarmIndex = -1` do `State`.
+- `TimeSyncProtocol.cpp`: `handleAlarmAction` używa `rt.ringingAlarmIndex` zamiast pętli wyszukującej.
+- `AlarmRuntime.cpp`: Dodano NVS key `almT%d` dla `lastTriggerDay` w `saveAlarm()` i `loadAllAlarms()`.
+- `UI_Controller.cpp`: Long-press w `STATE_ALARM_EDIT` woła `persistAlarmAt()` + `sendAlarmList()` przed unlockiem.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. Single-shot odpala się o właściwej godzinie. Snooze modyfikuje właściwy alarm. `lastTriggerDay` persistowany przez reboot. Long-press zapisuje zmiany.
+
+---
+### [ID: ERR_047] | TIMESYNC_UART_THREAD_SAFETY | IMPACT: HIGH
+**Files:** `[TimeSyncProtocol.cpp, TimerService.cpp, Esptogution.cpp]`
+
+**PROBLEM:** Trzy błędy bezpieczeństwa wątkowego w nowym kodzie komunikacji czasowej:
+1. **NVS Flash write w wątku UART RX** (`TimeSyncProtocol.cpp`): `handleSetAlarm()` zapisywał do NVS bezpośrednio w kontekście UART RX (Core 0). Operacja Flash trwa 10-50ms, blokując odbiór UART. Przy strumieniu PPG (50Hz) powoduje przepełnienie sprzętowego bufora UART i gubienie bajtów.
+2. **`localtime()` w wątku UART RX** (`TimeSyncProtocol.cpp:153`): `localtime()` używa statycznego bufora wewnętrznego, a jednoczesne wywołanie z `clock_task` (Core 0, main loop) nadpisuje dane (data race).
+3. **Brak sendTimerState() po auto-stop timera** (`TimerService.cpp:123`): `servicePlayback()` po auto-wygaśnięciu dzwonka nie wysyłał `kTypeTimerState` ani `kTypeStatusBell` do Gution. Popup alarmu wisiał w nieskończoność na ekranie HMI.
+
+**CAUSE:** Synchroniczny NVS write w ISR-kontekście; użycie non-reentrant `localtime()`; pominięty push do Gution przy auto-stop.
+
+**LOGIC_CHANGE:**
+- `TimeSyncProtocol.cpp`: NVS write zastąpiony deferred flag `g_nvsAlarmsDirty`; zapis w `AppLoop::runLoop()`.
+- `TimeSyncProtocol.cpp`: `localtime()` → `localtime_r()` z buforem na stosie (3 miejsca).
+- `TimerService.cpp`: `servicePlayback()` po auto-stop woła `TimeSync::sendTimerState()` + `EsptoGuition::sendStatusBell()`.
+- `TimerService.cpp`: Buzzer priority — `servicePlayback()` sprawdza `AlarmRuntime::state().alarmRinging` i nie miesza dźwięków.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. BRAK NVS write w UART RX. BRAK data race na `localtime`. Auto-stop timera natychmiast zamyka popup na Gution.
+
+---
 ### [ID: ERR_046] | AUDIO_BT_SERVICES_LOG_AND_RACE | IMPACT: HIGH
 **Files:** `[AudioBT.cpp, BluetoothA2DPSinkQueued.cpp]`
 

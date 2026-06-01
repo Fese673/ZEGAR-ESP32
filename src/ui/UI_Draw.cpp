@@ -100,9 +100,6 @@ const int& settingsRotationSec = appSettings.homeOverlaySeconds;
 const int& settingsSyncMinutes = appSettings.ntpSyncMinutes;
 
 const AlarmRuntime::State& alarmRuntime = AlarmRuntime::state();
-const int& alarmHour = alarmRuntime.alarmHour;
-const int& alarmMinute = alarmRuntime.alarmMinute;
-const bool& alarmEnabled = alarmRuntime.alarmEnabled;
 const bool& alarmRinging = alarmRuntime.alarmRinging;
 const AlarmEntry (&alarms)[AlarmRuntime::kMaxAlarms] = alarmRuntime.alarms;
 const int& alarmsCount = alarmRuntime.alarmsCount;
@@ -274,8 +271,8 @@ void updateSevenSeg() {
     MM = packTwoDigits(timerSetMinutes);
     SS = packTwoDigits(timerSetSeconds);
   } else if (alarmEditVisible) {
-    int previewHours = alarmHour;
-    int previewMinutes = alarmMinute;
+    int previewHours = (alarmsCount > 0) ? alarms[0].hour : 7;
+    int previewMinutes = (alarmsCount > 0) ? alarms[0].minute : 0;
 
     if (appState == STATE_ALARM_EDIT && selectedAlarmIndex >= 0 && selectedAlarmIndex < alarmsCount) {
       previewHours = alarms[selectedAlarmIndex].hour;
@@ -390,17 +387,7 @@ static void lcdPrintCenteredWithIconsAndSuffix(uint8_t row, const char* text, co
 }
 
 static bool isAnyAlarmArmed() {
-  if (alarmEnabled || alarmRinging) {
-    return true;
-  }
-
-  for (int i = 0; i < alarmsCount; ++i) {
-    if (alarms[i].enabled) {
-      return true;
-    }
-  }
-
-  return false;
+  return AlarmRuntime::isAnyAlarmArmed();
 }
 
 
@@ -1037,8 +1024,10 @@ void drawAlarm() {
   // Centered time line: "< [HH]:MM >" with brackets around active field
   char abuf[21];
   char hh[3]; char mm[3];
-  snprintf(hh, sizeof(hh), "%02d", alarmHour);
-  snprintf(mm, sizeof(mm), "%02d", alarmMinute);
+  int defaultH = (alarmsCount > 0) ? alarms[0].hour : 7;
+  int defaultM = (alarmsCount > 0) ? alarms[0].minute : 0;
+  snprintf(hh, sizeof(hh), "%02d", defaultH);
+  snprintf(mm, sizeof(mm), "%02d", defaultM);
 
   if (editState == EDIT_HOURS) {
     snprintf(abuf, sizeof(abuf), "< [%s]:%s >", hh, mm);
@@ -1124,10 +1113,7 @@ void drawTimer() {
 void drawStoper() {
   LCD_CLEAR();
 
-  unsigned long t = stoperElapsed;
-  if (stoperRunning) {
-    t += millis() - stoperStart;
-  }
+  unsigned long t = StopwatchService::getElapsedMs();
 
   const int cs = (t / 10) % 100;
   const int s  = (t / 1000) % 60;

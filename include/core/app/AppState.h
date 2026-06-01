@@ -105,3 +105,6 @@ enum RadioMode {
 extern AppState appState;
 extern EditState editState;
 extern RadioMode radioMode;
+
+// Flaga: true gdy użytkownik edytuje alarm enkoderem (blokada dla Gution)
+extern volatile bool g_alarmEditActive;

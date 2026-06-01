@@ -351,22 +351,8 @@ void initComms(RuntimeContext& ctx) {
   ctx.mqttEnabled = s_prefs.getBool("mqttEnabled", true);
   ctx.settingsMqttMenuIndex = ctx.mqttEnabled ? 0 : 1;
 
-  ctx.alarmsCount = s_prefs.getUShort("alarmCount", 0);
-  if (ctx.alarmsCount > AlarmRuntime::kMaxAlarms) {
-    ctx.alarmsCount = AlarmRuntime::kMaxAlarms;
-  }
-  for (int i = 0; i < ctx.alarmsCount; ++i) {
-    char keyH[12];
-    char keyM[12];
-    char keyE[12];
-    snprintf(keyH, sizeof(keyH), "a%dh", i);
-    snprintf(keyM, sizeof(keyM), "a%dm", i);
-    snprintf(keyE, sizeof(keyE), "a%de", i);
-    alarmRuntime.alarms[i].hour = static_cast<uint8_t>(s_prefs.getUShort(keyH, 7));
-    alarmRuntime.alarms[i].minute = static_cast<uint8_t>(s_prefs.getUShort(keyM, 0));
-    alarmRuntime.alarms[i].enabled = s_prefs.getBool(keyE, true);
-    alarmRuntime.alarms[i].lastTriggerDay = UINT16_MAX;
-  }
+  AlarmRuntime::loadAllAlarms(s_prefs);
+  ctx.alarmsCount = alarmRuntime.alarmsCount;
 
   WiFiSync::setOnDone([]() {
     const unsigned long ntpSyncMs = WiFiSync::getLastNtpSyncTime();

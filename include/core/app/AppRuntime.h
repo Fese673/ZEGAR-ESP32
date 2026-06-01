@@ -47,9 +47,10 @@ extern int displayedBPM;
 extern int displayedSPO2;
 extern bool stm32Connected;
 
-extern bool stoperRunning;
-extern unsigned long stoperStart;
-extern unsigned long stoperElapsed;
+// Stoper — via StopwatchService (nie używaj extern)
+
+// Flaga: odroczony zapis alarmów do NVS (unikamy zapisu z wątku UART)
+extern volatile bool g_nvsAlarmsDirty;
 
 extern MainRuntimeState g_mainRuntimeState;
 

@@ -7,6 +7,9 @@
 
 Preferences s_prefs;
 
+volatile bool g_alarmEditActive = false;
+volatile bool g_nvsAlarmsDirty = false;
+
 int timerSetMinutes = 0;
 int timerSetSeconds = 0;
 bool timerRunning = false;
@@ -19,10 +22,6 @@ int timerPresetIndex = 1;
 int displayedBPM = 0;
 int displayedSPO2 = 0;
 bool stm32Connected = false;
-
-bool stoperRunning = false;
-unsigned long stoperStart = 0;
-unsigned long stoperElapsed = 0;
 
 MainRuntimeState g_mainRuntimeState;
 

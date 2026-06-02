@@ -1,6 +1,6 @@
 #include "BluetoothA2DPOutput.h"
 
-#include "BoardPins.h"
+#include "Board_Pins.h"
 #include "RuntimeTelemetry.h"
 
 #if IS_VALID_PLATFORM

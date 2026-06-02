@@ -10,7 +10,7 @@
 // ============================================================================
 
 #include "PMS_Czujnik.h"
-#include "BoardPins.h"
+#include "Board_Pins.h"
 #include "AppLog.h"
 
 // Biblioteka PMserial — nagłówek jest już w include/

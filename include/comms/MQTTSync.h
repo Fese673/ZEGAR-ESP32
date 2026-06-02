@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include "SecretsConfig.h"
+#include "Secrets_Config.h"
 
 // HiveMQ Cloud CA Certificate (required for TLS)
 extern const char* g_mqtt_ca_cert;

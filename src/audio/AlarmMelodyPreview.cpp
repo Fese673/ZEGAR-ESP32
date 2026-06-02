@@ -1,6 +1,6 @@
 #include "AlarmMelodyPreview.h"
 
-#include "BoardPins.h"
+#include "Board_Pins.h"
 #include "ClockAlarmService.h"
 
 namespace AlarmMelodyPreview {

@@ -41,7 +41,7 @@ constexpr SignalConfig kSignals[SIGNAL_COUNT] = {
 constexpr uint32_t kKeepaliveIntervalMs = 30000UL;
 constexpr uint32_t kSafetyRefreshIntervalMs = 300000UL;
 
-constexpr bool kUseSyntheticPayloads = true;
+constexpr bool kUseSyntheticPayloads = false;
 constexpr unsigned long kSyntheticUpdateIntervalMs = 3000UL;
 constexpr float kSyntheticChangePercent = 5.0f;
 

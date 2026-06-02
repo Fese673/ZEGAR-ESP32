@@ -563,43 +563,74 @@ void drawHome() {
 }
 
 // ============================================================================
-// AIR QUALITY SCREEN (20x4)
+// AIR QUALITY SCREEN (20x4) — klasyfikacja wg Uniwersalnej Matrycy
 // ============================================================================
 
-static const __FlashStringHelper* airHeaderFor(uint16_t pm25, uint16_t eco2, uint8_t aqi) {
-  // Priorytety:
-  // - Najpierw stany alarmowe (Poziom 5, potem 4)
-  // - Potem najlepsze poziomy (1 -> 2 -> 3)
-  //   bo kryteria są zagnieżdżone (IDEALNE ⊂ DOBRE ⊂ SREDNIE).
+/// Klasyfikuje PM2.5 do poziomu 1–4 wg matrycy.
+static int classifyPm25Level(uint16_t pm25) {
+  if (pm25 <= 15) return 1;
+  if (pm25 <= 25) return 2;
+  if (pm25 <= 50) return 3;
+  return 4;
+}
 
-  // Poziom 5: SMOG / ZLE
-  if (pm25 >= 50 || eco2 >= 2000 || aqi == 5) {
-    if (pm25 >= 50) return F("! UWAGA: SMOG !");
-    return F("! ZLE POWIETRZE !");
+/// Klasyfikuje PM10 do poziomu 1–4 wg matrycy.
+static int classifyPm10Level(uint16_t pm10) {
+  if (pm10 <= 30) return 1;
+  if (pm10 <= 50) return 2;
+  if (pm10 <= 90) return 3;
+  return 4;
+}
+
+/// Klasyfikuje PM1.0 do poziomu 1–4 wg matrycy.
+static int classifyPm1Level(uint16_t pm1) {
+  if (pm1 <= 10) return 1;
+  if (pm1 <= 18) return 2;
+  if (pm1 <= 35) return 3;
+  return 4;
+}
+
+/// Klasyfikuje eCO₂ do poziomu 1–4 wg matrycy.
+static int classifyEco2Level(uint16_t eco2) {
+  if (eco2 <= 800) return 1;
+  if (eco2 <= 1200) return 2;
+  if (eco2 <= 1800) return 3;
+  return 4;
+}
+
+/// Klasyfikuje AQI (UBA 1–5) do poziomu 1–4 wg matrycy.
+static int classifyAqiLevel(uint8_t aqi) {
+  if (aqi <= 2) return 1;
+  if (aqi == 3) return 2;
+  if (aqi == 4) return 3;
+  return 4; // aqi == 5
+}
+
+static const __FlashStringHelper* airHeaderFor(
+    uint16_t pm25, uint16_t pm10, uint16_t pm1,
+    uint16_t eco2, uint8_t aqi) {
+  // Każdy sensor klasyfikowany niezależnie, wartość 0 = brak danych (nie wpływa).
+  const int pm25L = (pm25 > 0)  ? classifyPm25Level(pm25) : 0;
+  const int pm10L = (pm10 > 0)  ? classifyPm10Level(pm10) : 0;
+  const int pm1L  = (pm1  > 0)  ? classifyPm1Level(pm1)   : 0;
+  const int eco2L = (eco2 > 0)  ? classifyEco2Level(eco2) : 0;
+  const int aqiL  = (aqi  > 0)  ? classifyAqiLevel(aqi)   : 0;
+
+  // Zasada „worst wins" — ostateczny poziom to max z dostępnych.
+  int level = 1;
+  if (pm25L > level) level = pm25L;
+  if (pm10L > level) level = pm10L;
+  if (pm1L  > level) level = pm1L;
+  if (eco2L > level) level = eco2L;
+  if (aqiL  > level) level = aqiL;
+
+  switch (level) {
+    case 1: return F("POWIETRZE: DOBRE");
+    case 2: return F("POWIETRZE: SREDNIE");
+    case 3: return F("POWIETRZE: ZLE");
+    case 4: return F("! ALARM: SMOG !");
+    default: return F("POWIETRZE: ---");
   }
-
-  // Poziom 4: PRZEWIETRZ!
-  if ((eco2 >= 1500 || aqi >= 4) && pm25 < 50) {
-    return F("! PRZEWIETRZ !");
-  }
-
-  // Poziom 1: IDEALNE
-  if (pm25 < 15 && eco2 < 800 && aqi == 1) {
-    return F("POWIETRZE: IDEALNE");
-  }
-
-  // Poziom 2: DOBRE
-  if (pm25 < 25 && eco2 < 1000 && aqi <= 2) {
-    return F("POWIETRZE: DOBRE");
-  }
-
-  // Poziom 3: SREDNIE
-  if (pm25 < 50 && eco2 < 1500 && aqi <= 3) {
-    return F("POWIETRZE: SREDNIE");
-  }
-
-  // Jeśli nie wpasowuje się idealnie w powyższe progi
-  return F("POWIETRZE: ---");
 }
 
 void drawAirScreen() {
@@ -615,12 +646,14 @@ void drawAirScreen() {
   const PMS5003Sensor::MassReadings atmospheric = PMS5003Sensor::getAtmospheric();
   const bool pmValid = PMS5003Sensor::isEnabled() && atmospheric.pm25 > 0;
   const uint16_t pm25 = pmValid ? atmospheric.pm25 : 0;
+  const uint16_t pm10 = pmValid ? atmospheric.pm10 : 0;
+  const uint16_t pm1  = pmValid ? atmospheric.pm01 : 0;
 
   // Decide header: if we have at least one of PM or ENS gas/climate, attempt header.
   const bool haveAny = pmValid || ensGasValid || ensClimateValid;
   const __FlashStringHelper* header = F("POWIETRZE: BRAK DANYCH");
   if (haveAny) {
-    header = airHeaderFor(pm25, eco2, aqi);
+    header = airHeaderFor(pm25, pm10, pm1, eco2, aqi);
   }
   lcdPrintCentered(0, header);
 
@@ -641,13 +674,13 @@ void drawAirScreen() {
     LCD_PRINT(line);
   }
 
-  // Row 2: PM2.5
+  // Row 2: PM2.5 + PM10 (w jednym wierszu 20-znakowym)
   {
     char line[21];
     if (pmValid) {
-      snprintf(line, sizeof(line), "  PM2.5: %3u ug/m3  ", (unsigned)pm25);
+      snprintf(line, sizeof(line), "PM2.5:%3u PM10:%3u ", (unsigned)pm25, (unsigned)pm10);
     } else {
-      snprintf(line, sizeof(line), "  PM2.5:  -- ug/m3  ");
+      snprintf(line, sizeof(line), "PM2.5: -- PM10: -- ");
     }
     padRightTo20(line);
     LCD_SET(0, 2);

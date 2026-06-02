@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-#include "BoardPins.h"
+#include "Board_Pins.h"
 
 static constexpr unsigned long CLOCK_TICK_MS = 1000UL;
 static constexpr unsigned long ALARM_DURATION_MS = 60000UL;

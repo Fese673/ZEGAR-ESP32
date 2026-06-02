@@ -15,7 +15,7 @@
 #include "AHTxx.h"
 #include "ENS160AHT21Screen.h"
 #include "I2C_bus_shared.h"
-#include "TemperatureConfig.h"
+#include "Temperature_Config.h"
 
 namespace {
 

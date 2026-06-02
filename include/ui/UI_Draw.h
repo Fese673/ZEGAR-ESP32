@@ -6,7 +6,7 @@
 #include <LiquidCrystal_I2C.h>
 #include "LCDMirror.h"
 #include "AppState.h"
-#include "BoardPins.h"
+#include "Board_Pins.h"
 
 
 // --- Fallback pin definitions (will not override existing defines in main) ---

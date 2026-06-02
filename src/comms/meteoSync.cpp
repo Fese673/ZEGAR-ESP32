@@ -1,6 +1,6 @@
 #include "meteoSync.h"
 #include "OpenMeteo.h"
-#include "TaskConfig.h"
+#include "Task_Config.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>

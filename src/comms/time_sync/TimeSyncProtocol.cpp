@@ -7,7 +7,7 @@
 #include "StopwatchService.h"
 #include "AppSettings.h"
 #include "AppRuntime.h"
-#include "BoardPins.h"
+#include "Board_Pins.h"
 #include <time.h>
 
 #include "AppState.h"

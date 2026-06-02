@@ -68,13 +68,15 @@ include/
 │   ├── NetworkOrchestrator.h
 │   ├── RadioModeSwitch.h
 │   ├── TelemetryComposer.h
+│   ├── TimeSyncProtocol.h
 │   └── WiFiSync.h
 ├── config/
-│   ├── a2dp_config.h
-│   ├── BoardPins.h
-│   ├── SecretsConfig.h
-│   ├── TaskConfig.h
-│   └── TemperatureConfig.h
+│   ├── A2DP_Config.h
+│   ├── Board_Pins.h
+│   ├── Secrets_Config.h
+│   ├── Sensor_Conifg.h
+│   ├── Task_Config.h
+│   └── Temperature_Config.h
 ├── core/
 │   ├── app/
 │   │   ├── AppBoot.h
@@ -88,9 +90,12 @@ include/
 │   ├── services/
 │   │   ├── BootIntroService.h
 │   │   ├── ClockAlarmService.h
+│   │   ├── ClockService.h
 │   │   ├── ModeManager.h
 │   │   ├── RtcSyncService.h
-│   │   └── SystemResourcesService.h
+│   │   ├── StopwatchService.h
+│   │   ├── SystemResourcesService.h
+│   │   └── TimerService.h
 │   └── telemetry/
 │       ├── AppLog.h
 │       ├── LoopBaselineTelemetry.h
@@ -156,18 +161,23 @@ src/
 │   ├── BluetoothA2DPOutput.cpp
 │   ├── BluetoothA2DPSink.cpp
 │   ├── BluetoothA2DPSinkQueued.cpp
-│   └── BluetoothA2DPSource.cpp
+│   ├── BluetoothA2DPSource.cpp
+│   ├── EQFilter.cpp
+│   └── EQFilter.h
 ├── comms/
 │   ├── esp_to_gution/
 │   │   ├── Config.h
 │   │   ├── EsptoGuitionCobs.cpp
 │   │   ├── EsptoGuitionCobs.h
+│   │   ├── EsptoGuitionMusicLog.h
 │   │   ├── EsptoGuitionState.cpp
 │   │   ├── EsptoGuitionState.h
 │   │   ├── EsptoGuitionTransport.cpp
 │   │   ├── EsptoGuitionTransport.h
 │   │   ├── Esptogution.cpp
 │   │   └── Esptogution.h
+│   ├── time_sync/
+│   │   └── TimeSyncProtocol.cpp
 │   ├── meteoSync.cpp
 │   ├── MQTTSync.cpp
 │   ├── NetworkOrchestrator.cpp
@@ -187,9 +197,12 @@ src/
 │   ├── services/
 │   │   ├── BootIntroService.cpp
 │   │   ├── ClockAlarmService.cpp
+│   │   ├── ClockService.cpp
 │   │   ├── ModeManager.cpp
 │   │   ├── RtcSyncService.cpp
-│   │   └── SystemResourcesService.cpp
+│   │   ├── StopwatchService.cpp
+│   │   ├── SystemResourcesService.cpp
+│   │   └── TimerService.cpp
 │   ├── telemetry/
 │   │   ├── LoopBaselineTelemetry.cpp
 │   │   ├── RamTelemetry.cpp

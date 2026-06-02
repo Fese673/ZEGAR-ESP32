@@ -206,8 +206,14 @@ void broadcastSnapshots(unsigned long nowMs) {
   PmsPayload currentPms;
   if (buildPmsPayload(currentPms, nowMs)) {
     bool changed = (currentPms.pm01 != s_lastSentPms.pm01) ||
-                 (currentPms.pm25 != s_lastSentPms.pm25) ||
-                 (currentPms.pm10 != s_lastSentPms.pm10);
+                   (currentPms.pm25 != s_lastSentPms.pm25) ||
+                   (currentPms.pm10 != s_lastSentPms.pm10) ||
+                   (abs((int)currentPms.count0p3 - (int)s_lastSentPms.count0p3) >= 10) ||
+                   (abs((int)currentPms.count0p5 - (int)s_lastSentPms.count0p5) >= 5) ||
+                   (abs((int)currentPms.count1p0 - (int)s_lastSentPms.count1p0) >= 2) ||
+                   (abs((int)currentPms.count2p5 - (int)s_lastSentPms.count2p5) >= 2) ||
+                   (currentPms.count5p0 != s_lastSentPms.count5p0) ||
+                   (currentPms.count10p0 != s_lastSentPms.count10p0);
     if (changed) {
       sendPms(s_sequence.fetch_add(1, std::memory_order_relaxed));
       s_lastSentPms = currentPms;

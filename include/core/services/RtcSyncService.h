@@ -1,0 +1,19 @@
+#pragma once
+
+#include <Arduino.h>
+namespace RtcSyncService {
+
+void applyTimezone();
+bool isSystemTimeValid();
+bool isClockSeeded();
+void markClockSeeded();
+
+void syncLocalClockFromSystemTime(int& hours, int& minutes, int& seconds);
+void tryRestoreSystemTimeFromDs3231(int& hours, int& minutes, int& seconds, unsigned long& lastTick);
+void tryRestoreSystemTimeFromDs3231();
+
+void noteNtpSync(unsigned long ntpSyncMillis);
+void scheduleRtcWrite();
+void processPendingWrite();
+
+}  // namespace RtcSyncService

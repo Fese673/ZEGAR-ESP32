@@ -350,6 +350,9 @@ void initComms(RuntimeContext& ctx) {
   ctx.mqttEnabled = s_prefs.getBool("mqttEnabled", true);
   ctx.settingsMqttMenuIndex = ctx.mqttEnabled ? 0 : 1;
 
+  const uint16_t ntpSyncMin = s_prefs.getUShort("ntpSyncMin", 60);
+  WiFiSync::setPeriodicSyncIntervalMinutes(ntpSyncMin);
+
   AlarmRuntime::loadAllAlarms(s_prefs);
   ctx.alarmsCount = alarmRuntime.alarmsCount;
 

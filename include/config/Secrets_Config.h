@@ -4,11 +4,11 @@
 // Real values should be injected via PlatformIO build_flags or persisted in NVS.
 
 #ifndef PROJECT_WIFI_SSID
-#define PROJECT_WIFI_SSID "Orange_Swiatlowod_98E2"
+#define PROJECT_WIFI_SSID "PZS2"
 #endif
 
 #ifndef PROJECT_WIFI_PASS
-#define PROJECT_WIFI_PASS "123456781"  // ależ z ciebie haker, nie? :D
+#define PROJECT_WIFI_PASS "omega@orzel45"  // ależ z ciebie haker, nie? :D
 #endif
 
 #ifndef PROJECT_NTP_SERVER

@@ -191,17 +191,17 @@ float pickWeatherTemperature(bool &valid, bool &fromEns160) {
   valid = false;
   fromEns160 = false;
 
+  if (BMP280Screen::runtimeData.hasTemperature &&
+      isfinite(BMP280Screen::runtimeData.temperatureC)) {
+    valid = true;
+    return BMP280Screen::runtimeData.temperatureC;
+  }
+
   if (ENS160AHT21Screen::runtimeData.hasClimateSample &&
       isfinite(ENS160AHT21Screen::runtimeData.temperatureC)) {
     valid = true;
     fromEns160 = true;
     return ENS160AHT21Screen::runtimeData.temperatureC;
-  }
-
-  if (BMP280Screen::runtimeData.hasTemperature &&
-      isfinite(BMP280Screen::runtimeData.temperatureC)) {
-    valid = true;
-    return BMP280Screen::runtimeData.temperatureC;
   }
 
   return 0.0f;

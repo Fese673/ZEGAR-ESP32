@@ -381,7 +381,13 @@ static int clampMenuIndexSafe(int index, int count) {
 
 static ToggleSettingBinding* findToggleSettingBinding(AppState state) {
   static ToggleSettingBinding kBindings[] = {
+      // TODO: pmsEnabled — prefKey=nullptr, toggle przez enkoder NIE zapisuje do NVS.
+      //       W trybie BT-only po reboocie ustawienie wraca do default.
+      //       Wymaga mechanizmu zapisu niezależnego od Guition (np. deferred flush z main loop).
       {STATE_SETTINGS_PMS5003, &settingsPmsMenuIndex, &settingsPmsMenuCount, &getPms5003Enabled, &setPms5003Enabled, nullptr},
+      // TODO: buzzerEnabled — prefKey=nullptr, toggle przez enkoder NIE zapisuje do NVS.
+      //       W trybie BT-only po reboocie ustawienie wraca do default.
+      //       Wymaga mechanizmu zapisu niezależnego od Guition (np. deferred flush z main loop).
       {STATE_SETTINGS_BUZZER, &settingsBuzzerMenuIndex, &settingsBuzzerMenuCount, &getBuzzerEnabled, &setBuzzerEnabled, nullptr},
       {STATE_SETTINGS_TOUCH, &settingsTouchMenuIndex, &settingsTouchMenuCount, &getTouchTestEnabled, &setTouchTestEnabled, "touchTest"},
       {STATE_SETTINGS_BACKGROUND_MUSIC, &settingsBgMusicMenuIndex, &settingsBgMusicMenuCount, &getBackgroundMusicEnabled, &setBackgroundMusicEnabled, "menuMusic"},

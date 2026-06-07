@@ -33,6 +33,8 @@ constexpr uint8_t kBuzzer = 2;
 constexpr uint8_t kTouchTestPad = 4;
 
 // --- STM32 UART (BPM/SpO2) ---
+// STM32 PA9  (TX)          -> ESP32 GPIO16 (RX)
+// STM32 PA10 (RX, pull-up) -> ESP32 GPIO17 (TX)
 constexpr uint8_t kStm32UartRx = 16;
 constexpr uint8_t kStm32UartTx = 17;
 

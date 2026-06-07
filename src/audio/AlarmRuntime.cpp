@@ -1,6 +1,6 @@
 #include "AlarmRuntime.h"
-#include <cstdio>
 
+#include <cstdio>
 namespace AlarmRuntime {
 
 State& mutableState() {
@@ -42,6 +42,7 @@ void saveAllAlarms(Preferences &prefs) {
   prefs.putUShort("alarmCount", (uint16_t)st.alarmsCount);
   for (int i = 0; i < st.alarmsCount; ++i) {
     saveAlarm(prefs, i);
+    yield();  // daj szansę encoder/I2C worker między zapisami NVS
   }
 }
 

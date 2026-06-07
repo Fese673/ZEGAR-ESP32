@@ -1,7 +1,6 @@
 #include "HomeRuntime.h"
 
 #include "UI_Draw.h"
-
 namespace HomeRuntime {
 namespace {
 

@@ -1,26 +1,26 @@
 #include "RtcSyncService.h"
 
 #include <Arduino.h>
-#include <Wire.h>
+#include <atomic>
 #include <sys/time.h>
 #include <time.h>
+#include <Wire.h>
 
 #include "AppLog.h"
 #include "ClockService.h"
 #include "RTCService.h"
-
 namespace RtcSyncService {
 namespace {
 
 constexpr char TAG[] = "RTC";
 
-static bool rtcWritePending = false;
+static volatile bool rtcWritePending = false;
 static unsigned long lastRtcWriteAttemptMillis = 0;
 static unsigned long rtcWriteNotBeforeMillis = 0;
 static uint8_t rtcWriteFailureCount = 0;
-static time_t rtcPendingEpoch = 0;
-static unsigned long lastSeenNtpSyncMillis = 0;
-static bool s_clockSeeded = false;
+static std::atomic<time_t> rtcPendingEpoch{0};
+static volatile unsigned long lastSeenNtpSyncMillis = 0;
+static volatile bool s_clockSeeded = false;
 
 static const char* kTzPoland = "CET-1CEST,M3.5.0,M10.5.0/3";
 constexpr time_t kMinValidEpoch = 1609459200;
@@ -190,7 +190,8 @@ void processPendingWrite() {
   if (nowMs < rtcWriteNotBeforeMillis) return;
   if (lastRtcWriteAttemptMillis != 0 && (nowMs - lastRtcWriteAttemptMillis) < 1000UL) return;
 
-  const time_t epochToWrite = (rtcPendingEpoch != 0) ? rtcPendingEpoch : time(nullptr);
+  const time_t pendingEpoch = rtcPendingEpoch.load();
+  const time_t epochToWrite = (pendingEpoch != 0) ? pendingEpoch : time(nullptr);
   const RTCService::Status writeStatus = RTCService::setEpoch(epochToWrite, true);
   LOG_I(TAG, "Set epoch status=%s epoch=%ld", RTCService::statusToString(writeStatus), (long)epochToWrite);
   lastRtcWriteAttemptMillis = nowMs;

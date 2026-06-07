@@ -2,11 +2,10 @@
 #define MQTTSYNC_H
 
 #include <Arduino.h>
-#include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include "Secrets_Config.h"
+#include <PubSubClient.h>
 
-// HiveMQ Cloud CA Certificate (required for TLS)
+#include "Secrets_Config.h"
 extern const char* g_mqtt_ca_cert;
 
 /*

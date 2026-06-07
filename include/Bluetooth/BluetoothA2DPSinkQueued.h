@@ -4,7 +4,6 @@
 
 #include "BluetoothA2DPSink.h"
 #include "Task_Config.h"
-
 #if IS_VALID_PLATFORM
 
 #define RINGBUF_HIGHEST_WATER_LEVEL (32 * 1024)

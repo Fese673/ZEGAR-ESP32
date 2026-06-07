@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "I2C_bus_shared.h"
-
 namespace LCDIcons {
 
 namespace {

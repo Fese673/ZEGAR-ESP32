@@ -1,5 +1,4 @@
 #include "StatsManager.h"
-
 StatsManager statsManager;
 
 void StatsManager::begin() {

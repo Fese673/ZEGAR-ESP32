@@ -1,9 +1,7 @@
 #pragma once
 
-#include <stddef.h>
-
 #include <freertos/FreeRTOS.h>
-
+#include <stddef.h>
 namespace TaskConfig {
 
 // Core 0 is reserved for the latency-sensitive system band.
@@ -37,7 +35,7 @@ constexpr BaseType_t kCore = CORE_SYSTEM;
 constexpr UBaseType_t kPriority = 24;
 
 // BtI2STask owns the realtime audio bridge; smaller stacks can break the output path.
-constexpr size_t kStackBytes = 3072;
+constexpr size_t kStackBytes = 4096;
 
 }  // namespace BtI2STask
 

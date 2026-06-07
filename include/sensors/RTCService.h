@@ -6,7 +6,6 @@
 
 #include "ErriezDS3231.h"
 #include "i2c/SharedBus.h"
-
 namespace RTCService {
 
 enum class Status : uint8_t {

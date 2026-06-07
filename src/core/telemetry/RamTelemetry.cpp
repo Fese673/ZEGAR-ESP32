@@ -1,7 +1,6 @@
 #include "RamTelemetry.h"
 
 #include "AppLog.h"
-
 #if TEST_RAM
 
 #include <cstdio>

@@ -4,7 +4,6 @@
 
 #include "BMP280Sensor.h"
 #include "ENS160AHT21Screen.h"
-
 namespace TelemetryComposer {
 
 void buildMqttTelemetrySample(Sample& out) {

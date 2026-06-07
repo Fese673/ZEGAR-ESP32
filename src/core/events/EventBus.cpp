@@ -1,6 +1,11 @@
-#include "core/events/EventBus.h"
-#include <string.h>
 #include <Arduino.h>
+#include <string.h>
+
+#include "core/events/EventBus.h"
+#ifdef ARDUINO_ARCH_ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
+#endif
 
 Event EventBus::s_queue[kEventQueueSize];
 volatile uint8_t EventBus::s_queueHead = 0;
@@ -10,6 +15,10 @@ uint8_t EventBus::s_subCount = 0;
 EventBus::TimerEntry EventBus::s_timers[kMaxTimers];
 uint8_t EventBus::s_timerCount = 0;
 bool EventBus::s_initialized = false;
+
+#ifdef ARDUINO_ARCH_ESP32
+static portMUX_TYPE s_queueMux = portMUX_INITIALIZER_UNLOCKED;
+#endif
 
 void EventBus::init() {
   memset(s_queue, 0, sizeof(s_queue));
@@ -25,14 +34,25 @@ bool EventBus::post(uint8_t eventId, int intValue) {
     return false;
   }
 
+#ifdef ARDUINO_ARCH_ESP32
+  portENTER_CRITICAL(&s_queueMux);
+#endif
+
   const uint8_t next = (s_queueTail + 1) % kEventQueueSize;
   if (next == s_queueHead) {
+#ifdef ARDUINO_ARCH_ESP32
+    portEXIT_CRITICAL(&s_queueMux);
+#endif
     return false;
   }
 
   s_queue[s_queueTail].id = eventId;
   s_queue[s_queueTail].intValue = intValue;
   s_queueTail = next;
+
+#ifdef ARDUINO_ARCH_ESP32
+  portEXIT_CRITICAL(&s_queueMux);
+#endif
   return true;
 }
 
@@ -48,7 +68,11 @@ bool EventBus::process() {
       continue;
     }
     if (now - s_timers[i].lastFireMs >= s_timers[i].periodMs) {
-      s_timers[i].lastFireMs += s_timers[i].periodMs;
+      if (now - s_timers[i].lastFireMs >= s_timers[i].periodMs * 2) {
+        s_timers[i].lastFireMs = now;
+      } else {
+        s_timers[i].lastFireMs += s_timers[i].periodMs;
+      }
       if (s_timers[i].oneshot) {
         s_timers[i].active = false;
       }
@@ -57,9 +81,22 @@ bool EventBus::process() {
   }
 
   bool processed = false;
-  while (s_queueHead != s_queueTail) {
-    const Event& ev = s_queue[s_queueHead];
+  for (;;) {
+#ifdef ARDUINO_ARCH_ESP32
+    portENTER_CRITICAL(&s_queueMux);
+#endif
+    const bool empty = (s_queueHead == s_queueTail);
+    if (empty) {
+#ifdef ARDUINO_ARCH_ESP32
+      portEXIT_CRITICAL(&s_queueMux);
+#endif
+      break;
+    }
+    const Event ev = s_queue[s_queueHead];
     s_queueHead = (s_queueHead + 1) % kEventQueueSize;
+#ifdef ARDUINO_ARCH_ESP32
+    portEXIT_CRITICAL(&s_queueMux);
+#endif
 
     for (uint8_t i = 0; i < s_subCount; ++i) {
       if (s_subs[i].eventId == ev.id || s_subs[i].eventId == EV_NONE) {

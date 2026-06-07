@@ -1,15 +1,16 @@
 #include "meteoSync.h"
-#include "OpenMeteo.h"
-#include "Task_Config.h"
-#include <WiFi.h>
-#include <HTTPClient.h>
+
 #include <ArduinoJson.h>
 #include <atomic>
+#include <HTTPClient.h>
 #include <time.h>
+#include <WiFi.h>
+
+#include "AppLog.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "AppLog.h"
-
+#include "OpenMeteo.h"
+#include "Task_Config.h"
 namespace meteoSync {
 
 static constexpr char TAG_METEO[] = "METEO";

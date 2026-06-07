@@ -4,7 +4,6 @@
 #include <Preferences.h>
 
 #include "AlarmTypes.h"
-
 namespace AlarmRuntime {
 
 static constexpr int kMaxAlarms = 8;

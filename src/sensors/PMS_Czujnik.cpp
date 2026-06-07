@@ -10,17 +10,11 @@
 // ============================================================================
 
 #include "PMS_Czujnik.h"
-#include "Board_Pins.h"
-#include "AppLog.h"
 
-// Biblioteka PMserial — nagłówek jest już w include/
 #include <PMserial.h>
 
-// ============================================================================
-// WEWNĘTRZNE ZMIENNE MODUŁU (static - widoczne tylko w tym pliku)
-// ============================================================================
-
-// Instancja SerialPM na Serial1, piny z centralnej konfiguracji BoardPins.
+#include "AppLog.h"
+#include "Board_Pins.h"
 static SerialPM pms(PMSx003, BoardPins::kPms5003Rx, BoardPins::kPms5003Tx);
 
 namespace {
@@ -194,6 +188,13 @@ static void recordSuccess(bool factoryRead, unsigned long now) {
   const uint16_t pm01 = readWord(s.frameBuffer, factoryRead ? kFrameFactoryPm01Offset : kFrameAtmosphericPm01Offset);
   const uint16_t pm25 = readWord(s.frameBuffer, factoryRead ? kFrameFactoryPm25Offset : kFrameAtmosphericPm25Offset);
   const uint16_t pm10 = readWord(s.frameBuffer, factoryRead ? kFrameFactoryPm10Offset : kFrameAtmosphericPm10Offset);
+
+  constexpr uint16_t kPmMaxValidUgm3 = 500;
+  if (pm01 > kPmMaxValidUgm3 || pm25 > kPmMaxValidUgm3 || pm10 > kPmMaxValidUgm3) {
+    resetRequestParser();
+    return;
+  }
+
   const uint16_t count0p3 = readWord(s.frameBuffer, kFrameParticle0p3Offset);
   const uint16_t count0p5 = readWord(s.frameBuffer, kFrameParticle0p5Offset);
   const uint16_t count1p0 = readWord(s.frameBuffer, kFrameParticle1p0Offset);

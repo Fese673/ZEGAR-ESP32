@@ -1,10 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
-
 #include <stdarg.h>
 #include <stdio.h>
-
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>

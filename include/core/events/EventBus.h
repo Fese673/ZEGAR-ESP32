@@ -1,8 +1,8 @@
 #pragma once
-#include <stdint.h>
 #include <stdbool.h>
-#include "core/events/EventTypes.h"
+#include <stdint.h>
 
+#include "core/events/EventTypes.h"
 constexpr uint8_t kEventQueueSize = 16;
 constexpr uint8_t kMaxSubscriptions = 32;
 constexpr uint8_t kMaxTimers = 16;

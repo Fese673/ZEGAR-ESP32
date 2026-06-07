@@ -1,8 +1,7 @@
 #pragma once
 #include <Arduino.h>
-#include <stdint.h>
 #include <stdbool.h>
-
+#include <stdint.h>
 namespace EsptoGuition {
 
 void beginSerial(HardwareSerial &serialPort, uint32_t baudRate, int rxPin, int txPin);

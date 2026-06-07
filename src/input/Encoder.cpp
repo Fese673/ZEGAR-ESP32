@@ -1,8 +1,8 @@
 #include "Encoder.h"
-#include "Task_Config.h"
 
 #include <atomic>
 
+#include "Task_Config.h"
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -139,6 +139,12 @@ void encoder_begin(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
 // Konflikt I2S/Encoder ROZWIĄZANY - I2S teraz używa GPIO 33/32 zamiast 25/26.
 void encoder_reinit_pins() {
   if (s_clkPin != 255) {
+#ifdef ARDUINO_ARCH_ESP32
+    if (s_encoderTaskHandle != nullptr) {
+      vTaskSuspend(s_encoderTaskHandle);
+    }
+#endif
+
     pinMode(s_clkPin, INPUT_PULLUP);
     pinMode(s_dtPin,  INPUT_PULLUP);
     pinMode(s_swPin,  INPUT_PULLUP);
@@ -150,6 +156,12 @@ void encoder_reinit_pins() {
     s_lastEncoderState = s_encoderState;
     s_sequenceStep     = 0;
     s_sequenceDirection = 0;
+
+#ifdef ARDUINO_ARCH_ESP32
+    if (s_encoderTaskHandle != nullptr) {
+      vTaskResume(s_encoderTaskHandle);
+    }
+#endif
 
     LOG_I(TAG, "Pins restored mode=INPUT_PULLUP");
   }

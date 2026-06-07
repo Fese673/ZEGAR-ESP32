@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-
 namespace BMP280Screen {
 
 enum class SensorState : uint8_t {

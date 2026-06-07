@@ -9,7 +9,7 @@
 namespace ModeManager {
 
 // --- Inicjalizacja managera trybów ---
-void begin(AppState* statePtr = nullptr);
+void begin(volatile AppState* statePtr = nullptr);
 
 // --- Wi-Fi ---
 void wifiOn();

@@ -1,12 +1,13 @@
 #include "EsptoGuitionTransport.h"
+
+#include <Arduino.h>
+
+#include "AppLog.h"
 #include "Board_Pins.h"
 #include "EsptoGuitionCobs.h"
 #include "EsptoGuitionState.h"
 #include "Esptogution.h"
 #include "TimeSyncProtocol.h"
-#include "AppLog.h"
-#include <Arduino.h>
-
 namespace EsptoGuition {
 namespace {
 

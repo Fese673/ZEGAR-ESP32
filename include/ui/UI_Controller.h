@@ -1,8 +1,5 @@
 #pragma once
 #include "Encoder.h"
-
-// Frozen editor time — used only during STATE_SET_TIME.
-// Snapshot from Clock when entering, written back on EDIT_DONE.
 extern int g_editH;
 extern int g_editM;
 extern int g_editS;

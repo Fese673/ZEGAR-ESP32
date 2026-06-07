@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-
 namespace AppSettings {
 
 struct State {

@@ -6,12 +6,11 @@
 
 #include "AppLog.h"
 #include "I2C_bus_shared.h"
-
 extern LiquidCrystal_I2C lcd;
 
 constexpr uint8_t LCD_COLS = 20;
 constexpr uint8_t LCD_ROWS = 4;
-constexpr uint32_t LCD_I2C_LOCK_TIMEOUT_MS = 1;
+constexpr uint32_t LCD_I2C_LOCK_TIMEOUT_MS = 50;
 
 class LcdFrameBuffer20x4 : public Print {
 public:

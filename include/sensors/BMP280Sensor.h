@@ -3,7 +3,6 @@
 #include <Arduino.h>
 
 #include "BMP280Screen.h"
-
 namespace BMP280Sensor {
 
 void begin();

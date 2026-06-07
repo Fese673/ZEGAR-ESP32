@@ -1,5 +1,4 @@
 #include "AppSettings.h"
-
 namespace AppSettings {
 
 State& mutableState() {

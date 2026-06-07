@@ -2,9 +2,10 @@
 
 #include <Arduino.h>
 #include <Esp.h>
-#include <Wire.h>
 #include <Preferences.h>
+#include <Wire.h>
 
+#include "AlarmRuntime.h"
 #include "AppLog.h"
 #include "AppRuntime.h"
 #include "AppSettings.h"
@@ -13,35 +14,33 @@
 #include "BMP280Sensor.h"
 #include "BootIntroService.h"
 #include "ClockAlarmService.h"
-#include "AlarmRuntime.h"
-#include "ENS160AHT21Sensor.h"
-#include "Encoder.h"
-#include "core/events/EventBus.h"
 #include "comms/esp_to_gution/Esptogution.h"
+#include "core/events/EventBus.h"
+#include "Encoder.h"
+#include "ENS160AHT21Sensor.h"
 #include "HomeRuntime.h"
 #include "LCDMirror.h"
 #include "LoopBaselineTelemetry.h"
-#include "MQTTSync.h"
+#include "meteoSync.h"
 #include "ModeManager.h"
+#include "MQTTSync.h"
 #include "NetworkOrchestrator.h"
 #include "PMS_Czujnik.h"
 #include "RadioModeSwitch.h"
 #include "RamTelemetry.h"
 #include "RtcSyncService.h"
 #include "RuntimeTelemetry.h"
-#include "STM32_Data.h"
-#include "StatsManager.h"
-#include "SystemResourcesService.h"
-#include "TelemetryComposer.h"
 #include "SafeCracker.h"
+#include "StatsManager.h"
+#include "STM32_Data.h"
+#include "SystemResourcesService.h"
 #include "TANK-GAMES/TankGame.h"
+#include "TelemetryComposer.h"
+#include "TimerService.h"
 #include "touch_buzzer_test.h"
-#include "UIState.h"
 #include "UI_Controller.h"
 #include "UI_Draw.h"
-#include "meteoSync.h"
-#include "TimerService.h"
-
+#include "UIState.h"
 namespace AppLoop {
 namespace {
 
@@ -167,7 +166,6 @@ static void onUiRefresh(const Event&) {
     case STATE_DEBUG_STM32:
       if (millis() - s_ctx.state.lastSTM32Update >= STM32_UPDATE_MS) {
         s_ctx.state.lastSTM32Update = millis();
-        STM32data_update();
         if (stmDataUpdated) {
           stmDataUpdated = false;
           displayedBPM = bpmNumber;
@@ -180,13 +178,6 @@ static void onUiRefresh(const Event&) {
           displayedSPO2 = 0;
         }
         drawDebugSTM32();
-      }
-      break;
-
-    case STATE_STOPER:
-      if (millis() - s_ctx.state.lastStoperDraw >= STOPER_DRAW_MS) {
-        s_ctx.state.lastStoperDraw = millis();
-        drawStoper();
       }
       break;
 
@@ -231,6 +222,14 @@ static void onUiRefresh(const Event&) {
   }
 
   LoopBaselineTelemetry::recordUiRefreshUs(static_cast<uint32_t>(micros() - startUs));
+}
+
+// ─── Handler: EV_STOPER_TICK (500ms) ──────────────────────────────────
+
+static void onStoperTick(const Event&) {
+  if (BootIntroService::isActive()) return;
+  if (appState != STATE_STOPER) return;
+  drawStoper();
 }
 
 // ─── Handler: EV_DIAGNOSTICS (2000ms) ─────────────────────────────────
@@ -355,11 +354,13 @@ void initEventHandlers() {
   EventBus::subscribe(EV_BOOT_LOGGING,   onBootLogging);
   EventBus::subscribe(EV_BT_CONN_CHECK,  onBtConnCheck);
   EventBus::subscribe(EV_APP_STATE_CHANGED, onAppStateChanged);
+  EventBus::subscribe(EV_STOPER_TICK,     onStoperTick);
 
   EventBus::addTimer(EV_UI_OVERLAY,     10);
   EventBus::addTimer(EV_SENSOR_READ,    200);
   EventBus::addTimer(EV_CLOCK_TICK,     1000);
   EventBus::addTimer(EV_UI_REFRESH,    1000);
+  EventBus::addTimer(EV_STOPER_TICK,    500);
   EventBus::addTimer(EV_DIAGNOSTICS,    2000, false, 500);
   EventBus::addTimer(EV_MQTT_PUBLISH,   5000);
   EventBus::addTimer(EV_BOOT_LOGGING,   5000, true);

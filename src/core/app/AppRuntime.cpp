@@ -4,7 +4,6 @@
 #include "AppSettings.h"
 #include "HomeRuntime.h"
 #include "UIState.h"
-
 Preferences s_prefs;
 
 volatile bool g_alarmEditActive = false;

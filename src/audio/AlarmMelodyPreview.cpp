@@ -2,7 +2,6 @@
 
 #include "Board_Pins.h"
 #include "ClockAlarmService.h"
-
 namespace AlarmMelodyPreview {
 
 void start(uint8_t melodyIndex) {

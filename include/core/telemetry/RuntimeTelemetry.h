@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <stdint.h>
-
 #ifndef ENABLE_RUNTIME_TELEMETRY
 #  define ENABLE_RUNTIME_TELEMETRY 0
 #endif

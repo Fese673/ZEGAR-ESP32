@@ -1,11 +1,9 @@
-#include "TANK-GAMES/TankGame.h"
-
 #include <cstdio>
 #include <cstring>
 
 #include "AppRuntime.h"
 #include "LCDMirror.h"
-
+#include "TANK-GAMES/TankGame.h"
 #ifndef TANK_GAME_DEBUG
 #define TANK_GAME_DEBUG 0
 #endif

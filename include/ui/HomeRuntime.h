@@ -3,7 +3,6 @@
 #include <Arduino.h>
 
 #include "AppState.h"
-
 namespace HomeRuntime {
 
 struct DrawCallbacks {

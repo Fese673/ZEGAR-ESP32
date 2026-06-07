@@ -1,11 +1,11 @@
 #include "ENS160AHT21Sensor.h"
 
-#include <math.h>
-#include <string.h>
-
 #include <Arduino.h>
-#include <Wire.h>
+#include <math.h>
 #include <ScioSense_ENS16x.h>
+#include <string.h>
+#include <Wire.h>
+
 #include "AppLog.h"
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
@@ -16,6 +16,7 @@
 #include "ENS160AHT21Screen.h"
 #include "I2C_bus_shared.h"
 #include "Temperature_Config.h"
+#include "Board_Pins.h"
 
 namespace {
 
@@ -23,8 +24,6 @@ constexpr const char* TAG = "ENS160";
 
 constexpr uint8_t ENS160_I2C_ADDRESS = 0x53;
 constexpr uint8_t ENS160_I2C_ADDRESS_ALT = 0x52;
-constexpr uint8_t I2C_SDA_PIN = 21;
-constexpr uint8_t I2C_SCL_PIN = 22;
 constexpr uint8_t ENS160_INIT_RETRIES = 1;
 constexpr unsigned long ENS160_INIT_RETRY_DELAY_MS = 20;
 constexpr uint8_t ENS160_REINIT_ERROR_THRESHOLD = 3;
@@ -306,7 +305,7 @@ void begin() {
     {
         bool ahtOk = false;
         if (I2cShared::lock(50)) {
-            ahtOk = s_aht21.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+            ahtOk = s_aht21.begin(BoardPins::kI2cSda, BoardPins::kI2cScl);
             I2cShared::unlock();
         }
         if (ahtOk) {
@@ -364,17 +363,17 @@ void update() {
         s_ens160ErrorStreak = 0;
 
         bool hasMeasurement = false;
-        if (s_ens160.hasNewData()) {
+        const Ens16x_DeviceStatus devStatus = s_ens160.getDeviceStatus();
+        const uint8_t validityFlag = getENS160ValidityFlag(devStatus);
+        s_runtimeState = getEns160RuntimeStateFromValidity(validityFlag);
+
+        if (s_ens160.hasNewData() && validityFlag == 0) {
             s_lastAqi = (int)(uint8_t)s_ens160.getAirQualityIndex_UBA();
             s_lastTvoc = (uint16_t)s_ens160.getTvoc();
             s_lastEco2 = (uint16_t)s_ens160.getEco2();
             s_hasGasSample = true;
             hasMeasurement = true;
         }
-
-        const Ens16x_DeviceStatus devStatus = s_ens160.getDeviceStatus();
-        const uint8_t validityFlag = getENS160ValidityFlag(devStatus);
-        s_runtimeState = getEns160RuntimeStateFromValidity(validityFlag);
 
         if (hasMeasurement && isEns160ValidityStable(validityFlag)) {
             logEns160Measurement(s_runtimeState);

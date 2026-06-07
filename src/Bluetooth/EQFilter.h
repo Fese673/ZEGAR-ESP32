@@ -3,7 +3,6 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
-
 struct BiquadState {
     float x1 = 0.0f, x2 = 0.0f;
     float y1 = 0.0f, y2 = 0.0f;

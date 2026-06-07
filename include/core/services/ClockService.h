@@ -1,8 +1,7 @@
 #pragma once
 
-#include <stdint.h>
 #include <stddef.h>
-
+#include <stdint.h>
 namespace Clock {
 
 enum Target : uint8_t {

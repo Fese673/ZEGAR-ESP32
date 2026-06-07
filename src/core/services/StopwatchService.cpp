@@ -1,5 +1,4 @@
 #include "StopwatchService.h"
-
 namespace StopwatchService {
 namespace {
 

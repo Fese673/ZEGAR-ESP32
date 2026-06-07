@@ -1,14 +1,16 @@
 #include "Esptogution.h"
+
+#include <atomic>
+
+#include "AppSettings.h"
 #include "Config.h"
 #include "EsptoGuitionState.h"
 #include "EsptoGuitionTransport.h"
-#include "AppSettings.h"
-#include "STM32_Data.h"
+#include "PMS_Czujnik.h"
 #include "RadioModeSwitch.h"
-#include "TimeSyncProtocol.h"
+#include "STM32_Data.h"
 #include "StopwatchService.h"
-#include <atomic>
-
+#include "TimeSyncProtocol.h"
 namespace EsptoGuition {
 
 using namespace Config;
@@ -432,7 +434,7 @@ void sendSettings(uint8_t sequence) {
   payload[1] = state.mqttEnabled ? 1 : 0;
   payload[2] = state.touchTestEnabled ? 1 : 0;
   payload[3] = state.backgroundMusicEnabled ? 1 : 0;
-  payload[4] = true; // PMS always enabled / default true
+  payload[4] = PMS5003Sensor::isEnabled() ? 1 : 0;
   payload[5] = static_cast<uint8_t>(state.alarmMelodyIndex);
   sendRawFrame(kTypeSettings, sequence, payload, sizeof(payload));
 }

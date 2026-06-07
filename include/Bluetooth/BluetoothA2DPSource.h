@@ -22,7 +22,6 @@
 #include <vector>
 
 #include "BluetoothA2DPCommon.h"
-
 #if IS_VALID_PLATFORM
 
 #ifdef ARDUINO

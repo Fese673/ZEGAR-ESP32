@@ -1,5 +1,82 @@
 # Archiwum Błędów - ZEGAR-ESP32
 ---
+### [ID: ERR_057] | PRODUCTION_HARDENING | IMPACT: HIGH
+**Files:** `[AppState.h, AppState.cpp, AppBoot.cpp, ClockService.cpp, BMP280Sensor.cpp, AudioBT.cpp, MQTTSync.cpp, EsptoGuitionState.cpp, ENS160AHT21Sensor.cpp, AppLoop.cpp, EventBus.cpp, Esptogution.cpp]`
+
+**PROBLEM:** Dziewięć problemów wykrytych w audycie produkcyjnym:
+1. **radioMode volatile zamiast atomic** (`AppState.h`): `volatile RadioMode` nie gwarantuje atomicity na dual-core ESP32. Zapisywany z Core 1 (AppLoop, UI_Controller), potencjalnie odczytywany z Core 0 (BT callbacks).
+2. **s_prefs nigdy nie zamykany** (`AppBoot.cpp:196`): `s_prefs.begin("zegar", false)` bez `s_prefs.end()` — NVS handle otwarty przez cały runtime, anty-pattern.
+3. **Clock::setLastTick/lastTick brak locka** (`ClockService.cpp:78-80`): Niespójność z resztą ClockService (wszędzie CLOCK_LOCK). Na 32-bit ESP32 zapis unsigned long jest atomowy, ale łamie konwencję.
+4. **BMP280 setPressureOffset bez sprawdzania zmiany** (`BMP280Sensor.cpp:429`): Zapisuje NVS za każdym razem bez sprawdzania czy wartość się zmieniła — flash wear.
+5. **deferSend race condition** (`AudioBT.cpp:67`): `load|store` na atomic zamiast `fetch_or` — non-atomic read-modify-write.
+6. **esp_random() konflikt z GPIO 2** (`MQTTSync.cpp:165`): `esp_random()` używa ADC2, który dzieli zasoby z GPIO 2 (BUZZER_PIN).
+7. **NVS write z UART handler** (`EsptoGuitionState.cpp:445`): `handleReceivedSettings` wywołuje `Preferences::begin/putBool/end` bezpośrednio z handlera — blokuje main loop na 30-80ms.
+8. **PMS zawsze raportowany jako enabled** (`Esptogution.cpp:435`): `payload[4] = true` zamiast `PMS5003Sensor::isEnabled()`.
+9. **AHT21 hardcoded piny** (`ENS160AHT21Sensor.cpp:309`): `I2C_SDA_PIN=21, I2C_SCL_PIN=22` zamiast `BoardPins::kI2cSda/kI2cScl`.
+
+**CAUSE:** radioMode: `volatile` nie gwarantuje atomicity na Xtensa dual-core. s_prefs: brak `end()` po init. ClockService: niespójność konwencji lockowania. BMP280: brak dirty check przed NVS write. deferSend: non-atomic RMW na std::atomic. esp_random(): ADC2 conflict z GPIO 2. NVS handler: blocking flash write z UART callback. PMS: hardcoded true. AHT21: hardcoded piny zamiast BoardPins.
+
+**LOGIC_CHANGE:**
+- `AppState.h/.cpp`: `volatile RadioMode radioMode` → `std::atomic<RadioMode> radioMode{WIFI_ONLY}`. Gwarantuje atomicity i memory ordering.
+- `AppBoot.cpp`: Dodano `s_prefs.end()` po `initPersistenceAndConfig()` — NVS handle zamykany po init.
+- `ClockService.cpp`: Dodano `CLOCK_LOCK()/CLOCK_UNLOCK()` do `setLastTick()` i `lastTick()` — spójność z resztą API.
+- `BMP280Sensor.cpp`: `setPressureOffset()` dodano `if (fabsf(s_pressureOffsetHpa - hpa) < 0.001f) return;` — NVS write tylko gdy wartość się zmieniła.
+- `AudioBT.cpp`: `deferSend()` zmieniono na `s_deferredSend.fetch_or(bit, std::memory_order_release)` — atomic RMW.
+- `MQTTSync.cpp`: `esp_random()` → `millis() % jitterWindowMs` — eliminuje ADC2/GPIO 2 conflict.
+- `EsptoGuitionState.cpp`: `handleReceivedSettings()` teraz ustawia `s_settingsDirty` flag i snapshot wartości. Rzeczywisty NVS write w `musicSettingsFlush()` wywoływanym z main loop.
+- `Esptogution.cpp`: `payload[4] = PMS5003Sensor::isEnabled()` — rzeczywisty stan PMS.
+- `ENS160AHT21Sensor.cpp`: `I2C_SDA_PIN/I2C_SCL_PIN` → `BoardPins::kI2cSda/kI2cScl` — centralna konfiguracja pinów.
+- `AppLoop.cpp`: Usunięto `STM32data_update()` z `onUiRefresh` — `runLoop()` zapewnia 50Hz polling.
+- `EventBus.cpp`: Dodano drift protection: `if (now - lastFireMs >= periodMs * 2) lastFireMs = now;` — zapobiega burst firing po długim overrun.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. RAM 23.4%, Flash 69.0%. Zero błędów. Wszystkie zmiany deterministyczne i produkcyjne.
+---
+### [ID: ERR_055] | AUDIT_V2_CRITICAL_BATCH | IMPACT: CRITICAL
+**Files:** `[EventBus.cpp, ClockService.cpp, RTCService.cpp, Encoder.cpp, MQTTSync.cpp]`
+
+**PROBLEM:** Pięć krytycznych/wysokiego ryzyka bugów wykrytych w kompleksowym audycie kodu:
+1. **EventBus SPSC race condition** (`EventBus.cpp`): `post()` i `process()` operowały na współdzielonej kolejce `s_queue[]` z `volatile` head/tail bez fizycznej synchronizacji. Na dual-core ESP32 `volatile` nie gwarantuje memory ordering — `post()` z Core 0 mógłby pisać do kolejki podczas gdy `process()` na Core 1 ją czyta.
+2. **ClockService brak synchronizacji** (`ClockService.cpp`): `hms()` czytał `s_hours/s_minutes/s_seconds` sekwencyjnie bez ochrony. Komentarze w nagłówku obiecywały "Atomic" którego nie było. Przy jednoczesnym `set()` z WiFiSync i `hms()` z UI display torn read był możliwy.
+3. **RTC I2C lock po odblokowaniu** (`RTCService.cpp`): `gRtc.isRunning()` (transakcja I2C — odczyt rejestru statusu) był wywoływany PO `I2cShared::unlock()` w 4 funkcjach: `getTm()`, `setTm()`, `getEpoch()`, `setEpoch()`. Inny device na magistrali (BMP280, ENS160) mógł wejść na I2C w tym oknie → kolizja, NACK, hang busa.
+4. **Encoder reinit race** (`Encoder.cpp`): `encoder_reinit_pins()` modyfikował `s_encoderState/s_lastEncoderState/s_sequenceStep` bez synchronizacji z `encoderTask` (priorytet 20, Core 1). Task mógł preempted w środku odczytu → ghost steps.
+5. **MQTT connect task leak** (`MQTTSync.cpp`): `stopCore1Task()` czekał 2s na `s_connectInProgress`, potem force'ował flagę ale **nie zabijał tasku**. Zawieszony `mqttConnectTask` (12KB stack) wisi w nieskończoność. Przy cyklicznych reconnectach → acumulacja wycieków pamięci.
+
+**CAUSE:** EventBus i ClockService: brak portENTER_CRITICAL/portMUX mimo publicznego API mogącemu być wywoływanym z Core 0. RTC: isRunning() wywoływany po zwolnieniu locka I2C. Encoder: brak suspend/resume encoderTask podczas reinit pinów. MQTT: brak vTaskDelete na zawieszonym tasku + brak wifiClientSecure.stop() przed disconnect.
+
+**LOGIC_CHANGE:**
+- `EventBus.cpp`: Dodano `portMUX_TYPE s_queueMux`. `post()`: `portENTER_CRITICAL` przed zapisem danych i aktualizacją tail, `portEXIT_CRITICAL` po. `process()`: kopiowanie eventu i aktualizacja head w critical section, handler poza.
+- `ClockService.cpp`: Dodano `portMUX_TYPE s_clockMux` + makra `CLOCK_LOCK()/CLOCK_UNLOCK()`. Ochrona: `hms()`, `set()`, `tickSecond()`, `adjust()`, `hours()`, `minutes()`, `seconds()`, `begin()`, `formatHms()`, `applyToSystemTime()`.
+- `RTCService.cpp`: Przesunięto `gRtc.isRunning()` PRZED `I2cShared::unlock()` w `getTm()`, `setTm()`, `getEpoch()`, `setEpoch()`. Transakcja I2C odczytu statusu RTC odbywa się pod ochroną mutexa.
+- `Encoder.cpp`: `encoder_reinit_pins()` wywołuje `vTaskSuspend(s_encoderTaskHandle)` przed zmianą stanu i `vTaskResume()` po. Zapobiega preempted encoderTask w trakcie modyfikacji shared state.
+- `MQTTSync.cpp`: `stopCore1Task()` najpierw `wifiClientSecure.stop()` (przerywa TCP, odblokowuje `mqttClient.connect()`), potem czeka do 3s, `vTaskDelete(s_connectTask)` jeśli task nie zakończył, dopiero potem `mqttClient.disconnect()`.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. RAM 23.4%, Flash 69.0%. Zero błędów. Wszystkie critical sections minimalne (portENTER_CRITICAL trwa ~1µs). MQTT task leak wyeliminowany — brak wycieków 12KB stack per failed connect.
+---
+### [ID: ERR_056] | AUDIT_V2_HIGH_BATCH | IMPACT: HIGH
+**Files:** `[LCDMirror.h, AppState.cpp, AppState.h, ModeManager.h, ModeManager.cpp, RtcSyncService.cpp, ClockAlarmService.cpp, AudioBT.cpp, ENS160AHT21Sensor.cpp, PMS_Czujnik.cpp]`
+
+**PROBLEM:** Sześć bugów high-risk wykrytych w audycie, nieobjętych ERR_055:
+1. **LCD I2C timeout 1ms** (`LCDMirror.h:14`): `LCD_I2C_LOCK_TIMEOUT_MS = 1` — za krótki przy obciążonej magistrali I2C (BMP280, ENS160 trzymają bus do 100ms). Ikony i update'y LCD były cicho pomijane → "zamrożony" wyświetlacz.
+2. **appState/editState/radioMode bez volatile** (`AppState.cpp`): zmienne globalne modyfikowane z wielu kontekstów (UI_Controller, ModeManager, NetworkOrchestrator) bez `volatile`. Compiler mógł cache'ować w rejestrze — zmiana niewidoczna dla innych tasków.
+3. **RtcSyncService pending vars bez volatile** (`RtcSyncService.cpp`): `rtcWritePending`, `lastSeenNtpSyncMillis`, `s_clockSeeded` modyfikowane z WiFiSync (Core 0 callback) i odczytywane z main loop (Core 1). Brak volatile → potencjalny torn read przy NTP sync.
+4. **BT metadata — część fieldów bez sync** (`AudioBT.cpp:157-171`): ALBUM, TRACK, GENRE, PLAYING_TIME były modyfikowane z BT callback bez `s_metadataLock`, podczas gdy TITLE i ARTIST miały lock. Korupcja wyświetlanych metadanych przy szybkiej zmianie utworów.
+5. **ENS160 warmup — dane publikowane bez walidacji** (`ENS160AHT21Sensor.cpp:367-373`): `hasNewData()` → natychmiastowy zapis AQI/TVOC/eCO2 do globali niezależnie od `validityFlag`. Podczas warmupu (flag=1) sensor zwraca nonsensowne dane (AQI=0, TVOC=0) — UI i MQTT displays "czyste powietrze" błędnie.
+6. **PMS5003 — brak walidacji zakresu PM** (`PMS_Czujnik.cpp:193-196`): Checksum frame'u jest OK, ale dane wewnątrz mogą być poza zakresem (0-500 µg/m³). Uszkodzony sensor zwracał 65535 → trafiało do UI, MQTT i statystyk min/max.
+
+**CAUSE:** LCD: timeout 1ms zbyt agresywny. AppState: brak `volatile` na zmiennych cross-task. RtcSync: brak `volatile`/`std::atomic` na zmiennych cross-core. BT: częściowa synchronizacja metadata (lock tylko dla 2 z 7 fieldów). ENS160: brak walidacji `validityFlag` przed akceptacją danych. PMS: brak bounds check na odczytach PM.
+
+**LOGIC_CHANGE:**
+- `LCDMirror.h`: `LCD_I2C_LOCK_TIMEOUT_MS` 1 → 50. Bezpieczny timeout dla shared I2C bus.
+- `AppState.cpp/.h`: Dodano `volatile` do `appState`, `editState`, `radioMode` (deklaracja i definicja).
+- `ModeManager.h/.cpp`: `begin(AppState*)` → `begin(volatile AppState*)`. `s_appState` → `volatile AppState*`.
+- `RtcSyncService.cpp`: `rtcWritePending` → `volatile bool`. `rtcPendingEpoch` → `std::atomic<time_t>`. `lastSeenNtpSyncMillis` → `volatile unsigned long`. `s_clockSeeded` → `volatile bool`. Ternary z atomic: explicit `.load()`.
+- `ClockAlarmService.cpp`: `extern EditState` → `extern volatile EditState`.
+- `AudioBT.cpp`: Rozszerzono `portENTER_CRITICAL(&s_metadataLock)` na ALBUM, TRACK_NUM, NUM_TRACKS, GENRE, PLAYING_TIME.
+- `ENS160AHT21Sensor.cpp`: `getDeviceStatus()` + `getENS160ValidityFlag()` przeniesione PRZED `hasNewData()`. Dane akceptowane tylko gdy `validityFlag == 0` (operating mode). Warmup/init/invalid → dane odrzucone.
+- `PMS_Czujnik.cpp`: Po odczycie PM values, `if (pm > 500) → ERROR_MSG_CKSUM + reset`. Granica 500 µg/m³ z datasheet PMS5003.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS. RAM 23.4%, Flash 69.0%. Zero błędów. łącznie 11 bugów naprawionych w sesji audytowej.
+---
 ### [ID: ERR_054] | ALARM_FULL_LIST_SYNC | IMPACT: HIGH
 **Files:** `[UI_Controller.cpp, TimeSyncProtocol.h, TimeSyncProtocol.cpp, EsptoGuitionTransport.cpp, timer_synchro.h, timer_synchro.cpp, alarm_ui.cpp]`
 

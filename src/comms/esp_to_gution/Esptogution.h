@@ -1,9 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
-
 #include <stdint.h>
-
 namespace EsptoGuition {
 
 constexpr uint8_t kFrameStart = 0xAA;

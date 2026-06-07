@@ -1,6 +1,5 @@
 #pragma once
 #include <stdint.h>
-
 enum EventId : uint8_t {
   EV_NONE = 0,
   EV_ENCODER_CLICK,
@@ -17,6 +16,7 @@ enum EventId : uint8_t {
   EV_STATS_REDRAW,
   EV_BT_CONN_CHECK,
   EV_BOOT_LOGGING,
+  EV_STOPER_TICK,
   EV_COUNT
 };
 

@@ -3,7 +3,6 @@
 #include <stdint.h>
 
 #include "AppLog.h"
-
 #ifndef ESP_TO_GUTION_LOG_ENABLED
 #define ESP_TO_GUTION_LOG_ENABLED 0
 #endif

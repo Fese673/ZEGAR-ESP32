@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-
 constexpr uint16_t kPms5003UnsetMinValue = 0xFFFFu;
 
 // ============================================================================

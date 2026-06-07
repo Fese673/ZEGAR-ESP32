@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <stdint.h>
-
 #ifndef TEST_RAM
 #define TEST_RAM 0
 #endif

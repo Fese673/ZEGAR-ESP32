@@ -1,7 +1,6 @@
 #include "AlarmMelodyPrefs.h"
 
 #include "AlarmMelodies.h"
-
 namespace AlarmMelodyPrefs {
 
 int loadIndex(Preferences& prefs) {

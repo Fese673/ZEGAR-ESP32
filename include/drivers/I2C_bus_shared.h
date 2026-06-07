@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>

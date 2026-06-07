@@ -15,7 +15,6 @@
 // Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
 
 #include "BluetoothA2DPSource.h"
-
 #if IS_VALID_PLATFORM
 
 #define APP_RC_CT_TL_RN_VOLUME_CHANGE (1)

@@ -1,6 +1,5 @@
 #pragma once
 #include <Arduino.h>
-
 namespace meteoSync {
 
 struct WeatherData {

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-
 namespace BoardPins {
 
 // --- I2C (BMP280, ENS160/AHT21, RTC i EEPROM) ---

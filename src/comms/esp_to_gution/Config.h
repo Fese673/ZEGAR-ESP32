@@ -1,8 +1,7 @@
 #pragma once
 
-#include <stdint.h>
 #include <cstddef>
-
+#include <stdint.h>
 namespace EsptoGuition {
 namespace Config {
 

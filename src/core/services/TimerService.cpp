@@ -1,12 +1,11 @@
 #include "TimerService.h"
-#include "AppRuntime.h"
-#include "AlarmMelodies.h"
-#include "AppSettings.h"
-#include "AlarmRuntime.h"
-#include "TimeSyncProtocol.h"
-#include "comms/esp_to_gution/Esptogution.h"
 
-// Backward compat z LCD i UI — nadal ustawiamy te globale
+#include "AlarmMelodies.h"
+#include "AlarmRuntime.h"
+#include "AppRuntime.h"
+#include "AppSettings.h"
+#include "comms/esp_to_gution/Esptogution.h"
+#include "TimeSyncProtocol.h"
 extern bool timerRunning;
 extern unsigned long timerStartMillis;
 extern unsigned long timerDurationMs;

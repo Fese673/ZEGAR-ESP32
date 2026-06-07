@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
-
 namespace LCDIcons {
 
 constexpr uint8_t kCgramSlots = 8;

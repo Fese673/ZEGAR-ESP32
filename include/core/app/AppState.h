@@ -96,15 +96,17 @@ enum EditState {
 };
 
 // --- Tryby radia (RadioMode) ---
+#include <atomic>
+
 enum RadioMode {
-  WIFI_ONLY = 0, // WiFi ON, BT OFF
-  BT_ONLY   = 1, // WiFi OFF, BT ON
+  WIFI_ONLY,
+  BT_ONLY,
 };
 
 //--- Globalne zmienne stanu aplikacji ---
 extern AppState appState;
 extern EditState editState;
-extern RadioMode radioMode;
+extern std::atomic<RadioMode> radioMode;
 
 // Flaga: true gdy użytkownik edytuje alarm enkoderem (blokada dla Gution)
 extern volatile bool g_alarmEditActive;

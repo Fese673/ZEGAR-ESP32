@@ -3,7 +3,6 @@
 #include <cstring>
 
 #include "LCDMirror.h"
-
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>

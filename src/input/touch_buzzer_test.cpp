@@ -1,7 +1,6 @@
 #include "touch_buzzer_test.h"
 
 #include <Arduino.h>
-
 namespace TouchBuzzerTest {
 namespace {
 

@@ -2,7 +2,6 @@
 
 #include "AppBoot.h"
 #include "AppLoop.h"
-
 void setup() {
   AppBoot::runSetup();
 }

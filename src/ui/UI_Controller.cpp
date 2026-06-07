@@ -1,33 +1,33 @@
 #include "UI_Controller.h"
-#include <Arduino.h>
-#include "comms/esp_to_gution/Esptogution.h"
-#include "AppSettings.h"
-#include "ClockService.h"
 
-#include "AppState.h"
-#include "ModeManager.h"
-#include "AudioBT.h"
-#include "RadioModeSwitch.h"
-#include "PMS_Czujnik.h"
-#include "ENS160AHT21Screen.h"
-#include "BMP280Sensor.h"
+#include <Arduino.h>
+#include <Preferences.h>
+
 #include "AlarmMelodies.h"
 #include "AlarmMelodyPrefs.h"
-#include "AlarmRuntime.h"
 #include "AlarmMelodyPreview.h"
-#include "core/services/TimerService.h"
+#include "AlarmRuntime.h"
+#include "AppSettings.h"
+#include "AppState.h"
+#include "AudioBT.h"
+#include "BMP280Sensor.h"
+#include "ClockService.h"
+#include "comms/esp_to_gution/Esptogution.h"
 #include "comms/TimeSyncProtocol.h"
-#include "touch_buzzer_test.h"
-#include "SafeCracker.h"
-#include "TANK-GAMES/TankGame.h"
-#include <Preferences.h>
+#include "core/services/TimerService.h"
+#include "ENS160AHT21Screen.h"
 #include "HomeRuntime.h"
-#include "WiFiSync.h"
+#include "ModeManager.h"
+#include "PMS_Czujnik.h"
+#include "RadioModeSwitch.h"
 #include "RtcSyncService.h"
+#include "SafeCracker.h"
+#include "StopwatchService.h"
+#include "TANK-GAMES/TankGame.h"
+#include "touch_buzzer_test.h"
 #include "UI_Draw.h"
 #include "UIState.h"
-#include "StopwatchService.h"
-
+#include "WiFiSync.h"
 extern Preferences s_prefs;
 
 int g_editH = 12;
@@ -321,15 +321,7 @@ static inline void markBmp280DirtyAndDrawStats() {
 }
 
 static void persistAlarmAtNoSync(int idx) {
-  char keyH[12];
-  char keyM[12];
-  char keyE[12];
-  snprintf(keyH, sizeof(keyH), "a%dh", idx);
-  snprintf(keyM, sizeof(keyM), "a%dm", idx);
-  snprintf(keyE, sizeof(keyE), "a%de", idx);
-  s_prefs.putUShort(keyH, (uint16_t)alarms[idx].hour);
-  s_prefs.putUShort(keyM, (uint16_t)alarms[idx].minute);
-  s_prefs.putBool(keyE, alarms[idx].enabled);
+  AlarmRuntime::saveAlarm(s_prefs, idx);
 }
 
 static void persistAlarmAt(int idx) {
@@ -338,10 +330,7 @@ static void persistAlarmAt(int idx) {
 }
 
 static void persistAllAlarms() {
-  s_prefs.putUShort("alarmCount", (uint16_t)alarmsCount);
-  for (int k = 0; k < alarmsCount; ++k) {
-    persistAlarmAtNoSync(k);
-  }
+  AlarmRuntime::saveAllAlarms(s_prefs);
   publishAlarmList();
 }
 

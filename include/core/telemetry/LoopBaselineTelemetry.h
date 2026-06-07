@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <stdint.h>
-
 namespace LoopBaselineTelemetry {
 
 void resetWindow(unsigned long nowMs);

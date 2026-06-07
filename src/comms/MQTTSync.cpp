@@ -1,17 +1,14 @@
 #include "MQTTSync.h"
-#include "WiFiSync.h"
-#include "AppLog.h"
-#include <esp_system.h>
-#include <WiFiClientSecure.h>
-#include <WiFi.h>
-#include <atomic>
 
+#include <atomic>
+#include <esp_system.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+
+#include "AppLog.h"
 #include "PMS_Czujnik.h"
 #include "RamTelemetry.h"
-
-// ============================================================================
-// CA Certificate Definition (GLOBAL - outside namespace)
-// ============================================================================
+#include "WiFiSync.h"
 extern const char* g_mqtt_ca_cert;
 
 const char* g_mqtt_ca_cert = R"EOF(
@@ -162,7 +159,7 @@ static unsigned long computeBackoffMs(uint8_t failures) {
 
     const unsigned long jitterWindowMs = baseMs / 4UL;
     const unsigned long jitterMs = (jitterWindowMs > 0)
-      ? (esp_random() % (jitterWindowMs + 1UL))
+      ? (static_cast<unsigned long>(millis()) % (jitterWindowMs + 1UL))
       : 0UL;
 
     unsigned long totalMs = baseMs + jitterMs;
@@ -355,12 +352,16 @@ void stopCore1Task() {
     }
 
     if (s_connectInProgress.load()) {
+        // Break the TCP connection to unblock mqttClient.connect()
+        wifiClientSecure.stop();
+
         unsigned long waitStart = millis();
-        while (s_connectInProgress.load() && (millis() - waitStart) < 2000) {
+        while (s_connectInProgress.load() && (millis() - waitStart) < 3000) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
-        if (s_connectInProgress.load()) {
-            LOG_W(TAG, "Connection task did not finish, proceeding");
+        if (s_connectInProgress.load() && s_connectTask != nullptr) {
+            LOG_W(TAG, "Connection task did not finish, deleting handle=%p", (void*)s_connectTask);
+            vTaskDelete(s_connectTask);
         }
         s_connectInProgress.store(false);
         s_connectTask = nullptr;

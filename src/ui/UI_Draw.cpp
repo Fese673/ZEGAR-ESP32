@@ -1,16 +1,18 @@
 #include "UI_Draw.h"
+
+#include <Esp.h>
+#include <LiquidCrystal_I2C.h>
+
 #include "AppSettings.h"
+#include "AudioBT.h"
 #include "ClockService.h"
 #include "LCDMirror.h"
-#include "StatsManager.h"
+#include "ModeManager.h"
+#include "RadioModeSwitch.h"
 #include "RtcSyncService.h"
+#include "StatsManager.h"
 #include "UI_Controller.h"
 #include "WiFiSync.h"
-#include "ModeManager.h"
-#include "AudioBT.h"
-#include "RadioModeSwitch.h"
-#include <LiquidCrystal_I2C.h>
-#include <Esp.h>
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>

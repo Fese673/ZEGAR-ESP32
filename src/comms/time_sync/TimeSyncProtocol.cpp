@@ -1,16 +1,17 @@
 #include "TimeSyncProtocol.h"
-#include "comms/esp_to_gution/EsptoGuitionTransport.h"
-#include "comms/esp_to_gution/Esptogution.h"
-#include "AlarmRuntime.h"
-#include "AlarmMelodies.h"
-#include "TimerService.h"
-#include "StopwatchService.h"
-#include "AppSettings.h"
-#include "AppRuntime.h"
-#include "Board_Pins.h"
+
 #include <time.h>
 
+#include "AlarmMelodies.h"
+#include "AlarmRuntime.h"
+#include "AppRuntime.h"
+#include "AppSettings.h"
 #include "AppState.h"
+#include "Board_Pins.h"
+#include "comms/esp_to_gution/EsptoGuitionTransport.h"
+#include "comms/esp_to_gution/Esptogution.h"
+#include "StopwatchService.h"
+#include "TimerService.h"
 extern volatile bool g_nvsAlarmsDirty;
 
 namespace TimeSync {

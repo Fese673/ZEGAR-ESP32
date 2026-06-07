@@ -1,7 +1,6 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
-
 namespace EsptoGuition {
 
 uint16_t crc16Ccitt(const uint8_t *data, size_t length);

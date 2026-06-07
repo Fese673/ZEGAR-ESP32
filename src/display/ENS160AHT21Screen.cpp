@@ -1,7 +1,6 @@
 #include "ENS160AHT21Screen.h"
 
 #include <cstring>
-
 namespace ENS160AHT21Screen {
 
 RuntimeData runtimeData = {

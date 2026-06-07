@@ -4,20 +4,18 @@
 #include <Esp.h>
 
 #include "AppLog.h"
-
+#include "bluetooth/AudioBT.h"
 #include "Encoder.h"
 #include "RadioModeSwitch.h"
 #include "RamTelemetry.h"
 #include "WiFiSync.h"
-#include "bluetooth/AudioBT.h"
-
 namespace ModeManager {
 namespace {
 constexpr char TAG[] = "MODE";
 
 bool s_wifiActive = false;
 bool s_btActive = false;
-AppState* s_appState = nullptr;
+volatile AppState* s_appState = nullptr;
 
 void keepHomeScreen() {
   if (s_appState != nullptr && *s_appState != STATE_HOME) {
@@ -79,7 +77,7 @@ void logHeapSnapshot(const char* label) {
 
 }  // namespace
 
-void begin(AppState* statePtr) {
+void begin(volatile AppState* statePtr) {
   s_appState = statePtr;
   resetRuntimeState();
 }

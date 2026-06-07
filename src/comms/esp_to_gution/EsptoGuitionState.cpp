@@ -1,32 +1,33 @@
 #include "EsptoGuitionState.h"
-#include "Esptogution.h"
-#include "Config.h"
-#include <math.h>
-#include <string.h>
+
 #include <Arduino.h>
-#include <WiFi.h>
-#include "WiFiSync.h"
-#include "AppLog.h"
-#include "BMP280Screen.h"
-#include "ENS160AHT21Screen.h"
-#include "meteoSync.h"
-#include "PMS_Czujnik.h"
-#include "RTCService.h"
-#include "AppSettings.h"
-#include "touch_buzzer_test.h"
+#include <math.h>
 #include <Preferences.h>
-#include "UIState.h"
-#include "UI_Draw.h"
+#include <string.h>
+#include <WiFi.h>
+
+#include "AlarmRuntime.h"
+#include "AppLog.h"
+#include "AppSettings.h"
+#include "AppState.h"
+#include "AudioBT.h"
+#include "BMP280Screen.h"
+#include "Config.h"
 #include "core/telemetry/RamTelemetry.h"
 #include "core/telemetry/RuntimeTelemetry.h"
-#include "AudioBT.h"
+#include "ENS160AHT21Screen.h"
 #include "EsptoGuitionMusicLog.h"
-#include "AlarmRuntime.h"
-#include "AppState.h"
+#include "Esptogution.h"
+#include "meteoSync.h"
 #include "ModeManager.h"
+#include "PMS_Czujnik.h"
 #include "RadioModeSwitch.h"
+#include "RTCService.h"
 #include "TimerService.h"
-
+#include "touch_buzzer_test.h"
+#include "UI_Draw.h"
+#include "UIState.h"
+#include "WiFiSync.h"
 extern uint8_t heapUsageCore0Percent;
 extern uint8_t heapUsageCore1Percent;
 extern uint32_t ramFreeBytes;
@@ -38,6 +39,18 @@ namespace EsptoGuition {
 namespace {
 
 using namespace Config;
+
+struct SettingsSnapshot {
+  bool buzzerEnabled;
+  bool mqttEnabled;
+  bool touchTestEnabled;
+  bool backgroundMusicEnabled;
+  bool pmsEnabled;
+  int alarmMelodyIndex;
+};
+
+volatile bool s_settingsDirty = false;
+SettingsSnapshot s_pendingSettings;
 
 bool isSummerTime(time_t epoch) {
   struct tm tm_info;
@@ -442,22 +455,20 @@ void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength) {
     uiState.settingsBackgroundMusicMenu.index = newMusic ? 0 : 1;
     uiState.settingsPmsMenu.index = newPms ? 0 : 1;
 
-    Preferences localPrefs;
-    localPrefs.begin("zegar", false);
-    localPrefs.putBool("buzzerEnabled", newBuzzer);
-    localPrefs.putBool("mqttEnabled", newMqtt);
-    localPrefs.putBool("touchTest", newTouch);
-    localPrefs.putBool("menuMusic", newMusic);
-    localPrefs.putBool("pmsEnabled", newPms);
+    s_pendingSettings.buzzerEnabled = newBuzzer;
+    s_pendingSettings.mqttEnabled = newMqtt;
+    s_pendingSettings.touchTestEnabled = newTouch;
+    s_pendingSettings.backgroundMusicEnabled = newMusic;
+    s_pendingSettings.pmsEnabled = newPms;
 
     if (payloadLength >= 6U) {
       int newMelodyIndex = payload[5];
       appSettings.alarmMelodyIndex = newMelodyIndex;
       uiState.settingsAlarmMelodyMenu.index = newMelodyIndex;
-      localPrefs.putUShort("alarmMelody", (uint16_t)newMelodyIndex);
+      s_pendingSettings.alarmMelodyIndex = newMelodyIndex;
     }
 
-    localPrefs.end();
+    s_settingsDirty = true;
     requestUiFullRedraw();
   }
 }
@@ -531,6 +542,17 @@ void musicSettingsInit() {
 
 void musicSettingsFlush() {
     music_settings_flush();
+    if (!s_settingsDirty) return;
+    s_settingsDirty = false;
+    Preferences prefs;
+    prefs.begin("zegar", false);
+    prefs.putBool("buzzerEnabled", s_pendingSettings.buzzerEnabled);
+    prefs.putBool("mqttEnabled", s_pendingSettings.mqttEnabled);
+    prefs.putBool("touchTest", s_pendingSettings.touchTestEnabled);
+    prefs.putBool("menuMusic", s_pendingSettings.backgroundMusicEnabled);
+    prefs.putBool("pmsEnabled", s_pendingSettings.pmsEnabled);
+    prefs.putUShort("alarmMelody", (uint16_t)s_pendingSettings.alarmMelodyIndex);
+    prefs.end();
 }
 
 void handleReceivedMusicCommand(const uint8_t* payload, uint16_t payloadLength) {

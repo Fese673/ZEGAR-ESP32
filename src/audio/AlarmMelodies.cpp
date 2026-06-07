@@ -1,6 +1,6 @@
 #include "AlarmMelodies.h"
-#include <cstring>
 
+#include <cstring>
 namespace AlarmMelodies {
 
 struct StepState {

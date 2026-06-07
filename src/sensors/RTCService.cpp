@@ -1,7 +1,6 @@
 #include "RTCService.h"
 
 #include <cstring>
-
 namespace RTCService {
 namespace {
 
@@ -188,9 +187,9 @@ Status getTm(struct tm *outTm)
         return status;
     }
 
+    gDiag.oscillatorRunning = gRtc.isRunning();
     I2cShared::unlock();
     gDiag.readsOk++;
-    gDiag.oscillatorRunning = gRtc.isRunning();
     gDiag.lastOperationDurationMs = millis() - startMs;
     setLastStatus(Status::Ok);
     return Status::Ok;
@@ -226,9 +225,9 @@ Status setTm(const struct tm &timeInfo)
         return status;
     }
 
+    gDiag.oscillatorRunning = gRtc.isRunning();
     I2cShared::unlock();
     gDiag.writesOk++;
-    gDiag.oscillatorRunning = gRtc.isRunning();
     gDiag.lastOperationDurationMs = millis() - startMs;
     setLastStatus(Status::Ok);
     return Status::Ok;
@@ -293,10 +292,10 @@ Status getEpoch(time_t *outEpoch)
         return status;
     }
 
+    gDiag.oscillatorRunning = gRtc.isRunning();
     I2cShared::unlock();
     *outEpoch = epoch;
     gDiag.readsOk++;
-    gDiag.oscillatorRunning = gRtc.isRunning();
     gDiag.lastOperationDurationMs = millis() - startMs;
     setLastStatus(Status::Ok);
     return Status::Ok;
@@ -354,9 +353,9 @@ Status setEpoch(time_t epoch, bool verify)
         }
     }
 
+    gDiag.oscillatorRunning = gRtc.isRunning();
     I2cShared::unlock();
     gDiag.writesOk++;
-    gDiag.oscillatorRunning = gRtc.isRunning();
     gDiag.lastOperationDurationMs = millis() - startMs;
     setLastStatus(Status::Ok);
     return Status::Ok;

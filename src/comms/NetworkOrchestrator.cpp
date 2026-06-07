@@ -3,10 +3,9 @@
 #include <WiFi.h>
 
 #include "AppLog.h"
-#include "MQTTSync.h"
 #include "ModeManager.h"
+#include "MQTTSync.h"
 #include "WiFiSync.h"
-
 namespace NetworkOrchestrator {
 namespace {
 

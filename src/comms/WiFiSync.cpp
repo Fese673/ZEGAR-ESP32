@@ -1,17 +1,17 @@
 #include "WiFiSync.h"
-#include <WiFi.h>
-#include <esp_system.h>
+
 #include <atomic>
+#include <esp_system.h>
 #include <stdlib.h>
 #include <string.h>
+#include <WiFi.h>
 
 #include "AppLog.h"
 #include "ClockService.h"
-#include "ModeManager.h"
-#include "Task_Config.h"
-#include "RamTelemetry.h"
 #include "meteoSync.h"
-
+#include "ModeManager.h"
+#include "RamTelemetry.h"
+#include "Task_Config.h"
 namespace WiFiSync {
 
 namespace {

@@ -4,19 +4,16 @@
 #include <Preferences.h>
 
 #include "Board_Pins.h"
-
 static constexpr unsigned long CLOCK_TICK_MS = 1000UL;
 static constexpr unsigned long ALARM_DURATION_MS = 60000UL;
 static constexpr unsigned long STM32_UPDATE_MS = 500UL;
 static constexpr unsigned long STM32_TIMEOUT_MS = 3000UL;
-static constexpr unsigned long STOPER_DRAW_MS = 100UL;
 static constexpr uint8_t BUZZER_PIN = BoardPins::kBuzzer;
 
 struct MainRuntimeState {
   bool bootDiagReprinted = false;
   unsigned long lastSTM32Update = 0;
   unsigned long lastSTM32DataReceived = 0;
-  unsigned long lastStoperDraw = 0;
 };
 
 struct RuntimeContext {

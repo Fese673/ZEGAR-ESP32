@@ -16,7 +16,6 @@
 #include "BluetoothA2DPSink.h"
 
 #include "RuntimeTelemetry.h"
-
 #if IS_VALID_PLATFORM
 
 // to support static callback functions

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-
 namespace AlarmMelodies {
 
 extern const uint8_t kCount;

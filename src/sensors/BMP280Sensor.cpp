@@ -1,14 +1,13 @@
 #include "BMP280Sensor.h"
 
 #include <Arduino.h>
-#include <Wire.h>
 #include <math.h>
+#include <Preferences.h>
 #include <string.h>
+#include <Wire.h>
 
 #include "BMP280Screen.h"
 #include "i2c/SharedBus.h"
-#include <Preferences.h>
-
 namespace {
 
 constexpr uint8_t BMP280_ADDR_LOW = 0x76;
@@ -427,6 +426,9 @@ void begin() {
 }
 
 void setPressureOffset(float hpa) {
+  if (fabsf(s_pressureOffsetHpa - hpa) < 0.001f) {
+    return;
+  }
   s_pressureOffsetHpa = hpa;
   Preferences prefs;
   if (prefs.begin("bmp280", false)) {

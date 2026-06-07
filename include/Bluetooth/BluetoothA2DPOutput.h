@@ -1,7 +1,6 @@
 #pragma once
 #include "BluetoothA2DPCommon.h"
 #include "RuntimeTelemetry.h"
-
 #ifdef ARDUINO
 #include "Print.h"
 #endif

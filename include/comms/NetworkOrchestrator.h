@@ -3,7 +3,6 @@
 #include <Arduino.h>
 
 #include "RadioModeSwitch.h"
-
 namespace NetworkOrchestrator {
 
 struct Config {

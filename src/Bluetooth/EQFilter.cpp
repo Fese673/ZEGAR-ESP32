@@ -1,5 +1,4 @@
 #include "EQFilter.h"
-
 EQFilter s_bassFilter;
 EQFilter s_midFilter;
 EQFilter s_trebleFilter;

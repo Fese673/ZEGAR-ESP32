@@ -1,11 +1,10 @@
 #include "I2C_bus_shared.h"
 
+#include <atomic>
+
 #include "AppLog.h"
 #include "RuntimeTelemetry.h"
 #include "Task_Config.h"
-
-#include <atomic>
-
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>

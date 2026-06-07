@@ -1,7 +1,6 @@
 #pragma once
-#include <stdint.h>
 #include <Arduino.h>
-
+#include <stdint.h>
 enum class TimerState : uint8_t {
   IDLE = 0,
   RUNNING = 1,

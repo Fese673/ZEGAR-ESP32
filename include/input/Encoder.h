@@ -1,6 +1,5 @@
 #pragma once
 #include <Arduino.h>
-
 #ifdef ARDUINO_ARCH_ESP32
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>

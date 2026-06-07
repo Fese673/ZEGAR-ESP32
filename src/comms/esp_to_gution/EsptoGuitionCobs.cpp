@@ -1,5 +1,4 @@
 #include "EsptoGuitionCobs.h"
-
 namespace EsptoGuition {
 
 namespace {

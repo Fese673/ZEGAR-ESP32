@@ -3,7 +3,6 @@
 #include <Esp.h>
 
 #include "AppLog.h"
-
 namespace LoopBaselineTelemetry {
 namespace {
 

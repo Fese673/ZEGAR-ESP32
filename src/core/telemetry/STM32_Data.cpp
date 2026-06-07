@@ -1,7 +1,6 @@
 #include "STM32_Data.h"
-#include "comms/esp_to_gution/Esptogution.h"
 
-// Global variables
+#include "comms/esp_to_gution/Esptogution.h"
 int bpmNumber = 0;
 int spo2Number = 0;
 bool stmDataUpdated = false;

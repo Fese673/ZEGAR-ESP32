@@ -1,19 +1,18 @@
 #include "AudioBT.h"
-#include "BluetoothA2DPSinkQueued.h"
-#include "esp_bt.h"
-#include "esp_bt_main.h"
-#include "esp_log.h"
-#include "Board_Pins.h"
-#include "Task_Config.h"
-#include "AppLog.h"
-#include "RamTelemetry.h"
-#include "../comms/esp_to_gution/Esptogution.h"
-#include "../comms/esp_to_gution/EsptoGuitionState.h"
-#include "EQFilter.h"
 
 #include <atomic>
 
-
+#include "../comms/esp_to_gution/EsptoGuitionState.h"
+#include "../comms/esp_to_gution/Esptogution.h"
+#include "AppLog.h"
+#include "BluetoothA2DPSinkQueued.h"
+#include "Board_Pins.h"
+#include "EQFilter.h"
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "esp_log.h"
+#include "RamTelemetry.h"
+#include "Task_Config.h"
 #if A2DP_I2S_AUDIOTOOLS
 static audio_tools::I2SStream s_audioStream;
 static bool s_audioStreamActive = false;
@@ -64,8 +63,7 @@ enum DeferredBtSend : uint8_t {
 };
 
 static void deferSend(DeferredBtSend bit) {
-    s_deferredSend.store(s_deferredSend.load(std::memory_order_relaxed) | static_cast<uint8_t>(bit),
-                         std::memory_order_release);
+    s_deferredSend.fetch_or(static_cast<uint8_t>(bit), std::memory_order_release);
 }
 
 void resetMusicMetadata() {
@@ -155,19 +153,29 @@ void metadata_callback(uint8_t attrId, const uint8_t *text) {
             deferSend(kSendArtist);
             break;
         case ESP_AVRC_MD_ATTR_ALBUM:
+            portENTER_CRITICAL(&s_metadataLock);
             copyMetadataField(s_musicAlbum, sizeof(s_musicAlbum), text);
+            portEXIT_CRITICAL(&s_metadataLock);
             break;
         case ESP_AVRC_MD_ATTR_TRACK_NUM:
+            portENTER_CRITICAL(&s_metadataLock);
             copyMetadataField(s_musicTrack, sizeof(s_musicTrack), text);
+            portEXIT_CRITICAL(&s_metadataLock);
             break;
         case ESP_AVRC_MD_ATTR_NUM_TRACKS:
+            portENTER_CRITICAL(&s_metadataLock);
             copyMetadataField(s_musicTracks, sizeof(s_musicTracks), text);
+            portEXIT_CRITICAL(&s_metadataLock);
             break;
         case ESP_AVRC_MD_ATTR_GENRE:
+            portENTER_CRITICAL(&s_metadataLock);
             copyMetadataField(s_musicGenre, sizeof(s_musicGenre), text);
+            portEXIT_CRITICAL(&s_metadataLock);
             break;
         case ESP_AVRC_MD_ATTR_PLAYING_TIME:
+            portENTER_CRITICAL(&s_metadataLock);
             s_musicPlayingTimeMs = static_cast<uint32_t>(std::strtoul(reinterpret_cast<const char *>(text), nullptr, 10));
+            portEXIT_CRITICAL(&s_metadataLock);
             break;
         default:
             break;

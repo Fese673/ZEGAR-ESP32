@@ -5,7 +5,6 @@
 #include <Wire.h>
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
-
 class LiquidCrystal_I2C : public hd44780_I2Cexp {
 public:
   LiquidCrystal_I2C(uint8_t addr, uint8_t cols, uint8_t rows)

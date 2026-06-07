@@ -8,7 +8,6 @@
 #include "ClockService.h"
 #include "NetworkOrchestrator.h"
 #include "StatsManager.h"
-
 namespace RadioModeSwitch {
 void clearRTCTime();
 }

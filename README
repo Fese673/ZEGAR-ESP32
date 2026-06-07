@@ -1,164 +1,97 @@
 # ZEGAR-ESP32
 
-ESP32 firmware for a custom clock platform with integrated Bluetooth A2DP audio, WiFi/MQTT connectivity, sensor fusion, and LCD/user interface.
+Firmware zegara ESP32 z Bluetooth A2DP, WiFi/MQTT, czujnikami i wyświetlaczem LCD 20x4 + enkoderem oraz zewnętrznym wyświetlaczem HMI Guition ESP32-S3 JC8048W550c.
 
-## What this repository contains
-- `src/` - application code organized by domain: audio, bluetooth, comms, core, display, drivers, input, sensors, ui
-- `include/` - public module headers for cross-module integration
-- `hardware/` - PCB design, schematics, component references, and datasheets
-- `docs/` - technical reports, architecture notes, and telemetry documentation
-- `scripts/` - helper scripts used during build and test preparation
-- `test/` - log artifacts and supporting test documentation
-- `lib/` - local helper libraries and vendor code snapshots
-- `kosz/` - miscellaneous archive artifacts and temporary work files
-- `third_party/` - external vendor code and archived sources
-- `Project-Map.md` - curated repository structure and module inventory
-- `.vscode/` - workspace editor settings and launch configurations
-- `.venv/` - local Python virtual environment for repository tooling
-- `.pio/` - PlatformIO build environment and cache artifacts
-- `.analysis/` - local analysis and tooling artifacts
-- `_baseline/` - reference artifacts and baseline outputs
-- `.github/` - repository CI/workflow and issue template support
+## Budowanie
 
-## Core capabilities
-- Bluetooth A2DP sink for audio playback via external I2S output
-- WiFi connectivity with MQTT publishing and secure TLS support
-- Sensor acquisition and display management for clock/ambient monitoring
-- **Robustness**: Hardened I2C sharing, atomic task synchronization, and validated month arrays
-- **Guition Sync**: High-performance COBS-based UART protocol for external display communication
-- FreeRTOS task isolation and heap fragmentation tracing
-
-## Build and run
-### Recommended environment
-- PlatformIO environment: `esp32dev`
-- Board: `espressif32` / `esp32dev`
-- Framework: `arduino`
-
-### Build command
 ```powershell
+python build_zegar.py
+# lub ręcznie:
 pio run -e esp32dev
 ```
 
-### Optional upload command
+Upload i monitor:
 ```powershell
 pio run -t upload -e esp32dev
+pio device monitor -e esp32dev
 ```
 
-### Recommended workflow
-1. Build with `pio run -e esp32dev`
-2. Upload with `pio run -t upload -e esp32dev`
-3. Monitor serial output with `pio device monitor -e esp32dev`
+## Sprzęt
 
-## PlatformIO configuration
-The project uses `platformio.ini` to configure:
-- `lib_deps` for required libraries
-- `build_flags` to enable telemetry and Bluetooth support
-- `board_build.partitions = huge_app.csv`
-- `extra_scripts = pre:scripts/generate_alarm_melodies.py`
+- **Mikrokontroler**: ESP32-WROOM-32D
+- **Wyświetlacz**: LCD 20x4 (I2C 0x27) + enkoder obrotowy
+- **Czujniki**: PMS5003 (PM), ENS160+AHT21 (CO₂/temp), BMP280 (ciśnienie), DS3231 (RTC)
+- **Audio**: BT A2DP Sink → I2S DAC + buzzer na GPIO
+- **Komunikacja zewnętrzna**: Guition HMI (UART/COBS)
 
-### Important build flags
-- `-DENABLE_RUNTIME_TELEMETRY=1` enables runtime event counters
-- `-DTEST_RAM=1` enables RAM snapshot instrumentation
-- `-DRAM_TELEMETRY_PRINT_INTERVAL_MS=5000UL` prints periodic RAM heartbeat lines
-- `-DTEST_RAM_HEAP_INFO=0` keeps heap info output off by default
-- `-DCONFIG_BT_ENABLED=1` enables Bluetooth support
+## Architektura
 
-### PlatformIO library dependencies
-The board configuration also pulls in these libraries via `platformio.ini`:
-- `duinowitchery/hd44780 @ ^1.3.2`
-- `sciosense/ScioSense_ENS16x @ ^2.0.5`
-- `https://github.com/pschatzmann/arduino-audio-tools.git#v1.2.2`
-- `knolleary/PubSubClient@^2.8`
-- `bblanchon/ArduinoJson@^6.21`
+Wejście: `src/main.cpp` → `AppBoot::runSetup()` → `AppLoop::runLoop()`
 
-### Secret injection
-Private credentials should be injected via build flags rather than committed in source.
-Example:
+Struktura katalogów odpowiada domenom funkcjonalnym:
+
+| Domena | Odpowiada za |
+|--------|-------------|
+| `core/` | Bootstrap, pętla główna, glue |
+| `comms/` | WiFi, MQTT, radio, Guition UART |
+| `bluetooth/` | A2DP + I2S audio |
+| `ui/` | Stany i renderowanie LCD |
+| `sensors/` | Odczyty czujników (snapshot API) |
+| `drivers/` | Sterowniki niskopoziomowe (I2C, GPIO) |
+| `audio/` | Melodie alarmów |
+| `input/` | Enkoder obrotowy |
+| `display/` | LCD, ikony |
+
+Kolejność startu (nie zmieniać):
+1. `initCoreHardware()` — Serial, RTC, heap, ModeManager, 7-seg GPIO
+2. `EsptoGuition::begin()` — UART Guition (Serial2, COBS)
+3. `initPersistenceAndConfig()` — Preferences, sieć, ustawienia NVS
+4. `initUiAndInput()` — LCD 20x4, I2C shared bus, enkoder, boot intro
+5. `initSensors()` — STM32 UART, PMS5003, ENS160+AHT21, BMP280, HomeRuntime
+6. `initComms()` — UI callbacks, WiFi, MQTT, NetworkOrchestrator, alarm load
+7. `finalizeStartup()` — telemetria loopa, wybór trybu radia (BT/WiFi)
+8. `AppLoop::initEventHandlers()` — subskrypcje EventBus
+9. `meteoSync::begin()` — synchronizacja pogody Open-Meteo
+
+## Konfiguracja
+
+Sekrety (WiFi, MQTT) wstrzykiwane przez `build_flags` w `platformio.ini`:
 ```ini
-# NEVER commit these lines
--DPROJECT_WIFI_SSID=\"your-ssid\"
--DPROJECT_WIFI_PASS=\"your-password\"
--DPROJECT_MQTT_BROKER=\"your-broker\"
--DPROJECT_MQTT_USERNAME=\"your-user\"
--DPROJECT_MQTT_PASSWORD=\"your-pass\"
+# NIGDY nie komituj tych linii
+-DPROJECT_WIFI_SSID=\"twoj-ssid\"
+-DPROJECT_WIFI_PASS=\"twoje-haslo\"
+-DPROJECT_MQTT_BROKER=\"twoj-broker\"
 ```
 
-## Runtime telemetry
-Telemetry is intentionally lightweight and designed for debug sessions without scattering `Serial.print()` across the codebase.
+Ważne flagi buildu:
+- `-DCONFIG_BT_ENABLED=1` — Bluetooth
+- `-DENABLE_RUNTIME_TELEMETRY=1` — liczniki zdarzeń
+- `-DTEST_RAM=1` — snapshoty heap (do debugowania RAM)
 
-### Layers
-- `RuntimeTelemetry` — cumulative counters for runtime events such as I2C failures and audio underruns
-- `RamTelemetry` — stage-based heap snapshots and fragmentation metrics
+## Biblioteki
 
-### Where to find docs
-- `docs/index.md` is the main documentation entrypoint for architecture and reports
-- `docs/telemetry/telemetry.md` describes the telemetry design, build flags, and interpretation of output
+| Biblioteka | Uwagi |
+|------------|-------|
+| ESP32-A2DP | Wendoryzowana — EQ Biquad, telemetria, IDF 5.5+ codec |
+| arduino-audio-tools | Backend I2S; workaround `btInUse()` chroni kontroler BT |
+| hd44780 | Adapter `LiquidCrystal_I2C` (kompatybilność API) |
+| ScioSense ENS16x | Maszyna stanów, auto-restart, I2C shared bus |
+| AHTxx | **Przepisana** — nieblokująca, median filter, Kalman, CRC8 |
+| ErriezDS3231 | Wendoryzowana — I2C shared bus (mutex), wrapper `RTCService` |
+| SerialPM (PMS5003) | Wendoryzowana — HardwareSerial na ESP32, nieblokujący odczyt |
+| PubSubClient | Wrapper `MQTTSync` — TLS, JSON, task management |
+| ArduinoJson | Bez modyfikacji (MQTT + Open-Meteo) |
+| EspSoftwareSerial | Tylko AVR/ESP8266; na ESP32 nieużywana |
+| Open-Meteo Arduino | Wendoryzowana w `lib/` — bez modyfikacji |
+| BMP280 | **Własna implementacja** — bezpośredni odczyt rejestrów I2C |
+| COBS | **Własna implementacja** — CRC-16-CCITT (lookup table) |
+| I2C Shared Bus | **Własna implementacja** — FreeRTOS mutex, recovery, diagnostyka |
 
-## Architecture overview
-### Core / bootstrap
-- `src/core/AppRuntime.cpp` owns the shared runtime values that used to live in `main.cpp`
-- `src/core/AppBoot.cpp` keeps the startup sequence in one place
-- `src/core/AppLoop.cpp` keeps periodic loop services in one place
+## Dokumentacja
 
-### Bluetooth / audio
-- `src/bluetooth/AudioBT.cpp` configures the A2DP queued sink and I2S output
-- `BluetoothA2DPSinkQueued` provides a ringbuffer + dedicated I2S task for audio stability
-- The implementation uses a prefetch threshold and task isolation to reduce underruns under mixed load
-- `audioBT_deinit()` intentionally retains classic BT memory via `a2dp->end(false)` so BT can restart without reboot
-
-### Network stack
-- `src/comms/WiFiSync.cpp` handles WiFi setup and optional NTP sync
-- `src/comms/MQTTSync.cpp` manages MQTT connection state, TLS setup, and publish buffering
-- `NetworkOrchestrator` selects between BT and WiFi modes and coordinates radio lifecycle
-
-### Radio lifecycle
-The radio transition path is a critical area. The orchestrator must safely hand off from Bluetooth to WiFi without silently masking an active mode.
-
-```text
-BT active
-   |
-   v
-NetworkOrchestrator
-   |
-   +--> [switch] --> WiFi active
-```
-
-### Input and UI
-- `src/input/Encoder.cpp` handles rotary encoder scanning and button debouncing in a small FreeRTOS task
-- `src/ui/` contains display output, menu rendering, and state-driven user interfaces
-
-### Sensors and drivers
-- `src/sensors/` includes collection and calibration code for connected sensors
-- `src/drivers/` contains low-level hardware drivers and bus abstractions
-- `include/config/` stores board pin assignments, secrets, and temperature configuration
-
-## Memory and performance notes
-- The platform is heap-constrained, so the project emphasizes heap-friendly buffer sizing and early telemetry
-- `RamTelemetry` reports free heap, largest free block, DMA free heap, fragmentation ratio, and stack high-water marks for key tasks
-- The Bluetooth audio path allocates a 24 KB I2S ringbuffer and is tuned for stable playback under mixed system load
-
-## Development workflow
-1. Set build flags in `platformio.ini` as needed for telemetry or production mode
-2. Build with `pio run -e esp32dev`
-3. Use the Serial Monitor to validate startup, connectivity, and telemetry output
-4. If working on Bluetooth audio, trace `AUDIO_ON` and `AUDIO_OFF` checkpoints together with `prefetch wait timed out` logs
-5. If debugging memory, enable `TEST_RAM=1` and inspect the heap snapshot lines from `RamTelemetry`
-
-## Notes and conventions
-- Keep generated or ephemeral files within their owning module folder
-- All new source files MUST use lowercase paths
-- Use `docs/` for architecture reports and long-form analysis rather than adding technical essays to `README.md`
-
-## Useful paths
-- `Project-Map.md` — curated repository structure and navigation map
-- `docs/index.md` — main docs entrypoint and report index
-- `TODO` — outstanding tasks and planned work
-- `src/` — firmware source
-- `include/` — public interfaces
-- `platformio.ini` — build configuration
-- `scripts/scan_project_map.py` — validate repository structure against `Project-Map.md`
-- `scripts/count_loc.py` — source line counting helper
-- `scripts/find_unused_static.py` — static symbol usage scanner
-- `docs/telemetry/telemetry.md` — telemetry design and usage
-- `hardware/` — PCB and schematic references
-- `scripts/` — code generation and build helper scripts
+- `Project-Map.md` — mapa struktury repozytorium
+- `AGENTS.md` — instrukcje dla agentów AI (budowanie, konwencje, architektura)
+- `TODO` — lista zadań
+- `docs/` — raporty, analizy, telemetria
+- `ERROR_ARCHIVE/` — archiwum naprawionych błędów
+- `hardware/` — datasheety, projekty KiCad, GPIO

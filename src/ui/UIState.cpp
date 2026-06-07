@@ -1,5 +1,4 @@
 #include "UIState.h"
-
 namespace UIState {
 
 State& mutableState() {

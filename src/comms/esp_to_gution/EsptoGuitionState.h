@@ -1,7 +1,6 @@
 #pragma once
-#include <stdint.h>
 #include <stdbool.h>
-
+#include <stdint.h>
 namespace EsptoGuition {
 
 struct WeatherPayload {

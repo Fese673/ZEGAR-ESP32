@@ -3,7 +3,6 @@
 #include <Arduino.h>
 
 #include "Encoder.h"
-
 namespace SafeCracker {
 
 void begin();

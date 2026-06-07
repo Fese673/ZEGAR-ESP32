@@ -32,7 +32,7 @@
 
 // Maximum time the legacy I2S backend waits for a single write call.
 #ifndef A2DP_I2S_WRITE_TIMEOUT_MS
-#  define A2DP_I2S_WRITE_TIMEOUT_MS 20
+#  define A2DP_I2S_WRITE_TIMEOUT_MS 10
 #endif
 
 // Maximum time the queued sink waits for the prefetch semaphore before it

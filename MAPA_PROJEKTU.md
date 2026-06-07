@@ -1,51 +1,73 @@
-# Project map
+# Mapa projektu
 
-The map is organized by functional domains, not by implementation detail. It is intended to be easy to extend as the firmware grows.
+Mapa jest zorganizowana wg domen funkcjonalnych, a nie szczegółów implementacji.
+Ma ułatwiać nawigację i być łatwa do rozszerzania wraz z rozwojem firmware.
 
-Top-level files
-- platformio.ini            # build config, lib_deps, build_flags
-- README                    # high-level project overview for humans
-- Project-Map.md            # this file
-- TODO                      # task list and outstanding work
-- .gitignore                # git ignore rules
-- .vscode/                  # workspace editor settings
-    ├── settings.json
-    ├── extensions.json
-    ├── c_cpp_properties.json
-    └── launch.json
-- .pio/                     # PlatformIO build environment and cache
-- .venv/                    # local Python virtual environment
-- __pycache__/              # temporary Python bytecode cache
-- .analysis/                # local analysis/tooling artifacts
-- .git/                     # Git repository metadata
-- _baseline/                # baseline/reference artifacts
+## Pliki nadrzędne
 
-docs/
-├── index.md              # docs index and navigation guidance
-├── telemetry/            # runtime and diagnostic telemetry docs
-│   └── telemetry.md
-├── reports/              # architecture/refactor/analysis reports
-│   └── old/              # archived or superseded reports
-└── reports_ram/          # RAM and heap analysis reports
+- platformio.ini            # konfiguracja buildu, zależności bibliotek, flagi kompilacji
+- README                    # wysokopoziomowy opis projektu
+- MAPA_PROJEKTU.md          # ten plik
+- TODO                      # lista zadań i znanych problemów
+- AGENTS.md                 # instrukcje dla agentów AI (budowanie, architektura, konwencje)
+- build_zegar.py            # skrypt budowania firmware
+- .gitignore                # reguły ignorowania przez Git
+- .vscode/                  # ustawienia edytora workspace
+    └── extensions.json
+- .git/                     # metadane repozytorium Git
 
+## hardware/
+
+Dokumentacja sprzętowa — datasheety, referencje GPIO, projekty KiCad.
+
+```
 hardware/
-├── overview.md           # hardware directory guide
-├── datasheets/           # component datasheets and sensor references
+├── overview.md                     # przewodnik po katalogu hardware
+├── datasheets/                     # datasheety komponentów i czujników
+│   ├── bst-bmp280-ds001.pdf
 │   ├── plantower-pms5003-manual_v2-3.pdf
 │   ├── esp32-wroom-32d_datasheet.pdf
 │   └── dht11.pdf
-├── GPIO/                 # GPIO reference materials and pinouts
+├── GPIO/                           # materiały referencyjne GPIO i wyprowadzenia pinów
 │   ├── GPIO-PIN-ESP32.xlsx
 │   └── ESP32-DevBoard-Pinout.jpg
-└── kicad/                # KiCad project files and PCB design outputs
-    ├── Datasheety/
-    ├── ESP32C3-CC1101/   # CC1101/ESP32 board project
+└── kicad/                          # pliki projektowe KiCad i wyjścia PCB
+    ├── Datasheety/                 # datasheety w formacie KiCad
+    │   └── 74860_0d2671659de625a9213c07e20588b5fd.pdf
+    ├── ESP32C3-CC1101/             # projekt płyty CC1101/ESP32
     │   ├── ESP32C3-CC1101.kicad_pro
     │   ├── ESP32C3-CC1101.kicad_pcb
-    │   └── Outputs/       # compiled outputs (BOM, fabrication files)
-    ├── Główny projekt/   # main PCB project and versions/backups
-    └── ZEGAR ESP32-backups/
+    │   ├── ESP32C3-CC1101.kicad_sch
+    │   ├── ESP32C3-CC1101.kicad_prl
+    │   ├── ESP32C3-CC1101-backups/
+    │   ├── assets/
+    │   ├── Outputs/                # wygenerowane pliki (BOM, file produkcyjne)
+    │   ├── PCBLib/
+    │   ├── fp-lib-table
+    │   ├── sym-lib-table
+    │   ├── .gitignore
+    │   └── LICENSE
+    └── Główny projekt/             # główny projekt PCB
+        ├── ZEGAR ESP32.kicad_pro
+        ├── ZEGAR ESP32.kicad_pcb
+        ├── ZEGAR ESP32.kicad_sch
+        ├── ZEGAR ESP32.kicad_sch-bak
+        ├── ZEGAR ESP32.kicad_prl
+        ├── ZEGAR ESP32 2.1 .zip
+        ├── 1 EKRAN.kicad_sch
+        ├── 2 EKRAN.kicad_sch
+        ├── 3 EKRAN.kicad_sch
+        ├── 4EKRAN.kicad_sch
+        ├── 5 EKRAN.kicad_sch
+        ├── 6 EKRAN.kicad_sch
+        └── 74HC595.kicad_sch
+```
 
+## include/
+
+Nagłówki publiczne — interfejsy domenowe, typy, konfiguracja.
+
+```
 include/
 ├── audio/
 │   ├── AlarmMelodies.h
@@ -138,16 +160,15 @@ include/
 │   ├── UI_Draw.h
 │   └── UIState.h
 └── headers.md
+```
 
-scripts/
-├── count_loc.py
-├── find_unused_static.py
-├── generate_alarm_melodies.py
-├── mqtt_firebase_bridge.py
-├── scan_project_map.py
-└── update_project_map.py
+## src/
 
+Źródła — implementacje domenowe, logika biznesowa, sterowniki.
+
+```
 src/
+├── main.cpp                       # punkt wejścia — setup() i loop()
 ├── audio/
 │   ├── AlarmMelodies.cpp
 │   ├── AlarmMelodies.generated.inc
@@ -242,24 +263,35 @@ src/
 │   ├── UI_Controller.cpp
 │   ├── UI_Draw.cpp
 │   └── UIState.cpp
-└── main.cpp
+```
 
-test/
-├── test.md
-├── logi.txt
-└── verify_bt_no_wifi_mqtt.py
+## scripts/
 
-third_party/
-├── third_party.md
-├── archive/
-│   └── library_snapshot/
-└── vendor/
+Skrypty narzędziowe — budowanie, analiza, generowanie kodu.
 
+```
+scripts/
+├── count_loc.py                   # zliczanie linii kodu źródłowego
+├── find_unused_static.py          # wyszukiwanie nieużywanych funkcji static
+├── generate_alarm_melodies.py     # generowanie AlarmMelodies.generated.inc
+├── mqtt_firebase_bridge.py        # most MQTT → Firebase
+├── scan_project_map.py            # skanowanie struktury i walidacja Project-Map.md
+└── update_project_map.py          # automatyczna aktualizacja Project-Map.md
+```
+
+## lib/
+
+Lokalne biblioteki PlatformIO.
+
+```
 lib/
-└── README
+├── README                         # opis katalogu lib
+└── open-meteo-arduino/            # biblioteka klienta Open-Meteo API
+```
 
-Notes:
-- This map lists public headers and primary source modules for quick navigation.
-- Use `scripts/scan_project_map.py` to verify `include/` and `src/` sections automatically.
+---
 
-
+Uwagi:
+- Mapa zawiera publiczne nagłówki i główne moduły źródłowe do szybkiej nawigacji.
+- Użyj `scripts/scan_project_map.py`, aby automatycznie zweryfikować sekcje `include/` i `src/`.
+- Katalogi `docs/`, `.kilo/`, `third_party/`, `test/`, `.analysis/` są ignorowane przez `.gitignore` i nie są opisane w mapie.

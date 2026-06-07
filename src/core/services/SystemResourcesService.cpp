@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <Esp.h>
-
 #ifdef ARDUINO_ARCH_ESP32
 #include <esp_heap_caps.h>
 #endif

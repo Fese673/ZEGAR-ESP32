@@ -4,13 +4,12 @@
 
 #include "AlarmMelodies.h"
 #include "AlarmRuntime.h"
+#include "AppRuntime.h"
 #include "AppSettings.h"
 #include "AppState.h"
 #include "ClockService.h"
 #include "HomeRuntime.h"
 #include "RtcSyncService.h"
-
-// Shared alarm runtime state.
 namespace {
 
 AlarmRuntime::State& alarmRuntime = AlarmRuntime::mutableState();
@@ -24,7 +23,6 @@ const bool& buzzerEnabled = AppSettings::state().buzzerEnabled;
 }  // namespace
 
 extern bool timerRunning;
-extern EditState editState;
 
 extern void updateSevenSeg();
 
@@ -132,6 +130,7 @@ void tickClock(unsigned long clockTickMs, uint8_t buzzerPin) {
           alarmStartTime = millis();
           alarms[i].lastTriggerDay = (uint16_t)today;
           alarmRuntime.ringingAlarmIndex = i; // zapamiętaj KTÓRY dzwoni
+          g_nvsAlarmsDirty = true;
           if (buzzerEnabled) {
             alarmRinging = true;
             AlarmMelodies::start((uint8_t)settingsAlarmMelodyIndex, buzzerPin);
@@ -188,6 +187,7 @@ void serviceAlarmPlayback(uint8_t buzzerPin, unsigned long alarmDurationMs) {
       int idx = alarmRuntime.ringingAlarmIndex;
       if (idx >= 0 && idx < alarmsCount) {
         alarms[idx].enabled = false;
+        g_nvsAlarmsDirty = true;
       }
       alarmRuntime.ringingAlarmIndex = -1;
       updateSevenSeg();

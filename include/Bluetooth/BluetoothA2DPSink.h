@@ -15,6 +15,7 @@
 
 #pragma once
 #include <atomic>
+
 #include "BluetoothA2DPCommon.h"
 #if IS_VALID_PLATFORM
 

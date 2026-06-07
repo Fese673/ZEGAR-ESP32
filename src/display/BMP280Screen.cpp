@@ -1,7 +1,6 @@
 #include "BMP280Screen.h"
 
 #include <cstring>
-
 namespace BMP280Screen {
 
 RuntimeData runtimeData = {

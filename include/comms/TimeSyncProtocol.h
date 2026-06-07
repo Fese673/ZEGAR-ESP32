@@ -1,9 +1,5 @@
 #pragma once
 #include <stdint.h>
-
-// OSOBNY moduł komunikacji dla alarmów i timera
-// Nie miesza się z esp_to_gution/ — czysta separacja odpowiedzialności
-
 namespace TimeSync {
 
 // Nowe typy ramek (pasmo 0x0D-0x16, wolne)

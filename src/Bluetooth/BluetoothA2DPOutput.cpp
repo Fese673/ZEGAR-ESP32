@@ -2,7 +2,6 @@
 
 #include "Board_Pins.h"
 #include "RuntimeTelemetry.h"
-
 #if IS_VALID_PLATFORM
 
 BluetoothA2DPOutputLegacy::BluetoothA2DPOutputLegacy() {

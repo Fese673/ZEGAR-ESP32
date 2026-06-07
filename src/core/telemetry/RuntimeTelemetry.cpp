@@ -1,7 +1,6 @@
 #include "RuntimeTelemetry.h"
 
 #include "AppLog.h"
-
 #if ENABLE_RUNTIME_TELEMETRY
 
 #include <cstdio>

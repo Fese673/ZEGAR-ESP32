@@ -4,12 +4,10 @@
 
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
-#include "LCDMirror.h"
+
 #include "AppState.h"
 #include "Board_Pins.h"
-
-
-// --- Fallback pin definitions (will not override existing defines in main) ---
+#include "LCDMirror.h"
 #ifndef DATA_PIN
 #define DATA_PIN BoardPins::kSevenSegData
 #endif

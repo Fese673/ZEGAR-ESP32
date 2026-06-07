@@ -13,10 +13,9 @@
 //
 // Copyright 2020 Phil Schatzmann
 
-#include <Arduino.h>
-
 #include "BluetoothA2DPCommon.h"
 
+#include <Arduino.h>
 #if IS_VALID_PLATFORM
 
 

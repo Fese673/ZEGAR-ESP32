@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-
 namespace ENS160AHT21Screen {
 
 struct RuntimeData {

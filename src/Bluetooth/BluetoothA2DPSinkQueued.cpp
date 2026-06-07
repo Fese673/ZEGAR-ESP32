@@ -1,9 +1,8 @@
 
 #include "BluetoothA2DPSinkQueued.h"
 
-#include "RuntimeTelemetry.h"
 #include "EQFilter.h"
-
+#include "RuntimeTelemetry.h"
 #if IS_VALID_PLATFORM
 
 void BluetoothA2DPSinkQueued::bt_i2s_task_start_up(void) {

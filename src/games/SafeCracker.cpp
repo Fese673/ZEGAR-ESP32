@@ -4,7 +4,6 @@
 
 #include "AppRuntime.h"
 #include "LCDMirror.h"
-
 namespace SafeCracker {
 namespace {
 

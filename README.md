@@ -1,0 +1,95 @@
+# ZEGAR-ESP32
+
+Firmware zegara ESP32 z Bluetooth A2DP, WiFi/MQTT, czujnikami i wyświetlaczem LCD 20x4 + enkoderem oraz zewnętrznym wyświetlaczem HMI Guition ESP32-S3 JC8048W550c.
+
+## Budowanie
+
+```powershell
+python build_zegar.py
+# lub ręcznie:
+pio run -e esp32dev
+```
+
+Upload i monitor:
+```powershell
+pio run -t upload -e esp32dev
+pio device monitor -e esp32dev
+```
+
+## Sprzęt
+
+- **Mikrokontroler**: ESP32-WROOM-32D
+- **Wyświetlacz**: LCD 20x4 (I2C 0x27) + enkoder obrotowy
+- **Czujniki**: PMS5003 (PM), ENS160+AHT21 (CO₂/temp), BMP280 (ciśnienie), DS3231 (RTC)
+- **Audio**: BT A2DP Sink → I2S DAC + buzzer na GPIO
+- **Komunikacja zewnętrzna**: Guition HMI (UART/COBS)
+
+## Architektura
+
+Wejście: `src/main.cpp` → `AppBoot::runSetup()` → `AppLoop::runLoop()`
+
+Struktura katalogów odpowiada domenom funkcjonalnym:
+
+| Domena | Odpowiada za |
+|--------|-------------|
+| `core/` | Bootstrap, pętla główna, glue |
+| `comms/` | WiFi, MQTT, radio, Guition UART |
+| `bluetooth/` | A2DP + I2S audio |
+| `ui/` | Stany i renderowanie LCD |
+| `sensors/` | Odczyty czujników (snapshot API) |
+| `drivers/` | Sterowniki niskopoziomowe (I2C, GPIO) |
+| `audio/` | Melodie alarmów |
+| `input/` | Enkoder obrotowy |
+| `display/` | LCD, ikony |
+
+Kolejność startu (nie zmieniać):
+1. `initCoreHardware()` — Serial, RTC, heap, ModeManager, 7-seg GPIO
+2. `EsptoGuition::begin()` — UART Guition (Serial2, COBS)
+3. `initPersistenceAndConfig()` — Preferences, sieć, ustawienia NVS
+4. `initUiAndInput()` — LCD 20x4, I2C shared bus, enkoder, boot intro
+5. `initSensors()` — STM32 UART, PMS5003, ENS160+AHT21, BMP280, HomeRuntime
+6. `initComms()` — UI callbacks, WiFi, MQTT, NetworkOrchestrator, alarm load
+7. `finalizeStartup()` — telemetria loopa, wybór trybu radia (BT/WiFi)
+8. `AppLoop::initEventHandlers()` — subskrypcje EventBus
+9. `meteoSync::begin()` — synchronizacja pogody Open-Meteo
+
+## Konfiguracja
+
+Sekrety (WiFi, MQTT) wstrzykiwane przez `build_flags` w `platformio.ini`:
+```ini
+# NIGDY nie komituj tych linii
+-DPROJECT_WIFI_SSID=\"twoj-ssid\"
+-DPROJECT_WIFI_PASS=\"twoje-haslo\"
+-DPROJECT_MQTT_BROKER=\"twoj-broker\"
+```
+
+Ważne flagi buildu:
+- `-DCONFIG_BT_ENABLED=1` — Bluetooth
+- `-DENABLE_RUNTIME_TELEMETRY=1` — liczniki zdarzeń
+- `-DTEST_RAM=1` — snapshoty heap (do debugowania RAM)
+
+## Biblioteki
+
+| Biblioteka | Uwagi |
+|------------|-------|
+| ESP32-A2DP | Wendoryzowana — EQ Biquad, telemetria, IDF 5.5+ codec |
+| arduino-audio-tools | Backend I2S; workaround `btInUse()` chroni kontroler BT |
+| hd44780 | Adapter `LiquidCrystal_I2C` (kompatybilność API) |
+| ScioSense ENS16x | Maszyna stanów, auto-restart, I2C shared bus |
+| AHTxx | **Przepisana** — nieblokująca, median filter, Kalman, CRC8 |
+| ErriezDS3231 | Wendoryzowana — I2C shared bus (mutex), wrapper `RTCService` |
+| SerialPM (PMS5003) | Wendoryzowana — HardwareSerial na ESP32, nieblokujący odczyt |
+| PubSubClient | Wrapper `MQTTSync` — TLS, JSON, task management |
+| ArduinoJson | Bez modyfikacji (MQTT + Open-Meteo) |
+| EspSoftwareSerial | Tylko AVR/ESP8266; na ESP32 nieużywana |
+| Open-Meteo Arduino | Wendoryzowana w `lib/` — bez modyfikacji |
+| BMP280 | **Własna implementacja** — bezpośredni odczyt rejestrów I2C |
+| COBS | **Własna implementacja** — CRC-16-CCITT (lookup table) |
+| I2C Shared Bus | **Własna implementacja** — FreeRTOS mutex, recovery, diagnostyka |
+
+## Dokumentacja
+
+- `Project-Map.md` — mapa struktury repozytorium
+- `docs/` — raporty, analizy, telemetria
+- `ERROR_ARCHIVE/` — archiwum naprawionych błędów
+- `hardware/` — datasheety, projekty KiCad, GPIO

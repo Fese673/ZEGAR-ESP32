@@ -9,6 +9,7 @@
 #include "AlarmRuntime.h"
 #include "AppLog.h"
 #include "AppSettings.h"
+#include "core/telemetry/Dbg7Seg.h"
 #include "AppState.h"
 #include "AudioBT.h"
 #include "BMP280Screen.h"
@@ -23,6 +24,7 @@
 #include "PMS_Czujnik.h"
 #include "RadioModeSwitch.h"
 #include "RTCService.h"
+#include "STM32_Data.h"
 #include "TimerService.h"
 #include "touch_buzzer_test.h"
 #include "UI_Draw.h"
@@ -47,6 +49,8 @@ struct SettingsSnapshot {
   bool backgroundMusicEnabled;
   bool pmsEnabled;
   int alarmMelodyIndex;
+  /* Etap 2: 0..100. Default 100 = pelna jasnosc do czasu pierwszej komendy. */
+  uint8_t sevenSegBrightness = 100;
 };
 
 volatile bool s_settingsDirty = false;
@@ -432,6 +436,7 @@ bool buildSystemResourcesPayload(SystemResourcesPayload &out) {
 }
 
 void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength) {
+  DBG_7SEG_LOG("RX kTypeSetSettings len=%u", (unsigned)payloadLength);
   if (payloadLength >= 5U) {
     AppSettings::State& appSettings = AppSettings::mutableState();
     bool newBuzzer = (payload[0] != 0);
@@ -466,6 +471,22 @@ void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength) {
       appSettings.alarmMelodyIndex = newMelodyIndex;
       uiState.settingsAlarmMelodyMenu.index = newMelodyIndex;
       s_pendingSettings.alarmMelodyIndex = newMelodyIndex;
+    }
+
+    /* Etap 2: payload[6] = sevenSegBrightness 0..100. Opcjonalne — stary
+     * GUTION (6-bajtowy) nie wysyla tego bajtu, wowczas brightness
+     * pozostaje bez zmian (zachowujemy RAM/NVS). */
+    if (payloadLength >= 7U) {
+      uint8_t newBrightness = payload[6];
+      if (newBrightness > 100U) newBrightness = 100U;
+      appSettings.sevenSegBrightness = newBrightness;
+      s_pendingSettings.sevenSegBrightness = newBrightness;
+      /* Forward do STM32 przez COBS+CRC16 (EspSoftwareSerial @ 9600 baud).
+       * STM32 w ramce 0xB0 odbiera jasnosc i ustawia PWM na PA6. */
+      DBG_7SEG_LOG("parsed brightness=%u (raw=0x%02X) -> STM32", (unsigned)newBrightness, (unsigned)payload[6]);
+      STM32data_sendBrightness(newBrightness);
+    } else {
+      DBG_7SEG_LOG("payload len=%u < 7, brightness nie zmieniony (zachowany RAM)", (unsigned)payloadLength);
     }
 
     s_settingsDirty = true;
@@ -540,6 +561,10 @@ void musicSettingsInit() {
     music_settings_load();
 }
 
+void setPendingSevenSegBrightness(uint8_t value) {
+    s_pendingSettings.sevenSegBrightness = value;
+}
+
 void musicSettingsFlush() {
     music_settings_flush();
     if (!s_settingsDirty) return;
@@ -552,6 +577,8 @@ void musicSettingsFlush() {
     prefs.putBool("menuMusic", s_pendingSettings.backgroundMusicEnabled);
     prefs.putBool("pmsEnabled", s_pendingSettings.pmsEnabled);
     prefs.putUShort("alarmMelody", (uint16_t)s_pendingSettings.alarmMelodyIndex);
+    /* Etap 2: jasnosc 7-seg (0..100). */
+    prefs.putUChar("segBrightness", s_pendingSettings.sevenSegBrightness);
     prefs.end();
 }
 

@@ -109,8 +109,31 @@ const int& alarmsCount = alarmRuntime.alarmsCount;
 }  // namespace
 
 // ============================================================================
-// IMPLEMENTACJA FUNKCJI - 7-SEGMENT (74HC595)
+// IMPLEMENTACJA FUNKCJI - 7-SEGMENT (74HC595 + 74HC4511)
 // ============================================================================
+//
+// Topologia sprzetu:
+//   ESP32 SPI (GPIO 23 MOSI, GPIO 18 CLK, GPIO 5 LATCH)
+//     -> 3x 74HC595 w lancuchu (shift register, MSB-first przez SPI)
+//        -> 6x 74HC4511 (BCD-to-7-segment decoder, po 2 na kazdy 74HC595)
+//
+// Konwencja danych:
+//   Kazde wywolanie commitSevenSegFrame() przesyla 3 bajty (24 bity) przez SPI.
+//   Pierwszy bajt trafia do ostatniego rejestru w lancuchu (najblizej BCD
+//   decoderow "prawych" cyfr), trzeci - do pierwszego (lewe cyfry).
+//   Wewnatrz bajtu: wyzszy nibble (bity 7..4) = pierwsza (lewa) cyfra BCD,
+//   nizszy nibble (bity 3..0) = druga (prawa) cyfra BCD.
+//
+// Wazne ograniczenia 74HC4511:
+//   - Dekoduje TYLKO BCD 0..9. Wartosci 0xA..0xF sa niezdefiniowane
+//     (na wielu egzemplarzach wygaszaja wszystkie segmenty, ale nie zawsze).
+//   - packTwoDigits() gwarantuje zakres 0..99, ale wywolujacy musi zapewnic
+//     nieujemnosc i zakres - helper to loguje i clampuje.
+//
+// Tryb SPI:
+//   - MODE0, MSB-first, 4 MHz. Wystarczajaco wolne by 74HC595 nadazyl
+//     (propagation delay ~50 ns), wystarczajaco szybkie by 3-bajtowa
+//     transakcja trwala <10 us.
 
 uint8_t swapNibbles(uint8_t v) {
   return (v << 4) | (v >> 4);
@@ -119,6 +142,11 @@ uint8_t swapNibbles(uint8_t v) {
 static void writeSevenSegFrame(uint8_t first, uint8_t second, uint8_t third);
 
 static uint8_t packTwoDigits(int value) {
+  if (__builtin_expect(value < 0 || value > 99, 0)) {
+    LOG_W("SEG", "packTwoDigits oor=%d (clampe to 0..99)", value);
+    if (value < 0) value = 0;
+    if (value > 99) value = 99;
+  }
   return (uint8_t)(((value / 10) << 4) | (value % 10));
 }
 
@@ -128,20 +156,33 @@ static void commitSevenSegFrame(uint8_t first, uint8_t second, uint8_t third) {
   digitalWrite(LATCH_PIN, HIGH);
 }
 
+// Wygasza wszystkie 6 cyfr 7-seg (wysyla BCD 0xF na kazdy dekoder).
+// Uzywane jako fallback / do ewentualnego dimmera w przyszlosci.
+// UWAGA: historycznie "zerowanie" w blinku alarmu i init uzywalo
+// commitSevenSegFrame(0,0,0) co WYSWIETLALO "00 00 00" (BCD 0x0),
+// a nie wygaszalowyswietlacz. Helper ten celowo daje inny efekt -
+// prawdziwe wygaszenie (BCD 0xF). Dla kompatybilnosci wizualnej
+// blinku alarmu uzywamy inline commitSevenSegFrame(0,0,0).
+static void blankSevenSeg() {
+  if (!s_sevenSegReady) {
+    return;
+  }
+  commitSevenSegFrame(0xFF, 0xFF, 0xFF);
+}
+
 static void updateSevenSegDebugSTM32() {
   if (!s_sevenSegReady || !stm32Connected) {
     return;
   }
 
+  // 74HC4511 to dekodery BCD - akceptuja tylko 0..9. Wartosci >9 sa niezdefiniowane.
+  // Dlatego sciskamy BPM do zakresu 0..99 (dwie cyfry BCD) - setki sa obcinane.
   const int spo2 = constrain(displayedSPO2, 0, 99);
-  const int bpm = constrain(displayedBPM, 0, 255);
+  const int bpm  = constrain(displayedBPM, 0, 99);
 
-  const uint8_t left = packTwoDigits(spo2);
-  const int bpmHundreds = bpm / 100;
-  const int bpmTens = (bpm / 10) % 10;
-  const int bpmOnes = bpm % 10;
-  const uint8_t middle = packTwoDigits((1 * 10) + bpmHundreds);
-  const uint8_t right = packTwoDigits(bpmTens * 10 + bpmOnes);
+  const uint8_t left   = packTwoDigits(spo2);   // SPO2 = 2 cyfry
+  const uint8_t middle = packTwoDigits(bpm / 10); // dziesiatki BPM
+  const uint8_t right  = packTwoDigits(bpm % 10);  // jednosci BPM
 
   commitSevenSegFrame(swapNibbles(right), swapNibbles(middle), swapNibbles(left));
 }
@@ -199,7 +240,7 @@ void initSevenSeg() {
   }
 #endif
 
-  // Wyzeruj wyświetlacz
+  // Wyzeruj wyświetlacz (pokaz "00 00 00" - zgodnie z historycznym zachowaniem)
   commitSevenSegFrame(0, 0, 0);
   s_sevenSegReady = true;
 }
@@ -296,7 +337,6 @@ void updateSevenSeg() {
     SS = packTwoDigits(ts);
   }
 
-  commitSevenSegFrame(swapNibbles(SS), swapNibbles(MM), swapNibbles(HH));
   commitSevenSegFrame(swapNibbles(SS), swapNibbles(MM), swapNibbles(HH));
 }
 
@@ -1174,10 +1214,12 @@ void drawStoper() {
     clearRow(3);
 
     // Update 7-seg to HH:MM:SS (drop centisec on 7-seg)
-    const uint8_t HHb = packTwoDigits(hh);
-    const uint8_t MMb = packTwoDigits(rm);
-    const uint8_t SSb = packTwoDigits(rs);
-    commitSevenSegFrame(swapNibbles(SSb), swapNibbles(MMb), swapNibbles(HHb));
+    if (s_sevenSegReady) {
+      const uint8_t HHb = packTwoDigits(hh);
+      const uint8_t MMb = packTwoDigits(rm);
+      const uint8_t SSb = packTwoDigits(rs);
+      commitSevenSegFrame(swapNibbles(SSb), swapNibbles(MMb), swapNibbles(HHb));
+    }
     LCD_DUMP();
     return;
   }
@@ -1211,6 +1253,11 @@ void drawDebugSTM32() {
   }
   LCD_DUMP();
 
+  // AppLoop::onUiRefresh wywoluje drawDebugSTM32() co STM32_UPDATE_MS (250ms)
+  // BEZ updateSevenSeg(). To jedyne miejsce regularnej aktualizacji 7-seg
+  // na ekranie debug - UI_Controller odpala updateSevenSeg() tylko raz przy
+  // wejsciu (UI_Controller.cpp:670). Bez tego wywolania 7-seg pokazywalby
+  // pierwszy odczyt w nieskonczonosc i nie reagowal na timeout polaczenia.
   if (stm32Connected) {
     updateSevenSegDebugSTM32();
   }

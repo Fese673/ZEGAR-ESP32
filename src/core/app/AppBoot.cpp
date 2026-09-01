@@ -205,6 +205,17 @@ void initPersistenceAndConfig(RuntimeContext& ctx) {
   bool pmsEnabled = s_prefs.getBool("pmsEnabled", true);
   PMS5003Sensor::setEnabled(pmsEnabled);
 
+  /* Etap 2: jasnosc 7-seg. Default 100 (pelna). Wartosci >100 traktowane
+   * jako 100 (obrona przed ewentualnym NVS corruption). */
+  {
+    uint8_t b = s_prefs.getUChar("segBrightness", 100);
+    if (b > 100U) b = 100U;
+    appSettings.sevenSegBrightness = b;
+    /* Zsynchronizuj s_pendingSettings zeby pierwszy musicSettingsFlush()
+     * nie nadpisal NVS defaultem 100 zamiast wartosci odczytanej. */
+    EsptoGuition::setPendingSevenSegBrightness(b);
+  }
+
   RadioModeSwitch::begin();
   EsptoGuition::musicSettingsInit();
   restoreRtcHandoffTime(ctx, millis(), false);
@@ -278,6 +289,15 @@ void initSensors(RuntimeContext& ctx) {
   UIState::State& uiState = UIState::mutableState();
 
   STM32data_begin(BoardPins::kStm32UartRx, BoardPins::kStm32UartTx);
+
+  /* Etap 2: zsynchronizuj jasnosc 7-seg z wartoscia z NVS.
+   * STM32 startuje domyslnie 100% (PWM_State_Init), ale wolimy ustawic
+   * dokladna wartosc preferowana przez usera. SoftSerial write jest
+   * nieblokujacy — szybka operacja. */
+  {
+    const AppSettings::State& s = AppSettings::state();
+    STM32data_sendBrightness(s.sevenSegBrightness);
+  }
 
   PMS5003Sensor::begin();
   ENS160AHT21Screen::resetRuntimeData();

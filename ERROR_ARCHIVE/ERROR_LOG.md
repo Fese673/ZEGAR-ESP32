@@ -1,5 +1,47 @@
 # Archiwum Błędów - ZEGAR-ESP32
 ---
+### [ID: ERR_058] | SEVEN_SEG_DOUBLE_SPI | IMPACT: LOW
+**Files:** `[UI_Draw.cpp]`
+
+**PROBLEM:** `updateSevenSeg()` w v2.1 (commit 5acfc67) zawierał podwójne wywołanie `commitSevenSegFrame(swapNibbles(SS), swapNibbles(MM), swapNibbles(HH));` z identycznymi argumentami na samym końcu funkcji (linie 299-300). Każde wywołanie 7-seg z głównej pętli wysyłało 6 bajtów przez SPI zamiast 3.
+
+**CAUSE:** Resztkowy artefakt debugowania - prawdopodobnie kiedyś ktoś podwoił zapis próbując wymusić latch, a commit został wciągnięty. Nie powodowało to widocznych bugów (drugi zapis jest identyczny), ale podwajało ruch na SPI i zużycie CPU na głównej pętli.
+
+**LOGIC_CHANGE:**
+- `UI_Draw.cpp:299-300`: usunięto drugi `commitSevenSegFrame(...)`. Pozostawiono pojedyncze wywołanie jako jedyne źródło transmisji.
+
+**VERIFICATION:** `git diff` - jedno wywołanie zamiast dwóch. Brak zmian w zachowaniu wyświetlacza. SPI load zmniejszony o 50% na wyświetlaczu.
+---
+### [ID: ERR_059] | SEVEN_SEG_STOPWATCH_HOUR_UNGUARDED | IMPACT: MEDIUM
+**Files:** `[UI_Draw.cpp]`
+
+**PROBLEM:** Ścieżka "godzinowa" stopera w `drawStoper()` (linia 1180 w v2.1) wywoływała `commitSevenSegFrame(...)` bezpośrednio, **bez sprawdzenia `s_sevenSegReady`**. Pozostałe ścieżki (`updateSevenSeg()`, `updateSevenSegStoper()`, `updateSevenSegDebugSTM32()`) sprawdzają flagę i wczesny return. Konwencja "guard przed zapisem" była więc złamana tylko w jednym miejscu.
+
+**CAUSE:** Specjalna ścieżka zegara (HH:MM:SS zamiast MM:SS.CS) była dopisana ręcznie w `drawStoper()` i ominęła sprawdzenie flagi init.
+
+**LOGIC_CHANGE:**
+- `UI_Draw.cpp` `drawStoper()`: dodano `if (s_sevenSegReady)` wokół `commitSevenSegFrame(...)` w ścieżce HH:MM:SS. Wszystkie ścieżki 7-seg są teraz zgodne z konwencją.
+
+**VERIFICATION:** Po naprawie obie ścieżki zegara w stoperze są zgodne z konwencją "s_sevenSegReady guard". Brak ryzyka zapisu do nieskonfigurowanych pinów przy starcie.
+
+**NOTATKA:** Pierwotna wersja tego wpisu sugerowała też usunięcie wywołania `updateSevenSegDebugSTM32()` z `drawDebugSTM32()` jako redundancji z `updateSevenSeg()`. Była to nadinterpretacja. Faktyczny flow:
+- `UI_Controller.cpp:670` wywołuje `updateSevenSeg()` RAZ przy wejściu na ekran debug.
+- `AppLoop.cpp:166-182` `onUiRefresh` (co 1000ms / `STM32_UPDATE_MS`) wywołuje **tylko** `drawDebugSTM32()`, BEZ `updateSevenSeg()`.
+- W v2.1 to `drawDebugSTM32()` na końcu wywoływał `updateSevenSegDebugSTM32()` — było to JEDYNE miejsce regularnej aktualizacji 7-seg na ekranie debug. Bez tego wyświetlacz pokazywałby pierwszy odczyt w nieskończoność i nie reagował na `stm32Connected = false` (timeout). Wywołanie zostało przywrócone ze szczegółowym komentarzem wyjaśniającym dlaczego istnieje.
+---
+### [ID: ERR_060] | SEVEN_SEG_BPM_OOR_BCD | IMPACT: MEDIUM
+**Files:** `[UI_Draw.cpp]`
+
+**PROBLEM:** `updateSevenSegDebugSTM32()` w v2.1 wyświetlał BPM w polu "setki" używając hacka `packTwoDigits((1 * 10) + bpmHundreds)`. Dla `bpm = 200..255`: `bpmHundreds = 2..2`, środkowa cyfra = 12..12 → BCD 0xC → **niezdefiniowane zachowanie 74HC4511**. W praktyce: zgaszenie środkowej cyfry (BCD 0xA..0xF wygasza segmenty na większości egzemplarzy) albo wyświetlenie śmieci. Użytkownik widzi niespójny odczyt pulsu na 7-seg.
+
+**CAUSE:** Próba zakodowania 3-cyfrowego BPM w 2 cyfrach BCD poprzez sztuczną "1" prefixowaną do setek. Łamie kontrakt 74HC4511 (tylko BCD 0..9). Dodatkowo `packTwoDigits()` nie walidował zakresu wejścia.
+
+**LOGIC_CHANGE:**
+- `UI_Draw.cpp` updateSevenSegDebugSTM32(): BPM obcinane do 0..99 (`constrain(displayedBPM, 0, 99)`). Wyświetlane jako 2 cyfry (dziesiątki + jedności) zamiast prefiksowanej "1". Setki są bezpowrotnie tracone - akceptowalne, bo 99 BPM to górna granica sensownych odczytów pulsu w spoczynku, a wyższe wartości są niemiarodajne dla wyświetlacza 2-cyfrowego.
+- `UI_Draw.cpp` packTwoDigits(): dodano asercję + LOG_W przy out-of-range. Wartości ujemne clampled do 0, >99 clampled do 99. Chroni przed regresją jeśli ktoś doda nowe wywołanie z niesprawdzonym zakresem.
+
+**VERIFICATION:** 74HC4511 contract restored - wszystkie przesyłane BCD nibble w zakresie 0..9. Brak niezdefiniowanych kodów na wyświetlaczu. packTwoDigits jest teraz samodzielnie bezpieczny - loguje nieprawidłowe użycie.
+---
 ### [ID: ERR_057] | PRODUCTION_HARDENING | IMPACT: HIGH
 **Files:** `[AppState.h, AppState.cpp, AppBoot.cpp, ClockService.cpp, BMP280Sensor.cpp, AudioBT.cpp, MQTTSync.cpp, EsptoGuitionState.cpp, ENS160AHT21Sensor.cpp, AppLoop.cpp, EventBus.cpp, Esptogution.cpp]`
 

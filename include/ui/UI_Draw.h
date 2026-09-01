@@ -80,7 +80,6 @@ void drawBtMusicControl(); // UI sterowania muzyką BT
 
 // 7-seg
 uint8_t swapNibbles(uint8_t v);
-void slowShiftOut(uint8_t v);
 void initSevenSeg();
 void updateSevenSeg();
 void updateSevenSegStoper(int mins, int secs, int centisec);

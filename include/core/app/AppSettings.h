@@ -13,6 +13,9 @@ struct State {
   int homeUiProfile = 0;
   int ntpSyncMinutes = 60;
   int alarmMelodyIndex = 0;
+  /* Etap 2: jasnosc 7-seg (0..100), forward do STM32 jako BRT:XX.
+   * 100 = pelna, 0 = zgaszone. Persistence: NVS "segBrightness". */
+  uint8_t sevenSegBrightness = 100;
 };
 
 State& mutableState();

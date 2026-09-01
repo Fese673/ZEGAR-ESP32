@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+
 namespace EsptoGuition {
 
 struct WeatherPayload {
@@ -103,5 +104,10 @@ void handleReceivedRadioModeSwitch(const uint8_t* payload, uint16_t payloadLengt
 void musicSettingsInit();
 void musicSettingsFlush();
 uint8_t getMusicVolume();
+
+/* Etap 2: zsynchronizuj s_pendingSettings.sevenSegBrightness z NVS przy starcie.
+ * Bez tego pierwszy musicSettingsFlush() (np. po zmianie innego ustawienia)
+ * nadpisalby NVS defaultem 100 zamiast wartosci odczytanej. */
+void setPendingSevenSegBrightness(uint8_t value);
 
 } // namespace EsptoGuition

@@ -30,6 +30,7 @@ constexpr uint8_t kTypeMusicRequest = 0x35;
 constexpr uint8_t kTypeMusicVolumeState = 0x36;
 constexpr uint8_t kTypeMusicEQState = 0x37;
 constexpr uint8_t kTypeRadioMode = 0x38;
+constexpr uint8_t kTypeRadarStatus = 0x39;
 constexpr uint8_t kTypeAck = 0xFF;
 
 // Stany synchronizacji – identyczne po obu stronach
@@ -82,6 +83,8 @@ void sendMusicStatus(bool connected, bool playing);
 void sendMusicVolumeState(uint8_t volume);
 void sendMusicEQState(uint8_t bass, uint8_t mid, uint8_t treble);
 void sendRadioModeState(uint8_t sequence = 0);
+void sendRadarStatus(uint8_t presence, uint16_t movDist, uint8_t movEnergy,
+                     uint16_t statDist, uint8_t statEnergy, uint16_t detectDist);
 uint8_t nextSequence();
 
 } // namespace EsptoGuition

@@ -4,6 +4,7 @@
 
 #include "AppSettings.h"
 #include "Config.h"
+#include "core/telemetry/Dbg7Seg.h"
 #include "EsptoGuitionState.h"
 #include "EsptoGuitionTransport.h"
 #include "PMS_Czujnik.h"
@@ -413,6 +414,26 @@ void begin(HardwareSerial &serialPort, uint32_t baudRate, int rxPin, int txPin) 
 void update() {
   ingestSerialBytes();
   broadcastSnapshots(millis());
+
+  /* Etap 3 boot sync: przez pierwsze 5s po starcie ZEGAR, wysylaj
+   * komende jasnosci co 1s. Rozwiazuje race condition ze STM32 boot
+   * (STM32 RX armed po ~250ms, a ZEGAR initSensors wysyla od razu).
+   * 5 powtorzen co 1s daje >99% szans ze STM32 odbierze przynajmniej
+   * jedna komende nawet jesli pierwsza zostala zgubiona. */
+  static unsigned long s_bootSyncStartMs = 0;
+  static uint8_t s_bootSyncSent = 0;
+  const unsigned long now = millis();
+  if (s_bootSyncStartMs == 0) {
+    s_bootSyncStartMs = now;
+    DBG_7SEG_LOG("boot sync start (5x retry co 1s, brightness=%u)",
+        (unsigned)AppSettings::state().sevenSegBrightness);
+  }
+  if (s_bootSyncSent < 5 && (now - s_bootSyncStartMs) >= (unsigned long)s_bootSyncSent * 1000UL) {
+    AppSettings::State& s = AppSettings::mutableState();
+    DBG_7SEG_LOG("boot sync #%u/5 -> BRT:%u", (unsigned)(s_bootSyncSent + 1U), (unsigned)s.sevenSegBrightness);
+    STM32data_sendBrightness(s.sevenSegBrightness);
+    s_bootSyncSent++;
+  }
 }
 
 void setBroadcastIntervalMs(uint32_t intervalMs) {
@@ -429,13 +450,16 @@ bool isReady() {
 
 void sendSettings(uint8_t sequence) {
   AppSettings::State& state = AppSettings::mutableState();
-  uint8_t payload[6];
+  /* Etap 2: payload 7-bajtowy (7 = sevenSegBrightness 0..100).
+   * Stary GUTION (6-bajtowy) zignoruje bajt [6] — brak crash. */
+  uint8_t payload[7];
   payload[0] = state.buzzerEnabled ? 1 : 0;
   payload[1] = state.mqttEnabled ? 1 : 0;
   payload[2] = state.touchTestEnabled ? 1 : 0;
   payload[3] = state.backgroundMusicEnabled ? 1 : 0;
   payload[4] = PMS5003Sensor::isEnabled() ? 1 : 0;
   payload[5] = static_cast<uint8_t>(state.alarmMelodyIndex);
+  payload[6] = state.sevenSegBrightness;
   sendRawFrame(kTypeSettings, sequence, payload, sizeof(payload));
 }
 
@@ -505,6 +529,21 @@ void sendRadioModeState(uint8_t sequence) {
   }
   uint8_t buf[1] = { modeByte };
   sendRawFrame(kTypeRadioMode, sequence, buf, 1);
+}
+
+void sendRadarStatus(uint8_t presence, uint16_t movDist, uint8_t movEnergy,
+                     uint16_t statDist, uint8_t statEnergy, uint16_t detectDist)
+{
+    uint8_t buf[8];
+    buf[0] = presence;
+    buf[1] = static_cast<uint8_t>(movDist & 0xFFU);
+    buf[2] = static_cast<uint8_t>((movDist >> 8) & 0xFFU);
+    buf[3] = movEnergy;
+    buf[4] = static_cast<uint8_t>(statDist & 0xFFU);
+    buf[5] = static_cast<uint8_t>((statDist >> 8) & 0xFFU);
+    buf[6] = statEnergy;
+    buf[7] = static_cast<uint8_t>(detectDist & 0xFFU);
+    sendRawFrame(kTypeRadarStatus, nextSequence(), buf, sizeof(buf));
 }
 
 uint8_t nextSequence() {

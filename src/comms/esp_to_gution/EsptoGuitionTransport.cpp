@@ -59,6 +59,10 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
     TimeSync::sendAlarmList();
     TimeSync::sendTimerState();
     EsptoGuition::sendStatusBell(EsptoGuition::nextSequence());
+    // Silnik ekranu: pelny stan (busy/pos/cel/kalibracja) na start + prosba
+    // o rame odniesienia (boot-REF STM32 mogl przyjsc przed naszym hookiem).
+    EsptoGuition::pushStepperState();
+    EsptoGuition::requestStepperRef();
     break;
   case kTypeRequest:
     if (payloadLength >= 1) {
@@ -93,6 +97,10 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
     break;
   case kTypeRadioMode:
     handleReceivedRadioModeSwitch(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
+  case kTypeStepperCmd:
+    handleReceivedStepperCmd(payload, payloadLength);
     sendAck(sequence, kAckOk, type);
     break;
   // NOWE: TimeSyncProtocol — ramki Gution→Zegar

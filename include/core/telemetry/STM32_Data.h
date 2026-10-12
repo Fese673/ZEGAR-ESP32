@@ -49,4 +49,16 @@ void STM32data_update();
 /*--- Wyślij komendę jasności 7-seg do STM32 (COBS frame 0xB0). ---*/
 void STM32data_sendBrightness(uint8_t percent);
 
+/*--- STEPPER_BRIDGE: hook + nadawca ramek steppera (0xB1). ---
+ * Hook dostaje NIEZNANE dispatcherowi typy ramek (0xB2/0xB3/DONE/STATUS
+ * steppera). Wołany synchronicznie z STM32data_update() — ma być szybki
+ * i nieblokujący. nullptr = brak mostu (zachowanie jak przed zmianą). */
+typedef void (*STM32StepperHook_t)(uint8_t type, const uint8_t *payload,
+                                   uint16_t len);
+void STM32data_setStepperHook(STM32StepperHook_t hook);
+
+/*--- STEPPER_BRIDGE: wyślij payload jako ramkę 0xB1 do STM32.
+ * Zwraca false gdy kanał niegotowy (nie blokuje). ---*/
+bool STM32data_sendStepperCmd(const uint8_t *payload, uint16_t len);
+
 #endif // STM32_DATA_H

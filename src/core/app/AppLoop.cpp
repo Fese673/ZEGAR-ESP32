@@ -15,6 +15,7 @@
 #include "BootIntroService.h"
 #include "ClockAlarmService.h"
 #include "comms/esp_to_gution/Esptogution.h"
+#include "comms/esp_to_gution/EsptoGuitionState.h"
 #include "core/events/EventBus.h"
 #include "Encoder.h"
 #include "ENS160AHT21Sensor.h"
@@ -33,6 +34,7 @@
 #include "SafeCracker.h"
 #include "StatsManager.h"
 #include "STM32_Data.h"
+#include "stepper_bridge.h"  // STEPPER_BRIDGE (1/1 pump): most PC<->STM32
 #include "SystemResourcesService.h"
 #include "TANK-GAMES/TankGame.h"
 #include "TelemetryComposer.h"
@@ -324,7 +326,8 @@ void runLoop() {
   EventBus::process();
   audioBT_serviceDeferred();
   EsptoGuition::update();
-  STM32data_update();  // non-blocking, 50Hz PPG stream
+   STM32data_update();  // non-blocking, 50Hz PPG stream
+   StepperBridge::update();  // STEPPER_BRIDGE: pompa mostu (idle ~0, max 8 linii + 1 ramka/100ms)
   ClockAlarmService::serviceAlarmPlayback(BUZZER_PIN, ALARM_DURATION_MS);
   TimerService::servicePlayback(BUZZER_PIN, ALARM_DURATION_MS);
 

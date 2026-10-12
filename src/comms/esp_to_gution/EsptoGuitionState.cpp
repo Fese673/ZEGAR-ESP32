@@ -25,6 +25,8 @@
 #include "RadioModeSwitch.h"
 #include "RTCService.h"
 #include "STM32_Data.h"
+#include "stepper_bridge.h"
+#include "stepper_frames.h"
 #include "TimerService.h"
 #include "touch_buzzer_test.h"
 #include "UI_Draw.h"
@@ -560,7 +562,6 @@ void music_settings_load() {
 void musicSettingsInit() {
     music_settings_load();
 }
-
 void setPendingSevenSegBrightness(uint8_t value) {
     s_pendingSettings.sevenSegBrightness = value;
 }
@@ -580,6 +581,104 @@ void musicSettingsFlush() {
     /* Etap 2: jasnosc 7-seg (0..100). */
     prefs.putUChar("segBrightness", s_pendingSettings.sevenSegBrightness);
     prefs.end();
+}
+
+// --- Silnik ekranu (Guition -> ZEGAR -> STM32): forward, nie ksiegowosc ---
+// WARIANT B: jedyne zrodlo prawdy to stepper_truth we flash STM32.
+// ZEGAR NIE TRZYMA mapy stopni, bazy pozycji ani kalibracji w NVS —
+// forwarduje komendy Guitiona (EXECUTE->MOVE_DEG, CAL_*->SET_*) i stan
+// (0xB2/0xB4->0x3B). Zrodlem celu/predkosci dla UI jest teraz ECHO z STM32
+// (REF v2: targetDeg + speed); tu tylko ostatnia predkosc UI do komend.
+// Blok MUSI stac przed handlerem ponizej.
+namespace {
+uint16_t s_stepSpeed = StepperFrames::kSpeedDef; // ostatnia predkosc UI (SET_SPAN/EXECUTE)
+// Ostatnia predkosc PODANA STM32 (SET_SPEED). Wysylamy tylko przy zmianie,
+// zeby nie spamowac kolejki — STM32 persistuje ja dla auto-powrotu.
+uint16_t s_speedSentToStm = 0xFFFF;
+
+uint16_t rdU16LE(const uint8_t* p) {
+  return static_cast<uint16_t>(p[0] | (static_cast<uint16_t>(p[1]) << 8));
+}
+
+// Przyspieszenie ruchow z Guitiona (EXECUTE/HOLD/SET_SPAN-return).
+// Skrypt PC podaje wlasne w ramce; Guition przyspieszenia nie ustawia, wiec
+// musi byc wartosc, przy ktorej ZADANA predkosc jest realnie osiagana.
+// Fizyka trapezu STM32 (stepper_motion.c): start 0->accel od razu, dalej
+// +accel/cur na krok, hamowanie cur^2/2accel. Przy accel=400 ruch 45 stopni
+// (512 krokow) pelzal do ~570 mimo slidera na 1000. Przy 1000: start od razu
+// do vmax, hamowanie 500 krokow przy 1000 — zadana predkosc osiagana.
+// Limit STM32: 50..2000. Bezpieczny kompromis szybkosc/plynnosc.
+constexpr uint16_t kGuitionAccel = 1000;
+
+// Podanie predkosci do STM32 (auto-powrot po restarcie jedzie nia, nie 400).
+// Tylko przy zmianie; tor priorytetowy w moscie (flush go nie zjada).
+void forwardSpeedToStm(uint16_t speed) {
+  if (speed == s_speedSentToStm) return;
+  if (StepperBridge::issueSetSpeed(speed)) {
+    s_speedSentToStm = speed;
+    LOG_I("STEPPER", "SET_SPEED %u -> STM32 (auto-powrot)", (unsigned)speed);
+  }
+}
+
+uint16_t clampSpeed(uint16_t v) {
+  if (v < StepperFrames::kSpeedMin || v > StepperFrames::kSpeedMax) {
+    return StepperFrames::kSpeedDef;
+  }
+  return v;
+}
+
+// FALLBACK nieskalibrowany: STM32 odrzuca MOVE_DEG bez kalibracji (truth),
+// wiec EXECUTE jedzie surowym MOVE_ABS 2048 krokow/obrot od zera licznika.
+// Jawny fallback, nie prawda — po kalibracji nieuzywany.
+int32_t fallbackDegToSteps(uint16_t deg) {
+  int64_t steps = (static_cast<int64_t>(deg) * 2048) / 360;
+  if (steps > StepperFrames::kMaxMove) steps = StepperFrames::kMaxMove;
+  if (steps < -StepperFrames::kMaxMove) steps = -StepperFrames::kMaxMove;
+  return static_cast<int32_t>(steps);
+}
+} // namespace
+
+// Migracja ustawien steppera NVS ("zegar": stepTargetDeg/stepSpeed) ->
+// flash STM32 (E2). Jednorazowa, idempotentna: brak kluczy = no-op.
+// Klucze usuwane DOPIERO po zakolejkowaniu obu komend (sukces).
+// Wolac PO StepperBridge::begin() — komendy ida kolejem FIFO mostu.
+void stepperNvsMigrate() {
+  Preferences prefs;
+  prefs.begin("zegar", true);
+  const bool hasT = prefs.isKey("stepTargetDeg");
+  const bool hasS = prefs.isKey("stepSpeed");
+  uint16_t t = prefs.getUShort("stepTargetDeg", 45);
+  uint16_t sp = prefs.getUShort("stepSpeed", StepperFrames::kSpeedDef);
+  prefs.end();
+  if (!hasT && !hasS) return; // juz zmigrowane (albo fabryka)
+
+  if (sp < StepperFrames::kSpeedMin || sp > StepperFrames::kSpeedMax) {
+    sp = StepperFrames::kSpeedDef;
+  }
+  if (t > 360U) t = 45U;
+
+  // Oba klucze -> dwa frame'y FIFO; pojedyncze -> tor priorytetowy.
+  bool ok = true;
+  if (hasT && hasS) {
+    ok = StepperBridge::seedTargetSpeed(t, sp);
+  } else if (hasT) {
+    ok = StepperBridge::issueSetTarget(t);
+  } else {
+    ok = StepperBridge::issueSetSpeed(sp);
+  }
+  if (!ok) {
+    LOG_W("STEPPER", "migracja NVS->STM32: FIFO zajete, retry przy starcie");
+    return; // klucze zostaja — retry nastepny boot
+  }
+
+  Preferences wprefs;
+  wprefs.begin("zegar", false);
+  if (hasT) wprefs.remove("stepTargetDeg");
+  if (hasS) wprefs.remove("stepSpeed");
+  wprefs.end();
+  s_stepSpeed = sp; // echo zanim wroci REF
+  LOG_I("STEPPER", "migracja NVS->STM32: target=%u speed=%u (klucze usuniete)",
+        (unsigned)t, (unsigned)sp);
 }
 
 void handleReceivedMusicCommand(const uint8_t* payload, uint16_t payloadLength) {
@@ -656,6 +755,200 @@ void handleReceivedRadioModeSwitch(const uint8_t* payload, uint16_t payloadLengt
         RadioModeSwitch::requestModeSwitch_WiFi();
     }
     // RADIO_STATE_TRANSITIONING -> ignore (already switching)
+}
+
+void pushStepperState() {
+  uint8_t flags = StepperBridge::refCalOk() ? kStepperFlagCalOk : 0;
+  if (StepperBridge::refRadarEn()) flags |= kStepperFlagRadarEn;
+  // Bity 2-3: czulosc OUT radaru (0=SREDNIA, 1=WYSOKA, 2=MALA).
+  flags |= static_cast<uint8_t>((StepperBridge::refRadarSens() & 0x03U) << 2);
+  // homeDeg z REF (0xFFFF = jeszcze nie znamy — Guition nie adoptuje).
+  const uint16_t home = StepperBridge::refValid()
+      ? StepperBridge::refHomeDeg() : 0xFFFFU;
+  // Cel/predkosc z ECHA STM32 (REF v2). Stary STM32 bez pol: cel = 45,
+  // predkosc = ostatnia UI (zgodne z poprzednim zachowaniem).
+  const uint16_t refT = StepperBridge::refTargetDeg();
+  const uint16_t target = (refT != 0xFFFFU) ? refT : 45U;
+  const uint16_t refS = StepperBridge::refSpeed();
+  const uint16_t speed = (refS != 0xFFFFU) ? refS : s_stepSpeed;
+  const uint16_t autoClose = StepperBridge::refAutoCloseS(); // 0xFFFF = brak
+  sendStepperState(StepperBridge::lastKnownBusy(), StepperBridge::lastKnownPos(),
+                   target, speed, home, flags, autoClose);
+}
+
+// Sciezka DONE (0xB3): forward pozycji koncowej do Guitiona.
+// Bez zapisu — prawde trzyma STM32 (zapis 2 s po ruchu, we flash).
+void pushStepperDone(int32_t posSteps) {
+  uint8_t flags = StepperBridge::refCalOk() ? kStepperFlagCalOk : 0;
+  if (StepperBridge::refRadarEn()) flags |= kStepperFlagRadarEn;
+  flags |= static_cast<uint8_t>((StepperBridge::refRadarSens() & 0x03U) << 2);
+  const uint16_t home = StepperBridge::refValid()
+      ? StepperBridge::refHomeDeg() : 0xFFFFU;
+  const uint16_t refT = StepperBridge::refTargetDeg();
+  const uint16_t target = (refT != 0xFFFFU) ? refT : 45U;
+  const uint16_t refS = StepperBridge::refSpeed();
+  const uint16_t speed = (refS != 0xFFFFU) ? refS : s_stepSpeed;
+  const uint16_t autoClose = StepperBridge::refAutoCloseS(); // 0xFFFF = brak
+  sendStepperState(false, posSteps, target, speed, home, flags, autoClose);
+}
+
+// Prosba o rame odniesienia (0xB4) — po HELLO i przy pollu Guitiona,
+// zeby flaga kalibracji nie utknela na starcie (boot-REF STM32 mogl
+// przyjsc przed naszym hookiem).
+void requestStepperRef() {
+  StepperBridge::requestRef();
+}
+
+// Prawda z STM32 (USB STEPREF?): zero/span/flaga/wiek + echo REF v2
+// (cel/predkosc z flash STM32). Read-only.
+void printStepperRef() {
+  Serial.print("STEPREF zero=");
+  Serial.print(StepperBridge::refZero());
+  Serial.print(" span=");
+  Serial.print(StepperBridge::refSpan());
+  Serial.print(" ok=");
+  Serial.print(StepperBridge::refCalOk() ? 1 : 0);
+  Serial.print(" valid=");
+  Serial.print(StepperBridge::refValid() ? 1 : 0);
+  if (StepperBridge::refValid()) {
+    Serial.print(" ageMs=");
+    Serial.print((unsigned long)StepperBridge::refAgeMs());
+  }
+  Serial.print(" livePos=");
+  Serial.print(StepperBridge::lastKnownPos());
+  Serial.print(" busy=");
+  Serial.print(StepperBridge::lastKnownBusy() ? 1 : 0);
+  Serial.print(" target=");
+  Serial.print(StepperBridge::refTargetDeg());
+  Serial.print(" speed=");
+  Serial.print(StepperBridge::refSpeed());
+  Serial.print(" homeDeg=");
+  Serial.println(StepperBridge::refValid() ? StepperBridge::refHomeDeg() : 9999);
+}
+
+void handleReceivedStepperCmd(const uint8_t* payload, uint16_t payloadLength) {
+  if (payload == nullptr || payloadLength < 1) return;
+  switch (payload[0]) {
+    case kStepperSubExecute: { // [deg u16][speed u16]
+      if (payloadLength < 5) return;
+      const uint16_t deg = rdU16LE(payload + 1);
+      const uint16_t speed = clampSpeed(rdU16LE(payload + 3));
+      // Cel NIE jest tu zmieniany: to WYBOR uzytkownika (SET_TARGET ->
+      // flash STM32). Inaczej zjazd automatu radaru do 0 nadpisywalby wybor.
+      s_stepSpeed = speed;
+      // Cel liczy STM32 z WLASNEGO spanu (MOVE_DEG, preempcja jak wczesniej).
+      // Bez kalibracji STM32 odrzuca DEG — jawny fallback surowym MOVE_ABS.
+      // forwardSpeedToStm DOPIERO po zakolejkowaniu ruchu (flush preempcji
+      // nie moze zjesc predkosci — a tor priorytetowy i tak go chroni).
+      if (StepperBridge::refCalOk()) {
+        LOG_I("STEPPER", "EXECUTE deg=%u speed=%u -> MOVE_DEG",
+              (unsigned)deg, (unsigned)speed);
+        StepperBridge::issueMoveDegFlush(deg, speed, kGuitionAccel);
+      } else {
+        LOG_W("STEPPER", "EXECUTE %u bez kalibracji STM32 — fallback surowy",
+              (unsigned)deg);
+        StepperBridge::issueMoveAbs(fallbackDegToSteps(deg), speed,
+                                    kGuitionAccel);
+      }
+      forwardSpeedToStm(speed); // po zakolejkowaniu ruchu (tor priorytetowy)
+      pushStepperState(); // busy=1 od razu (potwierdzenie przyjecia)
+      break;
+    }
+    case kStepperSubHoldStart: { // [dir i8][speed u16]
+      if (payloadLength < 4) return;
+      const int8_t dir = static_cast<int8_t>(payload[1]);
+      if (dir != -1 && dir != 1) return;
+      const uint16_t speed = clampSpeed(rdU16LE(payload + 2));
+      s_stepSpeed = speed; // echo ostatniej predkosci (powrot SET_SPAN tez z niej)
+      const int32_t chunk = (dir > 0) ? StepperFrames::kChunkDef
+                                      : -StepperFrames::kChunkDef;
+      StepperBridge::issueMoveRel(chunk, speed, kGuitionAccel);
+      forwardSpeedToStm(speed); // po zakolejkowaniu ruchu (tor priorytetowy)
+      pushStepperState();
+      break;
+    }
+    case kStepperSubStop:
+      StepperBridge::requestStop(); // priorytet przed kolejka, nigdy nie ginie
+      pushStepperState();
+      break;
+    case kStepperSubStatusReq:
+      StepperBridge::requestStatus(); // odp async 0xB2 -> forward w hooku
+      StepperBridge::requestRef(); // + 0xB4 (flaga kalibracji na biezaco)
+      break;
+    case kStepperSubCalZero:
+      // Adopcja zera W STM32 (SET_ZERO). Flaga KALIBRUJ wraca 0xB2/0xB4.
+      StepperBridge::issueSetZero();
+      pushStepperState();
+      break;
+    case kStepperSubCalSpan:
+      // Adopcja 90 stopni W STM32 (SET_SPAN) + jego powrot do 0.
+      // Predkosc powrotu ze slidera Guitiona.
+      StepperBridge::issueSetSpan(s_stepSpeed, kGuitionAccel);
+      pushStepperState();
+      break;
+    case kStepperSubSetHome: { // [deg u16]
+      // Cel powrotu po resecie (double-click presetu). Preferencja w STM32.
+      if (payloadLength < 3) return;
+      const uint16_t home = rdU16LE(payload + 1);
+      LOG_I("STEPPER", "SET_HOME %u -> STM32 (cel po resecie)",
+            (unsigned)home);
+      StepperBridge::issueSetHome(home);
+      pushStepperState();
+      break;
+    }
+    case kStepperSubSetRadar: { // [en]
+      // Automat LD2410C (przycisk na Guitionie). Preferencja we flash STM32.
+      if (payloadLength < 2) return;
+      const bool en = payload[1] != 0;
+      LOG_I("STEPPER", "SET_RADAR %u -> STM32 (automat obecności)", en ? 1 : 0);
+      StepperBridge::issueSetRadar(en);
+      pushStepperState();
+      break;
+    }
+    case kStepperSubSetTarget: { // [deg u16]
+      // Wybrany kat z UI (single-click presetu / WYKONAJ) -> flash STM32
+      // (persist + echo w REF). ZEGAR NVS nie jest juz wlascicielem.
+      if (payloadLength < 3) return;
+      const uint16_t target = rdU16LE(payload + 1);
+      StepperBridge::issueSetTarget(target > 360U ? 360U : target);
+      pushStepperState();
+      break;
+    }
+    case kStepperSubCalMode: { // [en]
+      // Kalibracja w toku na Guitionie: wstrzymaj automat radaru w STM32,
+      // zeby ruch nie przeszkodzil w ustawianiu 0/90. Brak persistencji;
+      // en=0 po zapisie/wyjsciu, brak keepalive = auto-timeout STM32.
+      if (payloadLength < 2) return;
+      const bool en = payload[1] != 0;
+      LOG_I("STEPPER", "CAL_MODE %u -> STM32 (automat radaru wstrzymany)",
+            en ? 1 : 0);
+      StepperBridge::issueCalMode(en);
+      break;
+    }
+    case kStepperSubSetAutoClose: { // [s u16]
+      // Czas auto-zjazdu radaru (przyciski pod kafelkiem): presety
+      // 30/120/300/600 s; walidacja + persist we flash STM32 (echo REF).
+      if (payloadLength < 3) return;
+      const uint16_t seconds = rdU16LE(payload + 1);
+      LOG_I("STEPPER", "SET_AUTOCLOSE %u s -> STM32 (auto-zjazd radaru)",
+            (unsigned)seconds);
+      StepperBridge::issueSetAutoClose(seconds);
+      pushStepperState();
+      break;
+    }
+    case kStepperSubSetRadarSens: { // [kod 0/1/2]
+      // Czulosc OUT radaru (ekran radaru): 0=SREDNIA, 1=WYSOKA, 2=MALA;
+      // walidacja + persist we flash STM32 + aplikacja w module (echo REF).
+      if (payloadLength < 2) return;
+      const uint8_t code = (payload[1] <= 2U) ? payload[1] : 0U;
+      LOG_I("STEPPER", "SET_RADAR_SENS %u -> STM32 (czulosc OUT)", (unsigned)code);
+      StepperBridge::issueSetRadarSens(code);
+      pushStepperState();
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 bool buildStatusBellPayload(StatusBellPayload &out) {

@@ -35,6 +35,7 @@
 #include "Secrets_Config.h"
 #include "StatsManager.h"
 #include "STM32_Data.h"
+#include "stepper_bridge.h"  // STEPPER_BRIDGE (1/2): most PC<->STM32
 #include "touch_buzzer_test.h"
 #include "UI_Controller.h"
 #include "UI_Draw.h"
@@ -289,6 +290,10 @@ void initSensors(RuntimeContext& ctx) {
   UIState::State& uiState = UIState::mutableState();
 
   STM32data_begin(BoardPins::kStm32UartRx, BoardPins::kStm32UartTx);
+  StepperBridge::begin();  // STEPPER_BRIDGE (2/2 init): hook 0xB2/0xB3, zero ramek bez komend PC
+  // E2: jednorazowa migracja NVS "zegar" (stepTargetDeg/stepSpeed) do flash
+  // STM32 przez most (FIFO). Musi byc PO begin() — klucze znikaja po sukcesie.
+  EsptoGuition::stepperNvsMigrate();
 
   /* Etap 2: zsynchronizuj jasnosc 7-seg z wartoscia z NVS.
    * STM32 startuje domyslnie 100% (PWM_State_Init), ale wolimy ustawic

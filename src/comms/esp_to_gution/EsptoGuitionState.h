@@ -101,9 +101,25 @@ void handleReceivedMusicVolume(const uint8_t* payload, uint16_t payloadLength);
 void handleReceivedMusicEQ(const uint8_t* payload, uint16_t payloadLength);
 void handleReceivedMusicRequest(const uint8_t* payload, uint16_t payloadLength);
 void handleReceivedRadioModeSwitch(const uint8_t* payload, uint16_t payloadLength);
+void handleReceivedStepperCmd(const uint8_t* payload, uint16_t payloadLength);
+// Zbiera stan mostu steppera + echo UI i wysyla ramke 0x3B do Guitiona.
+// Wywolywac z loop (nie z ISR): po odbiorze 0xB2/0xB3/0xB4, po akceptacji
+// komendy i w pelnym syncu po HELLO. Prawda (zero/span/kalibracja) zyje
+// w STM32 — tu tylko forward, zadnego NVS steppera.
+void pushStepperState();
 void musicSettingsInit();
 void musicSettingsFlush();
 uint8_t getMusicVolume();
+// Migracja ustawien steppera z NVS ZEGAR ("zegar": stepTargetDeg/stepSpeed)
+// do flash STM32 — jednorazowa, idempotentna; wolac PO StepperBridge::begin().
+void stepperNvsMigrate();
+// Forward pozycji koncowej DONE do Guitiona (bez zapisu — prawde trzyma
+// STM32 we flash, zapis 2 s po ruchu). Wywolywane z loop (hook STM32_Data).
+void pushStepperDone(int32_t posSteps);
+// Prosba o rame odniesienia 0xB4 (po HELLO / przy pollu Guitiona).
+void requestStepperRef();
+// Prawda z STM32 przez USB (STEPREF?): zero/span/flaga/wiek. Read-only.
+void printStepperRef();
 
 /* Etap 2: zsynchronizuj s_pendingSettings.sevenSegBrightness z NVS przy starcie.
  * Bez tego pierwszy musicSettingsFlush() (np. po zmianie innego ustawienia)

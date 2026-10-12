@@ -31,6 +31,38 @@ constexpr uint8_t kTypeMusicVolumeState = 0x36;
 constexpr uint8_t kTypeMusicEQState = 0x37;
 constexpr uint8_t kTypeRadioMode = 0x38;
 constexpr uint8_t kTypeRadarStatus = 0x39;
+// Silnik ekranu (Guition <-> ZEGAR <-> STM32). Kontrakt payloadu ponizej —
+// lustro po stronie Guitiona (CommunicationProtocol.h: kTypeStepperCmd/State).
+// Zmieniasz tu = zmieniasz tam.
+constexpr uint8_t kTypeStepperCmd = 0x3A;   // G -> Z: komenda [sub][args]
+constexpr uint8_t kTypeStepperState = 0x3B; // Z -> G: stan [busy][pos i32 LE][targetDeg u16 LE][flags][speed u16 LE][homeDeg u16 LE][autoCloseS u16 LE]
+//
+// 0x3A sub-komendy:
+//   0x01 EXECUTE    [deg u16 LE][speed u16 LE] — zapisz cel, MOVE_ABS, push stanu
+//   0x02 HOLD_START [dir i8][speed u16 LE]     — MOVE_REL +-chunk, puszczenie = STOP
+//   0x03 STOP                                   — priorytet przed kolejka, push stanu
+//   0x04 STATUS_REQ                             — 0xB1 0x04 do STM32, odp async 0xB2
+//   0x05 CAL_ZERO                                — zapisz biezacy pos jako 0 kalibracji
+//   0x06 CAL_SPAN                                — zapisz rozpietosc 0..90 + MOVE_ABS 0
+//   0x0A CAL_MODE   [en]                         — wstrzymaj automat radaru na czas kalibracji
+//   0x0B SET_AUTOCLOSE [s u16 LE]                — czas auto-zjazdu radaru (presety 30/120/300/600)
+//   0x0C SET_RADAR_SENS [kod]                    — czulosc OUT radaru (0=SREDNIA, 1=WYSOKA, 2=MALA)
+// 0x3B flagi: bit0 = kalibracja (calOk), bit1 = automat radaru (radarEn),
+//             bity 2-3 = czulosc OUT radaru (0/1/2).
+constexpr uint8_t kStepperSubExecute = 0x01;
+constexpr uint8_t kStepperSubHoldStart = 0x02;
+constexpr uint8_t kStepperSubStop = 0x03;
+constexpr uint8_t kStepperSubStatusReq = 0x04;
+constexpr uint8_t kStepperSubCalZero = 0x05;
+constexpr uint8_t kStepperSubCalSpan = 0x06;
+constexpr uint8_t kStepperSubSetHome = 0x07; // [deg u16 LE] cel powrotu po resecie
+constexpr uint8_t kStepperSubSetRadar = 0x08; // [en] automat LD2410C (flash STM32)
+constexpr uint8_t kStepperSubSetTarget = 0x09; // [deg u16 LE] wybrany kat (NVS UI, bez ruchu)
+constexpr uint8_t kStepperSubCalMode = 0x0A;  // [en] wstrzymaj automat radaru na czas kalibracji
+constexpr uint8_t kStepperSubSetAutoClose = 0x0B; // [s u16 LE] czas auto-zjazdu radaru (presety)
+constexpr uint8_t kStepperSubSetRadarSens = 0x0C; // [kod] czulosc OUT radaru 0/1/2
+constexpr uint8_t kStepperFlagCalOk = 0x01;
+constexpr uint8_t kStepperFlagRadarEn = 0x02;
 constexpr uint8_t kTypeAck = 0xFF;
 
 // Stany synchronizacji – identyczne po obu stronach
@@ -84,7 +116,11 @@ void sendMusicVolumeState(uint8_t volume);
 void sendMusicEQState(uint8_t bass, uint8_t mid, uint8_t treble);
 void sendRadioModeState(uint8_t sequence = 0);
 void sendRadarStatus(uint8_t presence, uint16_t movDist, uint8_t movEnergy,
-                     uint16_t statDist, uint8_t statEnergy, uint16_t detectDist);
+                     uint16_t statDist, uint8_t statEnergy, uint16_t detectDist,
+                     const uint8_t *movGates, const uint8_t *statGates);
+void sendStepperState(bool busy, int32_t posSteps, uint16_t targetDeg,
+                      uint16_t speed, uint16_t homeDeg, uint8_t flags,
+                      uint16_t autoCloseS);
 uint8_t nextSequence();
 
 } // namespace EsptoGuition

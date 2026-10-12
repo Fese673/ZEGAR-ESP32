@@ -34,6 +34,8 @@ uint16_t ld2410DetectionDistance = 0;
 bool     ld2410DataUpdated = false;
 uint32_t ld2410LastFrameMs = 0;
 bool     s_ld2410_forward_pending = false;
+static uint8_t s_ld2410_logged_presence = 0xFF;  // ostatni zalogowany stan (Serial)
+static uint32_t s_ld2410_logged_ms = 0;          // kiedy ostatni log (powtorka co 10 s)
 struct Ld2410Pending {
     uint8_t presence;
     uint16_t movDist;
@@ -41,6 +43,8 @@ struct Ld2410Pending {
     uint16_t statDist;
     uint8_t statEnergy;
     uint16_t detectDist;
+    uint8_t movGates[9];
+    uint8_t statGates[9];
 } s_ld2410_pending = {};
 
 /*--- Kanał UART (EspSoftwareSerial na GPIO16=RX, GPIO17=TX) ---*/
@@ -65,6 +69,11 @@ static constexpr uint8_t kTypeBpm        = 0xA1;
 static constexpr uint8_t kTypeAck        = 0xA2;
 static constexpr uint8_t kTypeRadar      = 0xA3;
 static constexpr uint8_t kTypeBrightness = 0xB0;
+// STEPPER_BRIDGE: 0xB1 ZEGAR->STM32 komenda steppera (kontrakt:
+// include/stepper/stepper_frames.h). 0xB2/0xB3 lecą w drugą stronę
+// i lądują w hooku poniżej — istniejące typy nietknięte.
+static constexpr uint8_t kTypeStepperCmd = 0xB1;
+static STM32StepperHook_t s_stepperHook = nullptr;  // STEPPER_BRIDGE
 
 static constexpr uint16_t kMaxPayload   = 128;
 static constexpr uint8_t  kHeaderBytes  = 4;
@@ -149,12 +158,25 @@ static void dispatchFrame(uint8_t type, uint8_t seq,
         s_ld2410_pending.statDist  = static_cast<uint16_t>(payload[4] | (static_cast<uint16_t>(payload[5]) << 8U));
         s_ld2410_pending.statEnergy= payload[6];
         s_ld2410_pending.detectDist= payload[7];
+        // Bramki (26 B od nowego STM32); stary 8 B -> zera.
+        if (len >= 26U) {
+            memcpy(s_ld2410_pending.movGates, payload + 8, 9);
+            memcpy(s_ld2410_pending.statGates, payload + 17, 9);
+        } else {
+            memset(s_ld2410_pending.movGates, 0, 9);
+            memset(s_ld2410_pending.statGates, 0, 9);
+        }
         ld2410LastFrameMs = millis();
         ld2410DataUpdated = true;
         s_ld2410_forward_pending = true;
         break;
     }
     default:
+        // STEPPER_BRIDGE: nieznane typy (0xB2/0xB3 steppera) do hooka mostu.
+        // Bez hooka zachowanie jak wcześniej (ignoruj).
+        if (s_stepperHook != nullptr) {
+            s_stepperHook(type, payload, len);
+        }
         break;
     }
 }
@@ -210,6 +232,7 @@ void STM32data_begin(int rxPin, int txPin, uint32_t baudRate)
     s_rx.lastFrameMs = 0;
     s_lastPpgFrameMs = 0;
     s_stmTxSeq = 0;
+    s_stepperHook = nullptr;  // STEPPER_BRIDGE (most rejestruje się w begin())
     bpmNumber = 0;
     spo2Number = 0;
     stmDataUpdated = false;
@@ -258,12 +281,37 @@ void STM32data_update()
         ld2410StationaryDistance = s_ld2410_pending.statDist;
         ld2410StationaryEnergy = s_ld2410_pending.statEnergy;
         ld2410DetectionDistance = s_ld2410_pending.detectDist;
-        // Forward do GUTION (COBS) - nie blokuje RX
+        // Podglad na USB-Serial: zmiana stanu zawsze; martwe lacze (b7)
+        // przypomina co 10 s; zywa obecnosc bez zmian nie spamuje.
+        uint32_t nowMs = millis();
+        bool linkBad = (s_ld2410_pending.presence & 0x80U) != 0;
+        if ((s_ld2410_pending.presence != s_ld2410_logged_presence) ||
+            (linkBad && ((nowMs - s_ld2410_logged_ms) >= 10000UL))) {
+            s_ld2410_logged_presence = s_ld2410_pending.presence;
+            s_ld2410_logged_ms = nowMs;
+            if ((s_ld2410_pending.presence & 0x80U) != 0) {
+                if ((s_ld2410_pending.presence & 0x40U) != 0) {
+                    Serial.println("[RADAR][W] LINK-GARBAGE (cos gada na PA3, brak ramek: zly baud? TX/RX?)");
+                } else {
+                    Serial.println("[RADAR][W] LINK-BAD (cisza na PA3: zasilanie 5V? TX radaru?)");
+                }
+            } else {
+                Serial.printf("[RADAR][I] P=%c%c%c mov=%ucm/%u stat=%ucm/%u\r\n",
+                    ld2410Presence ? 'P' : '-',
+                    ld2410MovingDetected ? 'M' : '-',
+                    ld2410StationaryDetected ? 'S' : '-',
+                    ld2410MovingDistance, ld2410MovingEnergy,
+                    ld2410StationaryDistance, ld2410StationaryEnergy);
+            }
+        }
+        // Forward do GUTION (COBS) - nie blokuje RX.
+        // Maska 0x0F: bity 0-2 obecnosc + b3 OUT; b6/7 diagnostyka nie jedzie dalej.
         EsptoGuition::sendRadarStatus(
-            s_ld2410_pending.presence,
+            static_cast<uint8_t>(s_ld2410_pending.presence & 0x0FU),
             s_ld2410_pending.movDist, s_ld2410_pending.movEnergy,
             s_ld2410_pending.statDist, s_ld2410_pending.statEnergy,
-            s_ld2410_pending.detectDist);
+            s_ld2410_pending.detectDist,
+            s_ld2410_pending.movGates, s_ld2410_pending.statGates);
     }
 }
 
@@ -276,4 +324,17 @@ void STM32data_sendBrightness(uint8_t percent)
     for (int i = 0; i < 3; ++i) {
         sendFrame(kTypeBrightness, &payload, 1U);
     }
+}
+
+// STEPPER_BRIDGE: nadawca + hook (implementacja — deklaracje w STM32_Data.h).
+void STM32data_setStepperHook(STM32StepperHook_t hook)
+{
+    s_stepperHook = hook;
+}
+
+bool STM32data_sendStepperCmd(const uint8_t *payload, uint16_t len)
+{
+    if (s_stmSerial == nullptr) return false;
+    sendFrame(kTypeStepperCmd, payload, len);
+    return true;
 }

@@ -181,9 +181,17 @@ void broadcastSnapshots(unsigned long nowMs) {
 
   WeatherPayload currentWeather;
   if (buildWeatherPayload(currentWeather, nowMs)) {
+    // Zmiana MUSI obejmowac pola ENS160 (eco2/tvoc) i flagi: moment
+    // zakonczenia rozruchu czujnika (WARMUP -> OK) zmienia TYLKO gaz
+    // i flagi — bez tego ramka nie leciala i Guition siedzial na zerach
+    // az do przypadkowej zmiany temp/wilg (albo 5-min safety refresh).
+    // sampleAgeMs celowo pomijany (rosnie ciagle — spam ramkami).
     bool changed = (currentWeather.temperatureCx100 != s_lastSentWeather.temperatureCx100) ||
                   (currentWeather.humidityPctX100 != s_lastSentWeather.humidityPctX100) ||
-                  (currentWeather.pressureHpaX10 != s_lastSentWeather.pressureHpaX10);
+                  (currentWeather.pressureHpaX10 != s_lastSentWeather.pressureHpaX10) ||
+                  (currentWeather.eco2 != s_lastSentWeather.eco2) ||
+                  (currentWeather.tvoc != s_lastSentWeather.tvoc) ||
+                  (currentWeather.flags != s_lastSentWeather.flags);
     if (changed) {
       sendWeather(s_sequence.fetch_add(1, std::memory_order_relaxed));
       s_lastSentWeather = currentWeather;
@@ -532,9 +540,10 @@ void sendRadioModeState(uint8_t sequence) {
 }
 
 void sendRadarStatus(uint8_t presence, uint16_t movDist, uint8_t movEnergy,
-                     uint16_t statDist, uint8_t statEnergy, uint16_t detectDist)
+                     uint16_t statDist, uint8_t statEnergy, uint16_t detectDist,
+                     const uint8_t *movGates, const uint8_t *statGates)
 {
-    uint8_t buf[8];
+    uint8_t buf[26];
     buf[0] = presence;
     buf[1] = static_cast<uint8_t>(movDist & 0xFFU);
     buf[2] = static_cast<uint8_t>((movDist >> 8) & 0xFFU);
@@ -543,7 +552,35 @@ void sendRadarStatus(uint8_t presence, uint16_t movDist, uint8_t movEnergy,
     buf[5] = static_cast<uint8_t>((statDist >> 8) & 0xFFU);
     buf[6] = statEnergy;
     buf[7] = static_cast<uint8_t>(detectDist & 0xFFU);
+    for (uint8_t g = 0; g < 9; ++g) {
+        buf[8 + g]  = (movGates  != nullptr) ? movGates[g]  : 0;
+        buf[17 + g] = (statGates != nullptr) ? statGates[g] : 0;
+    }
     sendRawFrame(kTypeRadarStatus, nextSequence(), buf, sizeof(buf));
+}
+
+void sendStepperState(bool busy, int32_t posSteps, uint16_t targetDeg,
+                      uint16_t speed, uint16_t homeDeg, uint8_t flags,
+                      uint16_t autoCloseS)
+{
+    uint8_t buf[14];
+    buf[0] = busy ? 1 : 0;
+    const uint32_t pos = static_cast<uint32_t>(posSteps);
+    buf[1] = static_cast<uint8_t>(pos & 0xFFU);
+    buf[2] = static_cast<uint8_t>((pos >> 8) & 0xFFU);
+    buf[3] = static_cast<uint8_t>((pos >> 16) & 0xFFU);
+    buf[4] = static_cast<uint8_t>((pos >> 24) & 0xFFU);
+    buf[5] = static_cast<uint8_t>(targetDeg & 0xFFU);
+    buf[6] = static_cast<uint8_t>((targetDeg >> 8) & 0xFFU);
+    buf[7] = flags;
+    buf[8] = static_cast<uint8_t>(speed & 0xFFU);
+    buf[9] = static_cast<uint8_t>((speed >> 8) & 0xFFU);
+    buf[10] = static_cast<uint8_t>(homeDeg & 0xFFU);
+    buf[11] = static_cast<uint8_t>((homeDeg >> 8) & 0xFFU);
+    // v3: czas auto-zjazdu radaru (0xFFFF = nieznane — Guition nie adoptuje).
+    buf[12] = static_cast<uint8_t>(autoCloseS & 0xFFU);
+    buf[13] = static_cast<uint8_t>((autoCloseS >> 8) & 0xFFU);
+    sendRawFrame(kTypeStepperState, nextSequence(), buf, sizeof(buf));
 }
 
 uint8_t nextSequence() {

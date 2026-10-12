@@ -175,7 +175,7 @@ inline uint8_t encodeCalMode(bool en, uint8_t *out2) {
 }
 
 /* Payload SET_AUTOCLOSE: [0x0E][s u16 LE] = 3 B. Czas auto-zjazdu radaru
- * (presety 30/120/300/600 s); walidacja presetow po stronie STM32 —
+ * (presety 30/180/600/2700 s); walidacja presetow po stronie STM32 —
  * inna wartosc = fabryczna. Persist we flash truth + echo REF. */
 inline uint8_t encodeSetAutoClose(uint16_t seconds, uint8_t *out3) {
   out3[0] = kCmdSetAutoClose;

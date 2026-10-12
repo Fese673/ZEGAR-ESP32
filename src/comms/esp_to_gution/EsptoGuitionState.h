@@ -12,6 +12,9 @@ struct WeatherPayload {
   uint32_t sampleAgeMs = 0;
   uint8_t flags = 0;
   uint16_t tvoc = 0;
+  // Stopien kalibracji ENS160 (0=rozgrzewanie, 1=nieskalibrowane,
+  // 2=wstepnie, 3=w pelni, 0xFF=brak) — doklejany na koncu ramki 0x01.
+  uint8_t gasStage = 0xFF;
 };
 
 struct OutdoorWeatherPayload {

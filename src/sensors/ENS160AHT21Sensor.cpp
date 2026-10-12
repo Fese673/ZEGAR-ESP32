@@ -32,6 +32,9 @@ constexpr unsigned long ENS160_COMM_ERR_LOG_INTERVAL_MS = 2000UL;
 constexpr unsigned long ENS160_NO_NEW_DATA_LOG_INTERVAL_MS = 10000UL;
 constexpr unsigned long LOOP_POLL_INTERVAL_MS = ENS16X_SYSTEM_TIMING_STANDARD_MEASURE + 50UL;
 constexpr unsigned long AHT_DATA_MAX_AGE_MS = 5000UL;
+// Po 24 h ciaglej pracy ENS160 zapisuje w NVM, ze initial start-up (1 h)
+// jest ukonczony — kolejne wlaczenia maja tylko 3-minutowy warm-up.
+constexpr unsigned long ENS160_FULL_CALIB_MS = 24UL * 60UL * 60UL * 1000UL;
 // NOTE: Temperature offsets are centralized in include/TemperatureConfig.h
 
 enum Ens160RuntimeState : uint8_t {
@@ -63,6 +66,10 @@ unsigned long s_lastEns160ReinitAttemptMs = 0;
 Ens160RuntimeState s_runtimeState = ENS160_STATE_OFFLINE;
 bool s_hasGasSample = false;
 bool s_hasClimateSample = false;
+// Czy w tej sesji zasilania widzielismy flage 2 (initial start-up). Brak tej
+// flagi przy fladze 0 = NVM czujnika ma juz ukonczona kalibracje 24 h.
+bool s_sawInitStartup = false;
+uint8_t s_gasStage = 0xFF;
 int s_lastAqi = 0;
 uint16_t s_lastTvoc = 0;
 uint16_t s_lastEco2 = 0;
@@ -113,6 +120,20 @@ bool isEns160ValidityStable(uint8_t validityFlag) {
     return (s_pendingValidity == validityFlag) && (s_pendingValidityCount >= 2);
 }
 
+// Mapowanie flagi walidacji ENS160 na stopien kalibracji dla UI (patrz
+// komentarz w ENS160AHT21Screen.h). Dane pokazujemy od pierwszej sekundy,
+// sama etykieta mowi, na ile mozna im ufac.
+uint8_t computeGasStage(uint8_t validity) {
+    if (validity == 1) return 0;  // ROZGRZEWANIE (pierwsze 3 min)
+    if (validity == 2) return 1;  // NIESKALIBROWANE (initial start-up do 1 h)
+    if (validity != 0) return 0xFF;
+    // Flaga 0: jesli init start-up zakonczyl sie w TEJ sesji i minelo
+    // < 24 h ciaglej pracy — dane wstepnie skalibrowane. Inaczej NVM
+    // czujnika ma juz pelna kalibracje sprzed pierwszych 24 h.
+    if (s_sawInitStartup && millis() < ENS160_FULL_CALIB_MS) return 2;
+    return 3;
+}
+
 void logEns160Measurement(Ens160RuntimeState state) {
 #ifdef ENS160_DEBUG
     if (s_hasGasSample && s_hasClimateSample) {
@@ -156,6 +177,7 @@ void publishRuntimeData(bool forceDirty) {
     if (runtime.hasSample != hasSample) changed = true;
     if (runtime.hasGasSample != s_hasGasSample) changed = true;
     if (runtime.hasClimateSample != s_hasClimateSample) changed = true;
+    if (runtime.gasStage != s_gasStage) changed = true;
     if (strcmp(runtime.statusText, stateText) != 0) changed = true;
 
     if (!changed) {
@@ -171,6 +193,7 @@ void publishRuntimeData(bool forceDirty) {
     runtime.hasSample = hasSample;
     runtime.hasGasSample = s_hasGasSample;
     runtime.hasClimateSample = s_hasClimateSample;
+    runtime.gasStage = s_gasStage;
     strncpy(runtime.statusText, stateText, sizeof(runtime.statusText));
     runtime.statusText[sizeof(runtime.statusText) - 1] = '\0';
     runtime.lastUpdateMs = millis();
@@ -367,7 +390,15 @@ void update() {
         const uint8_t validityFlag = getENS160ValidityFlag(devStatus);
         s_runtimeState = getEns160RuntimeStateFromValidity(validityFlag);
 
-        if (s_ens160.hasNewData() && validityFlag == 0) {
+        if (validityFlag == 2) {
+            s_sawInitStartup = true;
+        }
+        s_gasStage = computeGasStage(validityFlag);
+
+        // Przyjmujemy dane dla flag 0/1/2 — tylko flaga 3 (no valid output)
+        // jest odrzucana. Dzieki temu UI pokazuje wartosci od pierwszej
+        // sekundy z etykieta stopnia kalibracji zamiast czekac 1 h.
+        if (s_ens160.hasNewData() && validityFlag != 3) {
             s_lastAqi = (int)(uint8_t)s_ens160.getAirQualityIndex_UBA();
             s_lastTvoc = (uint16_t)s_ens160.getTvoc();
             s_lastEco2 = (uint16_t)s_ens160.getEco2();

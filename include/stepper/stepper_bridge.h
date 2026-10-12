@@ -71,7 +71,7 @@ bool issueSetTarget(uint16_t deg);
 // (en=0 gasi; brak odswiezen = auto-timeout po stronie STM32).
 // Tor priorytetowy jak wyzej, bez persistencji.
 bool issueCalMode(bool en);
-// Czas auto-zjazdu radaru (Guition): presety 30/120/300/600 s; STM32
+// Czas auto-zjazdu radaru (Guition): presety 30/180/600/2700 s; STM32
 // waliduje i zapisuje we flash, echo wraca REF. Tor priorytetowy.
 bool issueSetAutoClose(uint16_t seconds);
 // Czulosc OUT radaru (Guition, ekran radaru): 0=SREDNIA, 1=WYSOKA,

@@ -14,7 +14,8 @@ RuntimeData runtimeData = {
   0,
   false,
   false,
-  false
+  false,
+  0xFF
 };
 
 bool screenDirty = true;
@@ -32,6 +33,7 @@ void resetRuntimeData() {
   runtimeData.hasSample = false;
   runtimeData.hasGasSample = false;
   runtimeData.hasClimateSample = false;
+  runtimeData.gasStage = 0xFF;
   screenDirty = true;
 }
 

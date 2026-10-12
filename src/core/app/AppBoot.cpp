@@ -202,6 +202,13 @@ void initPersistenceAndConfig(RuntimeContext& ctx) {
   appSettings.buzzerEnabled = s_prefs.getBool("buzzerEnabled", true);
   appSettings.showEpicIntro = s_prefs.getBool("epicIntro", true);
   uiState.settingsBootIntroMenu.index = appSettings.showEpicIntro ? 0 : 1;
+  /* MQTT: appSettings jest zrodlem prawdy dla runtime (AppLoop) i echa 0x04
+   * do Guitiona — musi byc zaladowane tutaj, nie tylko do ctx. */
+  appSettings.mqttEnabled = s_prefs.getBool("mqttEnabled", true);
+  uiState.settingsMqttMenu.index = appSettings.mqttEnabled ? 0 : 1;
+  /* Melodia alarmu: przywroc do appSettings (alarmy i echo czytaja to pole;
+   * ctx.settingsAlarmMelodyIndex w initComms to tylko kursor UI). */
+  appSettings.alarmMelodyIndex = AlarmMelodyPrefs::loadIndex(s_prefs);
   
   bool pmsEnabled = s_prefs.getBool("pmsEnabled", true);
   PMS5003Sensor::setEnabled(pmsEnabled);
@@ -375,7 +382,7 @@ void initComms(RuntimeContext& ctx) {
   ctx.mqttEnabled = s_prefs.getBool("mqttEnabled", true);
   ctx.settingsMqttMenuIndex = ctx.mqttEnabled ? 0 : 1;
 
-  const uint16_t ntpSyncMin = s_prefs.getUShort("ntpSyncMin", 60);
+  const uint16_t ntpSyncMin = s_prefs.getUShort("ntpSyncMin", 30);
   WiFiSync::setPeriodicSyncIntervalMinutes(ntpSyncMin);
 
   AlarmRuntime::loadAllAlarms(s_prefs);

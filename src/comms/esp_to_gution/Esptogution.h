@@ -45,7 +45,7 @@ constexpr uint8_t kTypeStepperState = 0x3B; // Z -> G: stan [busy][pos i32 LE][t
 //   0x05 CAL_ZERO                                — zapisz biezacy pos jako 0 kalibracji
 //   0x06 CAL_SPAN                                — zapisz rozpietosc 0..90 + MOVE_ABS 0
 //   0x0A CAL_MODE   [en]                         — wstrzymaj automat radaru na czas kalibracji
-//   0x0B SET_AUTOCLOSE [s u16 LE]                — czas auto-zjazdu radaru (presety 30/120/300/600)
+//   0x0B SET_AUTOCLOSE [s u16 LE]                — czas auto-zjazdu radaru (presety 30/180/600/2700)
 //   0x0C SET_RADAR_SENS [kod]                    — czulosc OUT radaru (0=SREDNIA, 1=WYSOKA, 2=MALA)
 // 0x3B flagi: bit0 = kalibracja (calOk), bit1 = automat radaru (radarEn),
 //             bity 2-3 = czulosc OUT radaru (0/1/2).
@@ -59,7 +59,7 @@ constexpr uint8_t kStepperSubSetHome = 0x07; // [deg u16 LE] cel powrotu po rese
 constexpr uint8_t kStepperSubSetRadar = 0x08; // [en] automat LD2410C (flash STM32)
 constexpr uint8_t kStepperSubSetTarget = 0x09; // [deg u16 LE] wybrany kat (NVS UI, bez ruchu)
 constexpr uint8_t kStepperSubCalMode = 0x0A;  // [en] wstrzymaj automat radaru na czas kalibracji
-constexpr uint8_t kStepperSubSetAutoClose = 0x0B; // [s u16 LE] czas auto-zjazdu radaru (presety)
+constexpr uint8_t kStepperSubSetAutoClose = 0x0B; // [s u16 LE] czas auto-zjazdu radaru (presety 30/180/600/2700)
 constexpr uint8_t kStepperSubSetRadarSens = 0x0C; // [kod] czulosc OUT radaru 0/1/2
 constexpr uint8_t kStepperFlagCalOk = 0x01;
 constexpr uint8_t kStepperFlagRadarEn = 0x02;

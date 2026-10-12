@@ -132,7 +132,10 @@ static void onSensorRead(const Event&) {
   ENS160AHT21Sensor::update();
   BMP280Sensor::update();
 
-  NetworkOrchestrator::setMqttEnabled(s_ctx.mqttEnabled);
+  // Zrodlo prawdy = AppSettings (ladowane z NVS + zmieniane w locie przez
+  // Guitiona i menu ZEGARA). s_ctx to snapshot z bootu — nie uzywamy go tu,
+  // bo zamrazal przelacznik MQTT do wartosci startowej.
+  NetworkOrchestrator::setMqttEnabled(AppSettings::state().mqttEnabled);
   const uint32_t netStartUs = micros();
   NetworkOrchestrator::update();
   LoopBaselineTelemetry::recordNetworkUpdateUs(static_cast<uint32_t>(micros() - netStartUs));
@@ -275,7 +278,7 @@ static void onDiagnostics(const Event&) {
 // ─── Handler: EV_MQTT_PUBLISH (5000ms) ────────────────────────────────
 
 static void onMqttPublish(const Event&) {
-  if (!s_ctx.mqttEnabled || !NetworkOrchestrator::isMqttInitialized()) return;
+  if (!AppSettings::state().mqttEnabled || !NetworkOrchestrator::isMqttInitialized()) return;
 
   const uint32_t startUs = micros();
   TelemetryComposer::Sample sample;

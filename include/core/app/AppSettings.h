@@ -11,7 +11,7 @@ struct State {
   bool showEpicIntro = true;
   int homeOverlaySeconds = 7;
   int homeUiProfile = 0;
-  int ntpSyncMinutes = 60;
+  int ntpSyncMinutes = 30;
   int alarmMelodyIndex = 0;
   /* Etap 2: jasnosc 7-seg (0..100), forward do STM32 jako BRT:XX.
    * 100 = pelna, 0 = zgaszone. Persistence: NVS "segBrightness". */

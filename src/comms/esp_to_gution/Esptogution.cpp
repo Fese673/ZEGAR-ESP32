@@ -65,6 +65,7 @@ void sendWeather(uint8_t sequence) {
   appendU32(cursor, payload.sampleAgeMs);
   appendU8(cursor, payload.flags);
   appendU16(cursor, payload.tvoc);
+  appendU8(cursor, payload.gasStage);
 
   sendRawFrame(kTypeIndoorWeather, sequence, buffer, static_cast<uint16_t>(cursor - buffer));
 }
@@ -191,6 +192,7 @@ void broadcastSnapshots(unsigned long nowMs) {
                   (currentWeather.pressureHpaX10 != s_lastSentWeather.pressureHpaX10) ||
                   (currentWeather.eco2 != s_lastSentWeather.eco2) ||
                   (currentWeather.tvoc != s_lastSentWeather.tvoc) ||
+                  (currentWeather.gasStage != s_lastSentWeather.gasStage) ||
                   (currentWeather.flags != s_lastSentWeather.flags);
     if (changed) {
       sendWeather(s_sequence.fetch_add(1, std::memory_order_relaxed));

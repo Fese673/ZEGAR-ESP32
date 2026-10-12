@@ -1,7 +1,9 @@
 #include "WiFiSync.h"
 
 #include <atomic>
+#include <esp_sntp.h>
 #include <esp_system.h>
+#include <sys/time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <WiFi.h>
@@ -23,7 +25,7 @@ constexpr char kDefaultNtpServer[] = "pool.ntp.org";
 constexpr char kPolandTimezone[] = "CET-1CEST,M3.5.0,M10.5.0/3";
 constexpr unsigned long kWifiConnectTimeoutMs = 15000UL;
 constexpr unsigned long kNtpTimeoutMs = 10000UL;
-constexpr unsigned long kDefaultPeriodicSyncIntervalMs = 3600000UL;
+constexpr unsigned long kDefaultPeriodicSyncIntervalMs = 1800000UL;
 constexpr uint16_t kMinPeriodicSyncMinutes = 10;
 constexpr uint16_t kMaxPeriodicSyncMinutes = 360;
 constexpr uint8_t kSsidCopySize = 33;
@@ -373,10 +375,23 @@ SyncError getLastError() {
   return lastError;
 }
 
+// Ustawiany przez callback SNTP (kontekst tcpip) po KAZDYM realnym pakiecie
+// NTP. Konsumowany w update() — dopiero wtedy robimy Clock::set + zapis RTC.
+static std::atomic<bool> s_ntpSyncEvent{false};
+
+static void sntpSyncNotificationCb(struct timeval *tv) {
+  (void)tv;
+  s_ntpSyncEvent.store(true, std::memory_order_release);
+}
+
 static void ensureSntpConfigured() {
   if (sntpConfigured) return;
   ensureTzSet();
   LOG_I(TAG, "action=configTzTime server=%s", ntpServerCopy[0] != '\0' ? ntpServerCopy : kDefaultNtpServer);
+  // Callback + interwal PRZED startem SNTP, aby zlapac kazdy realny pakiet
+  // (takze odpytywane wlasnym harmonogramem klienta lwip).
+  sntp_set_time_sync_notification_cb(sntpSyncNotificationCb);
+  sntp_set_sync_interval(periodicSyncIntervalMs);
   configTzTime(kPolandTimezone, ntpServerCopy[0] != '\0' ? ntpServerCopy : kDefaultNtpServer);
   sntpConfigured = true;
 }
@@ -385,8 +400,55 @@ static void scheduleBackoff(unsigned long now, uint8_t failures) {
   applyBackoff(now, failures);
 }
 
+// Domkniecie REALNEGO sync NTP: zegar systemowy zostal juz ustawiony przez
+// lwip, tu robimy Clock::set, bookkeeping i onDoneCb() -> zapis DS3231.
+static void completeTimeSync(unsigned long now) {
+  ensureTzSet();
+
+  struct tm timeinfo = {};
+  const bool clockUpdated = getLocalTime(&timeinfo, 0);
+  if (clockUpdated) {
+    Clock::set(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    Clock::setLastTick(millis());
+  } else {
+    LOG_W(TAG, "NTP synced but getLocalTime failed action=clock_kept");
+  }
+
+  lastNtpSyncMillis = now;
+  ntpSynced = true;
+  lastError = SyncError::None;
+  ntpFailureCount = 0;
+  timeSyncRequested = false;
+  lastPeriodicSync = now;
+  state = SyncState::Idle;
+
+  LOG_I(TAG,
+        "NTP synced time=%02d:%02d:%02d dst=%d",
+        timeinfo.tm_hour,
+        timeinfo.tm_min,
+        timeinfo.tm_sec,
+        timeinfo.tm_isdst);
+#if defined(ENABLE_WIFI_DIAGNOSTICS)
+  LOG_D(TAG, "epoch=%lu", (unsigned long)time(nullptr));
+#endif
+
+  if (onDoneCb) onDoneCb();
+
+#if defined(METEO_ENABLED)
+  meteoSync::triggerFetch();
+#endif
+}
+
 void update() {
   unsigned long now = millis();
+
+  // Realny pakiet NTP odebrany — obsluz za KAZDYM razem, niezaleznie od
+  // naszej maszyny stanow (wczesniej "sukces" wykrywano przez getLocalTime(),
+  // ktore zwracalo true natychmiast ze starego zegara, bez pakietu).
+  if (s_ntpSyncEvent.exchange(false, std::memory_order_acq_rel)) {
+    completeTimeSync(now);
+    return;
+  }
 
   if (ModeManager::isWifiOn() && WiFi.status() == WL_CONNECTED && state == SyncState::Idle) {
     if (now - lastPeriodicSync >= periodicSyncIntervalMs) {
@@ -431,6 +493,9 @@ void update() {
       state = SyncState::TimeSyncing;
       syncStartMillis = now;
       ensureSntpConfigured();
+      // Wymus swiezy pakiet NTP od razu (bez tego czekalibysmy na wlasny
+      // harmonogram klienta lwip, a "sukces" i tak byl falszywy).
+      sntp_restart();
       LOG_I(TAG, "Time syncing started");
       return;
     }
@@ -450,6 +515,7 @@ void update() {
         state = SyncState::TimeSyncing;
         syncStartMillis = now;
         ensureSntpConfigured();
+        sntp_restart();
       } else {
         state = SyncState::Idle;
         lastPeriodicSync = now;
@@ -482,38 +548,7 @@ void update() {
   }
 
   if (state == SyncState::TimeSyncing) {
-    ensureTzSet();
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 10)) {
-      Clock::set(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-      Clock::setLastTick(millis());
-
-      lastNtpSyncMillis = now;
-      ntpSynced = true;
-      lastError = SyncError::None;
-      ntpFailureCount = 0;
-      timeSyncRequested = false;
-      lastPeriodicSync = now;
-
-       LOG_I(TAG,
-         "NTP synced time=%02d:%02d:%02d dst=%d",
-         timeinfo.tm_hour,
-         timeinfo.tm_min,
-         timeinfo.tm_sec,
-         timeinfo.tm_isdst);
-#if defined(ENABLE_WIFI_DIAGNOSTICS)
-      LOG_D(TAG, "epoch=%lu", (unsigned long)time(nullptr));
-#endif
-
-      state = SyncState::Idle;
-      if (onDoneCb) onDoneCb();
-
-#if defined(METEO_ENABLED)
-      meteoSync::triggerFetch();
-#endif
-      return;
-    }
-
+    // Sukces obsluguje completeTimeSync() z gory update() po realnym pakiecie.
     if (now - syncStartMillis >= kNtpTimeoutMs) {
       lastError = SyncError::Ntp;
       ntpFailureCount++;
@@ -543,6 +578,12 @@ void setPeriodicSyncIntervalMinutes(uint16_t minutes) {
   if (minutes < kMinPeriodicSyncMinutes) minutes = kMinPeriodicSyncMinutes;
   if (minutes > kMaxPeriodicSyncMinutes) minutes = kMaxPeriodicSyncMinutes;
   periodicSyncIntervalMs = (unsigned long)minutes * 60000UL;
+
+  // Zastosuj nowy interwal od razu u dzialajacego klienta SNTP.
+  if (sntpConfigured) {
+    sntp_set_sync_interval(periodicSyncIntervalMs);
+    sntp_restart();
+  }
 }
 
 uint16_t getPeriodicSyncIntervalMinutes() {

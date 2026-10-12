@@ -7,6 +7,8 @@
 #include <WiFi.h>
 
 #include "AlarmRuntime.h"
+#include "AlarmMelodies.h"
+#include "AlarmMelodyPrefs.h"
 #include "AppLog.h"
 #include "AppSettings.h"
 #include "core/telemetry/Dbg7Seg.h"
@@ -167,6 +169,7 @@ void buildSyntheticWeatherPayload(WeatherPayload &out) {
   out.tvoc = s_weatherState.tvoc;
   out.sampleAgeMs = random(0, 5000);
   out.flags = 0xC7U;  // bits: temp|hum|press|eco2|tvoc|ens160
+  out.gasStage = 3U;  // syntetyk = dane "w pelni skalibrowane"
 }
 
 void buildSyntheticPmsPayload(PmsPayload &out) {
@@ -291,6 +294,9 @@ bool buildWeatherPayload(WeatherPayload &out, unsigned long nowMs) {
   if (BMP280Screen::runtimeData.hasPressure) out.flags |= 0x20U;
   if (eco2Valid) out.flags |= 0x40U;
   if (ENS160AHT21Screen::runtimeData.hasGasSample) out.flags |= 0x80U;
+  // Stopien kalibracji gazow dla UI Guitiona (bajt na koncu ramki 0x01).
+  out.gasStage = ENS160AHT21Screen::runtimeData.hasGasSample
+    ? ENS160AHT21Screen::runtimeData.gasStage : 0xFFU;
 
   return true;
 }
@@ -470,6 +476,10 @@ void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength) {
 
     if (payloadLength >= 6U) {
       int newMelodyIndex = payload[5];
+      /* Obrona: indeks spoza listy (np. rozjazd wersji UI) = melodia 0. */
+      if (newMelodyIndex < 0 || newMelodyIndex >= (int)AlarmMelodies::kCount) {
+        newMelodyIndex = 0;
+      }
       appSettings.alarmMelodyIndex = newMelodyIndex;
       uiState.settingsAlarmMelodyMenu.index = newMelodyIndex;
       s_pendingSettings.alarmMelodyIndex = newMelodyIndex;
@@ -561,6 +571,17 @@ void music_settings_load() {
 
 void musicSettingsInit() {
     music_settings_load();
+    /* Seed pending z appSettings: pierwszy flush (po zmianie z Guitiona) nie
+     * moze nadpisac NVS zerami z niezainicjalizowanego s_pendingSettings.
+     * Kolejnosc: wolane PO zaladowaniu appSettings w initPersistenceAndConfig. */
+    const AppSettings::State& s = AppSettings::state();
+    s_pendingSettings.buzzerEnabled = s.buzzerEnabled;
+    s_pendingSettings.mqttEnabled = s.mqttEnabled;
+    s_pendingSettings.touchTestEnabled = s.touchTestEnabled;
+    s_pendingSettings.backgroundMusicEnabled = s.backgroundMusicEnabled;
+    s_pendingSettings.pmsEnabled = PMS5003Sensor::isEnabled();
+    s_pendingSettings.alarmMelodyIndex = s.alarmMelodyIndex;
+    s_pendingSettings.sevenSegBrightness = s.sevenSegBrightness;
 }
 void setPendingSevenSegBrightness(uint8_t value) {
     s_pendingSettings.sevenSegBrightness = value;
@@ -577,7 +598,9 @@ void musicSettingsFlush() {
     prefs.putBool("touchTest", s_pendingSettings.touchTestEnabled);
     prefs.putBool("menuMusic", s_pendingSettings.backgroundMusicEnabled);
     prefs.putBool("pmsEnabled", s_pendingSettings.pmsEnabled);
-    prefs.putUShort("alarmMelody", (uint16_t)s_pendingSettings.alarmMelodyIndex);
+    /* Melodia: zapis DWOMA kluczami (id + indeks) jak AlarmMelodyPrefs —
+     * bez tego loadIndex() czytalby stary "alarmMelodyId" po zmianie z Guitiona. */
+    AlarmMelodyPrefs::saveSelection(prefs, s_pendingSettings.alarmMelodyIndex);
     /* Etap 2: jasnosc 7-seg (0..100). */
     prefs.putUChar("segBrightness", s_pendingSettings.sevenSegBrightness);
     prefs.end();

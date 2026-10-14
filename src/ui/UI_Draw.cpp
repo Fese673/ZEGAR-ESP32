@@ -7,6 +7,7 @@
 #include "AudioBT.h"
 #include "ClockService.h"
 #include "LCDMirror.h"
+#include "lcdtext.h"
 #include "ModeManager.h"
 #include "RadioModeSwitch.h"
 #include "RtcSyncService.h"
@@ -378,15 +379,13 @@ static void clearRow(uint8_t row) {
 }
 
 static void lcdPrintCentered(uint8_t row, const char* text) {
-  int len = (int)strlen(text);
+  int len = lcdVisibleLength(text);
   if (len > SCREEN_WIDTH) len = SCREEN_WIDTH;
   int pad = (SCREEN_WIDTH - len) / 2;
 
   clearRow(row);
   LCD_SET((uint8_t)pad, row);
-  for (int i = 0; i < len; ++i) {
-    LCD_WRITE((uint8_t)text[i]);
-  }
+  LCD_PRINT(text);
 }
 
 static void lcdPrintCentered(uint8_t row, const __FlashStringHelper* text) {
@@ -400,7 +399,7 @@ static void lcdPrintCentered(uint8_t row, const __FlashStringHelper* text) {
 }
 
 static void lcdPrintCenteredWithAlarmIcon(uint8_t row, const char* text, bool showIcon) {
-  const int textLen = (int)strlen(text);
+  const int textLen = lcdVisibleLength(text);
   const int totalLen = textLen + (showIcon ? 1 : 0);
   const int pad = (SCREEN_WIDTH - min(totalLen, (int)SCREEN_WIDTH)) / 2;
 
@@ -413,7 +412,7 @@ static void lcdPrintCenteredWithAlarmIcon(uint8_t row, const char* text, bool sh
 }
 
 static void lcdPrintCenteredWithIcons(uint8_t row, const char* text, const uint8_t* icons, uint8_t iconCount) {
-  const int textLen = (int)strlen(text);
+  const int textLen = lcdVisibleLength(text);
   const int totalLen = textLen + (int)iconCount;
   const int pad = (SCREEN_WIDTH - min(totalLen, (int)SCREEN_WIDTH)) / 2;
 
@@ -426,7 +425,7 @@ static void lcdPrintCenteredWithIcons(uint8_t row, const char* text, const uint8
 }
 
 static void lcdPrintCenteredWithIconsAndSuffix(uint8_t row, const char* text, const uint8_t* prefixIcons, uint8_t prefixIconCount, int suffixIcon) {
-  const int textLen = (int)strlen(text);
+  const int textLen = lcdVisibleLength(text);
   const int totalLen = textLen + (int)prefixIconCount + (suffixIcon >= 0 ? 1 : 0);
   const int pad = (SCREEN_WIDTH - min(totalLen, (int)SCREEN_WIDTH)) / 2;
 
@@ -464,7 +463,7 @@ static bool isAnyAlarmArmed() {
 // --- Ekran główny ---
 static const char* const polishMonths[] PROGMEM = {
     "STY", "LUT", "MAR", "KWI", "MAJ", "CZE",
-    "LIP", "SIE", "WRZ", "PAŹ", "LIS", "GRU",
+    "LIP", "SIE", "WRZ", "PAZ", "LIS", "GRU",
 };
 
 static void padRightTo20(char* line) {

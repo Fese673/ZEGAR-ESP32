@@ -6,6 +6,7 @@
 
 #include "AppLog.h"
 #include "I2C_bus_shared.h"
+#include "lcdtext.h"
 extern LiquidCrystal_I2C lcd;
 
 constexpr uint8_t LCD_COLS = 20;
@@ -17,6 +18,7 @@ public:
   void begin() { clear(); }
 
   void clear() {
+    folder.reset();
     for (uint8_t r = 0; r < LCD_ROWS; ++r) {
       for (uint8_t c = 0; c < LCD_COLS; ++c) {
         frame[r][c] = ' ';
@@ -28,6 +30,7 @@ public:
   }
 
   void clearRow(uint8_t row) {
+    folder.reset();
     if (row >= LCD_ROWS) {
       return;
     }
@@ -38,17 +41,16 @@ public:
   }
 
   void setCursor(uint8_t col, uint8_t row) {
+    folder.reset();
     cursorX = (col < LCD_COLS) ? col : LCD_COLS;
     cursorY = (row < LCD_ROWS) ? row : LCD_ROWS;
   }
 
   size_t write(uint8_t ch) override {
-    if (cursorY < LCD_ROWS && cursorX < LCD_COLS) {
-      frame[cursorY][cursorX] = ch;
-      dirty = true;
-    }
-    if (cursorX < LCD_COLS) {
-      ++cursorX;
+    uint8_t folded[2];
+    const uint8_t count = folder.feed(ch, folded);
+    for (uint8_t i = 0; i < count; ++i) {
+      writeCell(folded[i]);
     }
     return 1;
   }
@@ -155,6 +157,17 @@ public:
 #endif
 
 private:
+  void writeCell(uint8_t ch) {
+    if (cursorY < LCD_ROWS && cursorX < LCD_COLS) {
+      frame[cursorY][cursorX] = ch;
+      dirty = true;
+    }
+    if (cursorX < LCD_COLS) {
+      ++cursorX;
+    }
+  }
+
+  LcdUtf8Folder folder;
   uint8_t frame[LCD_ROWS][LCD_COLS] = {};
   uint8_t shadow[LCD_ROWS][LCD_COLS] = {};
   uint8_t cursorX = 0;
@@ -185,6 +198,7 @@ public:
   void begin() { clear(); }
 
   void clear() {
+    folder.reset();
     for (int r = 0; r < 4; r++) {
       for (int c = 0; c < 20; c++) buf[r][c] = ' ';
       buf[r][20] = '\0';
@@ -193,6 +207,7 @@ public:
   }
 
   void clearRow(uint8_t row) {
+    folder.reset();
     if (row >= 4) {
       return;
     }
@@ -200,16 +215,16 @@ public:
   }
 
   void setCursor(uint8_t col, uint8_t row) {
+    folder.reset();
     x = col; y = row;
   }
 
   size_t write(uint8_t ch) override {
-    if (y < 4 && x < 20) {
-      char out = (ch >= 32) ? (char)ch : '?';
-      if (ch == 0) out = '*';
-      buf[y][x] = out;
+    uint8_t folded[2];
+    const uint8_t count = folder.feed(ch, folded);
+    for (uint8_t i = 0; i < count; ++i) {
+      writeCell(folded[i]);
     }
-    if (x < 20) x++;
     return 1;
   }
 
@@ -223,6 +238,9 @@ public:
         if (ch == 0xDF) {
           const uint8_t deg[] = {0xC2, 0xB0}; // UTF-8 degree sign
           Serial.write(deg, sizeof(deg));
+        } else if (ch == 0xE4) {
+          const uint8_t micro[] = {0xC2, 0xB5}; // UTF-8 micro sign
+          Serial.write(micro, sizeof(micro));
         } else if (ch >= 32 && ch < 127) {
           Serial.write(ch);
         } else {
@@ -235,6 +253,16 @@ public:
   }
 
 private:
+  void writeCell(uint8_t ch) {
+    if (y < 4 && x < 20) {
+      char out = (ch >= 32) ? (char)ch : '?';
+      if (ch == 0) out = '*';
+      buf[y][x] = out;
+    }
+    if (x < 20) x++;
+  }
+
+  LcdUtf8Folder folder;
   char buf[4][21];
   uint8_t x = 0, y = 0;
 };

@@ -1,5 +1,20 @@
 # Archiwum Błędów - ZEGAR-ESP32
 ---
+### [ID: ERR_061] | LCD_UTF8_GARBAGE | IMPACT: MEDIUM
+**Files:** `[include/display/lcdtext.h, include/display/LCDMirror.h, src/ui/UI_Draw.cpp]`
+
+**PROBLEM:** Tekst UTF-8 wysyłany do LCD 20x4 (HD44780, ROM A00) renderował się jako krzaki i rozjeżdżał układ wiersza. Jedyny jawny przypadek w kodzie: `polishMonths[]` w `UI_Draw.cpp` zawierał `"PAŹ"` (bajty `0x50 0x41 0xC5 0xB9`), przez co październik zajmował 4 komórki zamiast 3 (`0xC5` i `0xB9` to nieznane glify ROM), a centrowanie liczone z `strlen()` było przesunięte. Każdy przyszły string źródłowy/dynamiczny z diakrytykami (pogoda, statusy, konfiguracja) powtórzyłby ten błąd — nie istniał żaden helper ASCII.
+
+**CAUSE:** `LcdFrameBuffer20x4::write()` i `LcdMirror20x4::write()` przyjmowały surowe bajty bez żadnej konwersji; `lcdPrintCentered()` centrował po długości bajtowej, nie po liczbie widocznych komórek LCD.
+
+**LOGIC_CHANGE:**
+- **Nowy** `include/display/lcdtext.h`: `LcdUtf8Folder` — stanowy folder UTF-8 → HD44780. ASCII i celowe surowe bajty ROM `0xDF` (°) / `0xE4` (µ) przechodzą bez zmian; polskie diakrytyki (ą/ć/ę/ł/ń/ó/ś/ź/ż + uppercase) → odpowiedniki ASCII; UTF-8 ° / µ → glify ROM `0xDF`/`0xE4`; Latin-1 i typografia (`–/—`, cudzysłowy, `…`) → ASCII; emoji/nieznane → `?` (nigdy śmieci). Dodatkowo `lcdVisibleLength()` — liczba komórek LCD (byty continuation UTF-8 pomijane).
+- `LCDMirror.h`: oba sinki (`lcdFrame`, `lcdMirror`) przepuszczają każdy bajt przez folder w `write()`; stan folderu resetowany w `clear()`/`clearRow()`/`setCursor()`. `dumpUART()` renderuje teraz `0xE4` jako UTF-8 µ (wcześniej `?`).
+- `UI_Draw.cpp`: `"PAŹ"` → `"PAZ"` (kanoniczne ASCII w źródle — folder zostaje jako siatka bezpieczeństwa), `lcdPrintCentered()` i warianty z ikonami liczą szerokość przez `lcdVisibleLength()`.
+- Zysk uboczny: zero regresji dla ścieżek wskaźnikowych — folder nie zjada bajtów < 0x80, więc ikony CGRAM (sloty 0-7) i `\xDF`/`\xE4` działają jak dotychczas.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS (RAM 23.5%, Flash 69.4%). Weryfikacja śladu: monitor UART (`UART_LCD_MIRROR=1`) — wiersz "PAZ" bez `?`, `°C` i `µg/m3` nadal poprawne. Uwaga sprzętowa: potwierdzić na docelowym LCD, że `°`/`µ` renderują się z ROM A00 jak dotąd.
+---
 ### [ID: ERR_058] | SEVEN_SEG_DOUBLE_SPI | IMPACT: LOW
 **Files:** `[UI_Draw.cpp]`
 

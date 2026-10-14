@@ -372,9 +372,12 @@ void STM32data_update()
             }
         }
         // Forward do GUTION (COBS) - nie blokuje RX.
-        // Maska 0x0F: bity 0-2 obecnosc + b3 OUT; b6/7 diagnostyka nie jedzie dalej.
+        // Maska 0x8F: bity 0-2 obecnosc + b3 OUT + b7 LINK-BAD. Guition
+        // uzywa b7 do statusu OFFLINE/"---" (HMI nie moze zamarznac na
+        // starych danych, a ramka przycisku nie swieci zielono bez linku).
+        // b6 (GARBAGE) zostaje lokalnie - HMI go nie potrzebuje.
         EsptoGuition::sendRadarStatus(
-            static_cast<uint8_t>(s_ld2410_pending.presence & 0x0FU),
+            static_cast<uint8_t>(s_ld2410_pending.presence & 0x8FU),
             s_ld2410_pending.movDist, s_ld2410_pending.movEnergy,
             s_ld2410_pending.statDist, s_ld2410_pending.statEnergy,
             s_ld2410_pending.detectDist,

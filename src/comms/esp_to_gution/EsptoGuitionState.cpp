@@ -493,7 +493,7 @@ void handleReceivedSettings(const uint8_t* payload, uint16_t payloadLength) {
       if (newBrightness > 100U) newBrightness = 100U;
       appSettings.sevenSegBrightness = newBrightness;
       s_pendingSettings.sevenSegBrightness = newBrightness;
-      /* Forward do STM32 przez COBS+CRC16 (EspSoftwareSerial @ 9600 baud).
+      /* Forward do STM32 przez COBS+CRC16 (EspSoftwareSerial @ 19200 baud).
        * STM32 w ramce 0xB0 odbiera jasnosc i ustawia PWM na PA6. */
       DBG_7SEG_LOG("parsed brightness=%u (raw=0x%02X) -> STM32", (unsigned)newBrightness, (unsigned)payload[6]);
       STM32data_sendBrightness(newBrightness);

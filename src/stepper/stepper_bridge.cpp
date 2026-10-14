@@ -67,7 +67,7 @@ namespace {
 constexpr const char *kTag = "STEPPER";
 constexpr uint8_t kMaxLinesPerUpdate = 8;
 constexpr uint8_t kLineBufSize = 64;
-constexpr uint32_t kTxMinGapMs = 100;     // max 10 ramek/s na 9600
+constexpr uint32_t kTxMinGapMs = 100;     // max 10 ramek/s (ochrona kolejki STM32)
 constexpr uint32_t kStatusTimeoutMs = 500;
 constexpr uint8_t kQueueDepth = 4;        // FIFO ramek (STOP omija kolejkę)
 

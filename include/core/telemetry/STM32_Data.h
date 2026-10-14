@@ -1,7 +1,7 @@
 /*
  * STM32_Data.h — komunikacja z STM32 (BPM / SpO2 / PPG / Brightness)
  *
- * Kanał: EspSoftwareSerial na GPIO16 (RX) / GPIO17 (TX), 9600 baud.
+ * Kanał: EspSoftwareSerial na GPIO16 (RX) / GPIO17 (TX), 19200 baud.
  * (SoftwareSerial — Serial2 jest zajęty przez Guition, Serial1 przez PMS5003.)
  * Protokół: COBS + CRC-16-CCITT (taki sam jak ZEGAR↔GUTION).
  *
@@ -22,7 +22,7 @@
 /*--- Dane od STM32 (aktualizowane przez STM32data_update) ---*/
 extern int     bpmNumber;        // beats per minute
 extern int     spo2Number;       // SpO2 (%)
-extern bool    stmDataUpdated;   // true gdy pojawiły się nowe wartości
+extern bool    stmDataUpdated;   // true gdy przyszla ramka STM32 (heartbeat linku: PPG/BPM)
 extern int16_t stm32PpgDiff;     // ostatnia wartość PPG diff
 
 /*--- LD2410C radar (0xA3) ---*/
@@ -40,8 +40,8 @@ extern uint32_t ld2410LastFrameMs;
 /*--- PPG stream aktywny (true jeśli ramki 0xA0 odbierane są regularnie) ---*/
 extern bool stm32PpgActive;
 
-/*--- Inicjalizacja (setup). Otwiera EspSoftwareSerial na 9600 baud. ---*/
-void STM32data_begin(int rxPin = 16, int txPin = 17, uint32_t baudRate = 9600UL);
+/*--- Inicjalizacja (setup). Otwiera EspSoftwareSerial na 19200 baud. ---*/
+void STM32data_begin(int rxPin = 16, int txPin = 17, uint32_t baudRate = 19200UL);
 
 /*--- Obsługa odbioru (wywoływać cyklicznie z loop()). ---*/
 void STM32data_update();

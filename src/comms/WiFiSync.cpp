@@ -76,6 +76,56 @@ static void ensureTzSet() {
 static void (*onStartCb)() = nullptr;
 static void (*onDoneCb)() = nullptr;
 
+#if defined(ENABLE_WIFI_DIAGNOSTICS)
+// Sonda DNS/TCP NIE moze biegac w tasku zdarzen sieci (WiFi.onEvent) ani w
+// petli glownej: hostByName()/connect() potrafia blokowac kilka sekund.
+// Event tylko zleca (flaga), a krotkozyjacy task niskiego priorytetu wykonuje
+// sonde poza krytycznymi sciezkami (event task i loop pozostaja responsywne).
+constexpr uint32_t kNetProbeTaskStackBytes = 5120;
+static std::atomic<bool> s_connectivityProbeRequested{false};
+static std::atomic<bool> s_connectivityProbeRunning{false};
+
+static void connectivityProbeTask(void*) {
+  IPAddress resolved;
+  if (WiFi.hostByName("open-meteo.com", resolved)) {
+    LOG_D(TAG, "DNS=OK open-meteo.com -> %d.%d.%d.%d", resolved[0], resolved[1], resolved[2], resolved[3]);
+  } else {
+    LOG_W(TAG, "DNS=FAIL open-meteo.com");
+  }
+
+  WiFiClient probe;
+  if (probe.connect("1.1.1.1", 80)) {
+    LOG_D(TAG, "TCP=OK 1.1.1.1:80");
+    probe.stop();
+  } else {
+    LOG_W(TAG, "TCP=FAIL 1.1.1.1:80");
+  }
+
+  s_connectivityProbeRunning.store(false, std::memory_order_release);
+  vTaskDelete(nullptr);
+}
+
+static void maybeStartConnectivityProbe() {
+  if (!s_connectivityProbeRequested.load(std::memory_order_acquire)) {
+    return;
+  }
+  if (s_connectivityProbeRunning.load(std::memory_order_acquire)) {
+    return;
+  }
+  if (!ModeManager::isWifiOn() || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  s_connectivityProbeRequested.store(false, std::memory_order_release);
+  s_connectivityProbeRunning.store(true, std::memory_order_release);
+
+  if (xTaskCreate(connectivityProbeTask, "netProbe", kNetProbeTaskStackBytes, nullptr, 1, nullptr) != pdPASS) {
+    s_connectivityProbeRunning.store(false, std::memory_order_release);
+    LOG_W(TAG, "netProbe task create failed action=probe_skipped");
+  }
+}
+#endif
+
 static void handleWiFiEvent(arduino_event_id_t event, arduino_event_info_t info) {
   switch (event) {
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
@@ -88,22 +138,8 @@ static void handleWiFiEvent(arduino_event_id_t event, arduino_event_info_t info)
         WiFi.gatewayIP()[0], WiFi.gatewayIP()[1], WiFi.gatewayIP()[2], WiFi.gatewayIP()[3],
         WiFi.dnsIP()[0], WiFi.dnsIP()[1], WiFi.dnsIP()[2], WiFi.dnsIP()[3],
         WiFi.RSSI());
-      {
-        IPAddress resolved;
-        if (WiFi.hostByName("open-meteo.com", resolved))
-          LOG_D(TAG, "DNS=OK open-meteo.com -> %d.%d.%d.%d", resolved[0], resolved[1], resolved[2], resolved[3]);
-        else
-          LOG_W(TAG, "DNS=FAIL open-meteo.com");
-      }
-      {
-        WiFiClient probe;
-        if (probe.connect("1.1.1.1", 80)) {
-          LOG_D(TAG, "TCP=OK 1.1.1.1:80");
-          probe.stop();
-        } else {
-          LOG_W(TAG, "TCP=FAIL 1.1.1.1:80");
-        }
-      }
+      // Sonda DNS/TCP odroczona do osobnego taska (szczegoly: connectivityProbeTask).
+      s_connectivityProbeRequested.store(true, std::memory_order_release);
 #endif
       break;
 
@@ -449,6 +485,10 @@ void update() {
     completeTimeSync(now);
     return;
   }
+
+#if defined(ENABLE_WIFI_DIAGNOSTICS)
+  maybeStartConnectivityProbe();
+#endif
 
   if (ModeManager::isWifiOn() && WiFi.status() == WL_CONNECTED && state == SyncState::Idle) {
     if (now - lastPeriodicSync >= periodicSyncIntervalMs) {

@@ -30,7 +30,7 @@ constexpr uint8_t kTypeMusicRequest = 0x35;
 constexpr uint8_t kTypeMusicVolumeState = 0x36;
 constexpr uint8_t kTypeMusicEQState = 0x37;
 constexpr uint8_t kTypeRadioMode = 0x38;
-constexpr uint8_t kTypeRadarStatus = 0x39;
+constexpr uint8_t kTypeRadarStatus = 0x39; // Z -> G: 28 B = 26 B legacy + [detect_lo,detect_hi] na [26..27]
 // Silnik ekranu (Guition <-> ZEGAR <-> STM32). Kontrakt payloadu ponizej —
 // lustro po stronie Guitiona (CommunicationProtocol.h: kTypeStepperCmd/State).
 // Zmieniasz tu = zmieniasz tam.

@@ -5,7 +5,7 @@
  * jest zaszyty w STM32 (STM32-BPM, include/silnik_krokowy/stepper_link.h).
  * Zmieniasz tu = zmieniasz tam. Nic innego w projekcie tego nie dotyka.
  *
- * Kanał: soft-UART GPIO16/17 @ 9600, COBS+CRC16 (jak reszta STM32_Data).
+ * Kanał: soft-UART GPIO16/17 @ 19200, COBS+CRC16 (jak reszta STM32_Data).
  *
  *   0xB1  ZEGAR -> STM32  KOMENDA   [cmd][args...]
  *     cmd 0x01 MOVE_REL : [steps int32 LE][speed u16 LE][accel u16 LE]  (9 B)

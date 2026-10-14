@@ -296,7 +296,8 @@ void initUiAndInput() {
 void initSensors(RuntimeContext& ctx) {
   UIState::State& uiState = UIState::mutableState();
 
-  STM32data_begin(BoardPins::kStm32UartRx, BoardPins::kStm32UartTx);
+  STM32data_begin(BoardPins::kStm32UartRx, BoardPins::kStm32UartTx,
+                  BoardPins::kStm32UartBaud);
   StepperBridge::begin();  // STEPPER_BRIDGE (2/2 init): hook 0xB2/0xB3, zero ramek bez komend PC
   // E2: jednorazowa migracja NVS "zegar" (stepTargetDeg/stepSpeed) do flash
   // STM32 przez most (FIFO). Musi byc PO begin() — klucze znikaja po sukcesie.

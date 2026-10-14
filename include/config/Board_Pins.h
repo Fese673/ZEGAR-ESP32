@@ -37,6 +37,7 @@ constexpr uint8_t kTouchTestPad = 4; // TOUCH_PAD
 // STM32 PA10 (RX, pull-up) -> ESP32 GPIO17 (TX)
 constexpr uint8_t kStm32UartRx = 16; // STM32_RX
 constexpr uint8_t kStm32UartTx = 17; // STM32_TX
+constexpr uint32_t kStm32UartBaud = 19200UL; // soft-UART (EspSoftwareSerial)
 
 // --- Bluetooth I2S -> zewnetrzny DAC / wzmacniacz audio ---
 // Mapowanie jest opisane z perspektywy ESP32:

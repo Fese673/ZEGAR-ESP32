@@ -1240,11 +1240,19 @@ void drawDebugSTM32() {
   LCD_PRINT(F("DEBUG STM32"));
   LCD_SET(0, 1);
   LCD_PRINT(F("BPM: "));
-  LCD_PRINT(displayedBPM);
+  if (displayedBPM > 0) {
+    LCD_PRINT(displayedBPM);
+  } else {
+    LCD_PRINT(F("--"));
+  }
   LCD_SET(0, 2);
   LCD_PRINT(F("SPO2: "));
-  LCD_PRINT(displayedSPO2);
-  LCD_PRINT(F("%"));
+  if (displayedSPO2 > 0) {
+    LCD_PRINT(displayedSPO2);
+    LCD_PRINT(F("%"));
+  } else {
+    LCD_PRINT(F("--"));
+  }
   LCD_SET(0, 3);
   if (stm32Connected) {
     LCD_PRINT(F("Status: OK"));

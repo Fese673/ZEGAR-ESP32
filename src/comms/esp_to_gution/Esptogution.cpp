@@ -545,7 +545,10 @@ void sendRadarStatus(uint8_t presence, uint16_t movDist, uint8_t movEnergy,
                      uint16_t statDist, uint8_t statEnergy, uint16_t detectDist,
                      const uint8_t *movGates, const uint8_t *statGates)
 {
-    uint8_t buf[26];
+    /* 26 B legacy (off 0..25 bez zmian) + append-only 2 B: pelny detectDist
+     * u16 LE na [26..27]. Stary Guition czyta 26 B jak dotad (off [7] legacy),
+     * nowy preferuje [26..27]. Zasieg LD2410C 600 cm nie miesci sie w 1 B. */
+    uint8_t buf[28];
     buf[0] = presence;
     buf[1] = static_cast<uint8_t>(movDist & 0xFFU);
     buf[2] = static_cast<uint8_t>((movDist >> 8) & 0xFFU);
@@ -553,11 +556,13 @@ void sendRadarStatus(uint8_t presence, uint16_t movDist, uint8_t movEnergy,
     buf[4] = static_cast<uint8_t>(statDist & 0xFFU);
     buf[5] = static_cast<uint8_t>((statDist >> 8) & 0xFFU);
     buf[6] = statEnergy;
-    buf[7] = static_cast<uint8_t>(detectDist & 0xFFU);
+    buf[7] = static_cast<uint8_t>(detectDist & 0xFFU); // legacy dolny bajt
     for (uint8_t g = 0; g < 9; ++g) {
         buf[8 + g]  = (movGates  != nullptr) ? movGates[g]  : 0;
         buf[17 + g] = (statGates != nullptr) ? statGates[g] : 0;
     }
+    buf[26] = static_cast<uint8_t>(detectDist & 0xFFU);       // pelny detectDist u16 LE
+    buf[27] = static_cast<uint8_t>((detectDist >> 8) & 0xFFU);
     sendRawFrame(kTypeRadarStatus, nextSequence(), buf, sizeof(buf));
 }
 

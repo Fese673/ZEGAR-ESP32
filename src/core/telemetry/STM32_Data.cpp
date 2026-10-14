@@ -1,7 +1,7 @@
 /*
  * STM32_Data.cpp — odbiór/nadawanie ramek COBS+CRC16 do STM32.
  *
- * Kanał: EspSoftwareSerial (plikowe oprogramowanie UART) GPIO16/17 @ 9600 baud.
+ * Kanał: EspSoftwareSerial (plikowe oprogramowanie UART) GPIO16/17 @ 19200 baud.
  * Serial2 jest zajęty przez Guition, Serial1 przez PMS5003 — dlatego STM32
  * musi iść softwarowym UARTem (EspSoftwareSerial).
  * Format: 0x00 | COBS([type][seq][len_lo][len_hi][payload...][crc16]) | 0x00
@@ -79,6 +79,23 @@ static constexpr uint16_t kMaxPayload   = 128;
 static constexpr uint8_t  kHeaderBytes  = 4;
 static constexpr uint8_t  kCrcBytes     = 2;
 
+/*--- Diagnostyka linku STM32 (1 s na USB Serial). Przelacznik:
+ * -DSTM32_LINK_DIAG=1 w platformio.ini; 0 = logi wylaczone. ---*/
+#ifndef STM32_LINK_DIAG
+#define STM32_LINK_DIAG 1
+#endif
+#if STM32_LINK_DIAG
+static uint32_t s_diag_rxBytes   = 0;  // bajty odebrane w oknie
+static uint32_t s_diag_framesOk  = 0;  // ramki poprawne (COBS+len+CRC)
+static uint32_t s_diag_framesBad = 0;  // ramki odrzucone (COBS/len/CRC)
+static uint32_t s_diag_ovf       = 0;  // przepelnienia bufora soft-UART
+static uint32_t s_diag_ppg       = 0;  // ramki 0xA0
+static uint32_t s_diag_bpm       = 0;  // ramki 0xA1
+static uint32_t s_diag_radar     = 0;  // ramki 0xA3
+static uint32_t s_diag_other     = 0;  // pozostale typy (hook itp.)
+static uint32_t s_lastBpmFrameMs = 0;  // znacznik ostatniej 0xA1 (0 = brak)
+#endif
+
 /* ========================================================================== */
 /* TX — budowa + COBS + wysyłka                                                */
 /* ========================================================================== */
@@ -128,7 +145,15 @@ static void dispatchFrame(uint8_t type, uint8_t seq,
         int16_t diff = static_cast<int16_t>(
             static_cast<uint16_t>(payload[0]) |
             (static_cast<uint16_t>(payload[1]) << 8U));
+#if STM32_LINK_DIAG
+        ++s_diag_ppg;
+#endif
         s_lastPpgFrameMs = millis();
+        /* Heartbeat linku: kazda ramka PPG znaczy "STM32 zyje". Bez tego
+         * ekran debug pokazywal OFFLINE mimo dzialajacego linku
+         * (stmDataUpdated ustawiala tylko 0xA1, a ta leci wylacznie
+         * przy wykrytym uderzeniu). */
+        stmDataUpdated = true;
         /* Deferuj forward do nastepnego cyklu STM32data_update(),
          * tak jak w starej wersji ASCII, zeby nie wykonywac write
          * do GUTION w srodku petli odbiorczej STM32. */
@@ -138,6 +163,10 @@ static void dispatchFrame(uint8_t type, uint8_t seq,
     }
     case kTypeBpm: {
         if (len != 2U) return;
+#if STM32_LINK_DIAG
+        ++s_diag_bpm;
+        s_lastBpmFrameMs = millis();
+#endif
         bpmNumber     = payload[0];
         spo2Number    = payload[1];
         stmDataUpdated = true;
@@ -151,13 +180,16 @@ static void dispatchFrame(uint8_t type, uint8_t seq,
     }
     case kTypeRadar: {
         if (len < 8U) return;
+#if STM32_LINK_DIAG
+        ++s_diag_radar;
+#endif
         // Defer forward to ZEGAR->GUTION poza ISR-hot path
         s_ld2410_pending.presence  = payload[0];
         s_ld2410_pending.movDist   = static_cast<uint16_t>(payload[1] | (static_cast<uint16_t>(payload[2]) << 8U));
         s_ld2410_pending.movEnergy = payload[3];
         s_ld2410_pending.statDist  = static_cast<uint16_t>(payload[4] | (static_cast<uint16_t>(payload[5]) << 8U));
         s_ld2410_pending.statEnergy= payload[6];
-        s_ld2410_pending.detectDist= payload[7];
+        s_ld2410_pending.detectDist= payload[7]; // legacy dolny bajt (<=255 cm)
         // Bramki (26 B od nowego STM32); stary 8 B -> zera.
         if (len >= 26U) {
             memcpy(s_ld2410_pending.movGates, payload + 8, 9);
@@ -166,12 +198,21 @@ static void dispatchFrame(uint8_t type, uint8_t seq,
             memset(s_ld2410_pending.movGates, 0, 9);
             memset(s_ld2410_pending.statGates, 0, 9);
         }
+        // Pelny detectDist u16 LE (28 B, append-only po 26 B); zasięg LD2410C
+        // do 600 cm nie miesci sie w [7] (zawijal sie mod 256).
+        if (len >= 28U) {
+            s_ld2410_pending.detectDist = static_cast<uint16_t>(
+                payload[26] | (static_cast<uint16_t>(payload[27]) << 8U));
+        }
         ld2410LastFrameMs = millis();
         ld2410DataUpdated = true;
         s_ld2410_forward_pending = true;
         break;
     }
     default:
+#if STM32_LINK_DIAG
+        ++s_diag_other;
+#endif
         // STEPPER_BRIDGE: nieznane typy (0xB2/0xB3 steppera) do hooka mostu.
         // Bez hooka zachowanie jak wcześniej (ignoruj).
         if (s_stepperHook != nullptr) {
@@ -188,24 +229,50 @@ static void tryDecode(void)
     uint8_t decoded[256];
     size_t  decLen = EsptoGuition::cobsDecode(
         s_rx.buffer, s_rx.length, decoded);
-    if (decLen < (kHeaderBytes + kCrcBytes)) return;
+    if (decLen < (kHeaderBytes + kCrcBytes)) {
+#if STM32_LINK_DIAG
+        ++s_diag_framesBad;
+#endif
+        return;
+    }
 
     uint16_t plen = static_cast<uint16_t>(decoded[2]) |
                     (static_cast<uint16_t>(decoded[3]) << 8U);
-    if (plen > kMaxPayload) return;
-    if (decLen != (kHeaderBytes + plen + kCrcBytes)) return;
+    if (plen > kMaxPayload) {
+#if STM32_LINK_DIAG
+        ++s_diag_framesBad;
+#endif
+        return;
+    }
+    if (decLen != (kHeaderBytes + plen + kCrcBytes)) {
+#if STM32_LINK_DIAG
+        ++s_diag_framesBad;
+#endif
+        return;
+    }
 
     uint16_t receivedCrc = static_cast<uint16_t>(decoded[decLen - 2U]) |
                            (static_cast<uint16_t>(decoded[decLen - 1U]) << 8U);
     uint16_t expectedCrc = EsptoGuition::crc16Ccitt(decoded, decLen - 2U);
-    if (receivedCrc != expectedCrc) return;
+    if (receivedCrc != expectedCrc) {
+#if STM32_LINK_DIAG
+        ++s_diag_framesBad;
+#endif
+        return;
+    }
 
+#if STM32_LINK_DIAG
+    ++s_diag_framesOk;
+#endif
     dispatchFrame(decoded[0], decoded[1],
                  decoded + kHeaderBytes, plen);
 }
 
 static void ingestByte(uint8_t b)
 {
+#if STM32_LINK_DIAG
+    ++s_diag_rxBytes;
+#endif
     if (b == 0x00U) {
         tryDecode();
         s_rx.length = 0;
@@ -313,6 +380,38 @@ void STM32data_update()
             s_ld2410_pending.detectDist,
             s_ld2410_pending.movGates, s_ld2410_pending.statGates);
     }
+
+#if STM32_LINK_DIAG
+    /* Link STM32 co 1 s: rx/ok/bad/ovf + liczniki typow + wiek ramek.
+     * ovf = flaga przepelnienia bufora soft-UART (czyszczona odczytem). */
+    {
+        static uint32_t diagLastMs = 0;
+        const uint32_t nowDiagMs = millis();
+        if ((nowDiagMs - diagLastMs) >= 1000U) {
+            diagLastMs = nowDiagMs;
+            if (s_stmSoftSerial.overflow()) ++s_diag_ovf;
+            Serial.printf("[STMDIAG] rx=%luB ok=%lu bad=%lu ovf=%lu | ppg=%lu bpm=%lu radar=%lu oth=%lu | agePpg=",
+                          (unsigned long)s_diag_rxBytes,
+                          (unsigned long)s_diag_framesOk,
+                          (unsigned long)s_diag_framesBad,
+                          (unsigned long)s_diag_ovf,
+                          (unsigned long)s_diag_ppg,
+                          (unsigned long)s_diag_bpm,
+                          (unsigned long)s_diag_radar,
+                          (unsigned long)s_diag_other);
+            if (s_lastPpgFrameMs == 0U) Serial.print(F("none"));
+            else Serial.printf("%lums", (unsigned long)(nowDiagMs - s_lastPpgFrameMs));
+            Serial.print(F(" ageBpm="));
+            if (s_lastBpmFrameMs == 0U) Serial.print(F("none"));
+            else Serial.printf("%lums", (unsigned long)(nowDiagMs - s_lastBpmFrameMs));
+            Serial.println();
+
+            s_diag_rxBytes = 0; s_diag_framesOk = 0; s_diag_framesBad = 0;
+            s_diag_ovf = 0; s_diag_ppg = 0; s_diag_bpm = 0;
+            s_diag_radar = 0; s_diag_other = 0;
+        }
+    }
+#endif
 }
 
 void STM32data_sendBrightness(uint8_t percent)

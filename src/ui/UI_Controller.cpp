@@ -1359,6 +1359,8 @@ void ui_handleEvent(EncoderEvent e) {
       } else {
         StopwatchService::stop();
       }
+      // Natychmiastowa publikacja stanu do HMI (wzorzec jak przy RESET)
+      TimeSync::sendStopwatchState();
       drawStoperSafe();
       return;
     }

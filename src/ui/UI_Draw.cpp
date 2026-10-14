@@ -352,6 +352,19 @@ void updateSevenSegStoper(int mins, int secs, int centisec) {
   commitSevenSegFrame(swapNibbles(CS), swapNibbles(SS), swapNibbles(MM));
 }
 
+// Stoper w trybie S (>= 60 min): 7-seg pokazuje HH:MM:SS (bez setnych).
+static void updateSevenSegStoperHms(int hours, int mins, int secs) {
+  if (!s_sevenSegReady) {
+    return;
+  }
+
+  const uint8_t HHb = packTwoDigits(hours);
+  const uint8_t MMb = packTwoDigits(mins);
+  const uint8_t SSb = packTwoDigits(secs);
+
+  commitSevenSegFrame(swapNibbles(SSb), swapNibbles(MMb), swapNibbles(HHb));
+}
+
 // ============================================================================
 // STAŁE I FUNKCJE POMOCNICZE
 // ============================================================================
@@ -1185,51 +1198,43 @@ void drawTimer() {
 }
 
 // --- Ekran stopera ---
+// Ujednolicone z Gution: < 60 min -> "STOPER (MS)" + MM:SS.CS,
+// >= 60 min -> "STOPER (S)" + HH:MM:SS (bez setnych). 7-seg lustrzany do trybu.
 void drawStoper() {
   LCD_CLEAR();
 
-  unsigned long t = StopwatchService::getElapsedMs();
+  const uint32_t t = StopwatchService::getElapsedMs();
+  const bool secondsMode = (StopwatchService::getDisplayMode() == StopwatchDisplayMode::S);
 
-  const int cs = (t / 10) % 100;
-  const int s  = (t / 1000) % 60;
-  const int m  = (t / 60000) % 100;
-
-  lcdPrintCentered(0, F("STOPER"));
+  if (secondsMode) {
+    lcdPrintCentered(0, F("STOPER (S)"));
+  } else {
+    lcdPrintCentered(0, F("STOPER (MS)"));
+  }
   lcdPrintCentered(1, F(ALIGN_CENTER));
 
-  // Centered stopwatch time: "> MM:SS.CS <"
-  char buf[21];
-  // If elapsed >= 1 hour, show hours zone: "> HH:MM:SS.CS <" and update 7-seg to HH:MM:SS
-  unsigned long totalMs = t;
-  int hh = (int)(totalMs / 3600000UL);
-  if (hh > 0) {
-    if (hh > 99) {
-      hh = 99;
+  char buf[24];
+  if (secondsMode) {
+    uint32_t hh = t / 3600000UL;
+    if (hh > StopwatchService::kMaxDisplayHours) {
+      hh = StopwatchService::kMaxDisplayHours;
     }
-    int rm = (int)((totalMs % 3600000UL) / 60000UL);
-    int rs = (int)((totalMs % 60000UL) / 1000UL);
-    int rcs = (int)((totalMs / 10) % 100);
-    snprintf(buf, sizeof(buf), "> %02d:%02d:%02d.%02d <", hh, rm, rs, rcs);
-    lcdPrintCentered(2, buf);
-    clearRow(3);
+    const int mm = (int)((t % 3600000UL) / 60000UL);
+    const int ss = (int)((t % 60000UL) / 1000UL);
 
-    // Update 7-seg to HH:MM:SS (drop centisec on 7-seg)
-    if (s_sevenSegReady) {
-      const uint8_t HHb = packTwoDigits(hh);
-      const uint8_t MMb = packTwoDigits(rm);
-      const uint8_t SSb = packTwoDigits(rs);
-      commitSevenSegFrame(swapNibbles(SSb), swapNibbles(MMb), swapNibbles(HHb));
-    }
-    LCD_DUMP();
-    return;
+    snprintf(buf, sizeof(buf), "> %02u:%02d:%02d <", (unsigned)hh, mm, ss);
+    updateSevenSegStoperHms((int)hh, mm, ss);
+  } else {
+    const int mm = (int)((t / 60000UL) % 100UL);
+    const int ss = (int)((t / 1000UL) % 60UL);
+    const int cs = (int)((t / 10UL) % 100UL);
+
+    snprintf(buf, sizeof(buf), "> %02d:%02d.%02d <", mm, ss, cs);
+    updateSevenSegStoper(mm, ss, cs);
   }
 
-  // Default (no hours): "> MM:SS.CS <"
-  snprintf(buf, sizeof(buf), "> %02d:%02d.%02d <", m, s, cs);
   lcdPrintCentered(2, buf);
   clearRow(3);
-
-  updateSevenSegStoper(m, s, cs);
   LCD_DUMP();
 }
 

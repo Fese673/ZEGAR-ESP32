@@ -43,4 +43,10 @@ bool isRunning() {
   return s_running;
 }
 
+StopwatchDisplayMode getDisplayMode() {
+  return (getElapsedMs() >= kSecondsModeThresholdMs)
+             ? StopwatchDisplayMode::S
+             : StopwatchDisplayMode::MS;
+}
+
 }  // namespace StopwatchService

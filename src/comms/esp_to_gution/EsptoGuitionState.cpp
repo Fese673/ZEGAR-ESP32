@@ -785,6 +785,8 @@ void pushStepperState() {
   if (StepperBridge::refRadarEn()) flags |= kStepperFlagRadarEn;
   // Bity 2-3: czulosc OUT radaru (0=SREDNIA, 1=WYSOKA, 2=MALA).
   flags |= static_cast<uint8_t>((StepperBridge::refRadarSens() & 0x03U) << 2);
+  // Bit 4: "plynne wylaczenie" (dim 7-seg; truth STM32).
+  if (StepperBridge::refOnOff()) flags |= kStepperFlagOnOff;
   // homeDeg z REF (0xFFFF = jeszcze nie znamy — Guition nie adoptuje).
   const uint16_t home = StepperBridge::refValid()
       ? StepperBridge::refHomeDeg() : 0xFFFFU;
@@ -805,6 +807,7 @@ void pushStepperDone(int32_t posSteps) {
   uint8_t flags = StepperBridge::refCalOk() ? kStepperFlagCalOk : 0;
   if (StepperBridge::refRadarEn()) flags |= kStepperFlagRadarEn;
   flags |= static_cast<uint8_t>((StepperBridge::refRadarSens() & 0x03U) << 2);
+  if (StepperBridge::refOnOff()) flags |= kStepperFlagOnOff;
   const uint16_t home = StepperBridge::refValid()
       ? StepperBridge::refHomeDeg() : 0xFFFFU;
   const uint16_t refT = StepperBridge::refTargetDeg();
@@ -949,8 +952,8 @@ void handleReceivedStepperCmd(const uint8_t* payload, uint16_t payloadLength) {
       break;
     }
     case kStepperSubSetAutoClose: { // [s u16]
-      // Czas auto-zjazdu radaru (przyciski pod kafelkiem): presety
-      // 30/120/300/600 s; walidacja + persist we flash STM32 (echo REF).
+      // Czas auto-zjazdu radaru (panel opcji na ekranie RADAR): presety
+      // 30/180/600/2700 s; walidacja + persist we flash STM32 (echo REF).
       if (payloadLength < 3) return;
       const uint16_t seconds = rdU16LE(payload + 1);
       LOG_I("STEPPER", "SET_AUTOCLOSE %u s -> STM32 (auto-zjazd radaru)",
@@ -967,6 +970,28 @@ void handleReceivedStepperCmd(const uint8_t* payload, uint16_t payloadLength) {
       LOG_I("STEPPER", "SET_RADAR_SENS %u -> STM32 (czulosc OUT)", (unsigned)code);
       StepperBridge::issueSetRadarSens(code);
       pushStepperState();
+      break;
+    }
+    case kStepperSubSetOnOff: { // [en]
+      // "Plynne wylaczenie" (ekran radaru): bramka premium dimu 7-seg przy
+      // zjezdzie; persist we flash STM32 (bit3 flags truth, echo REF bit4).
+      if (payloadLength < 2) return;
+      const bool en = payload[1] != 0;
+      LOG_I("STEPPER", "SET_ONOFF %u -> STM32 (plynne wylaczenie 7-seg)",
+            en ? 1 : 0);
+      StepperBridge::issueSetOnOff(en);
+      pushStepperState();
+      break;
+    }
+    case kStepperSubSetSpeed: { // [speed u16]
+      // Predkosc autonomicznego powrotu STM32 z suwaka/presetow Guitiona
+      // (persist we flash truth; echo REF). EXECUTE/HOLD przekazuja ja
+      // niezaleznie w swoich ramkach — to pokrywa sama zmiane suwaka.
+      if (payloadLength < 3) return;
+      const uint16_t speed = clampSpeed(rdU16LE(payload + 1));
+      LOG_I("STEPPER", "SET_SPEED %u -> STM32 (auto-powrot)", (unsigned)speed);
+      forwardSpeedToStm(speed);
+      s_stepSpeed = speed;
       break;
     }
     default:

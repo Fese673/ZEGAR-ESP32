@@ -85,14 +85,42 @@ uint8_t s_qHead = 0;
 uint8_t s_qTail = 0;
 uint8_t s_qCount = 0;
 bool s_stopPriority = false;  // STOP do wysłania przed kolejką
-// Tor priorytetowy preferencji (SET_SPEED / SET_HOME, max 9 B): flush
-// preempcji czysci TYLKO kolejke, wiec preferencje dla STM32 nie gina razem
-// ze starymi chunkami (bug: sztywne 400 w auto-home). Flaga trzyma az do
-// faktycznej wysylki; ostatni zapis wygrywa (oba idempotentne).
-bool s_prioPending = false;
-uint8_t s_prioPayload[9] = {0};
-uint8_t s_prioLen = 0;
+// Tor preferencji: JEDEN SLOT NA KOMENDE (0x09..0x10), "ostatnia wartosc
+// wygrywa", wysylka po jednej ramce na pumpTx. Wczesniej wspolny payload
+// gubil SET_TARGET, gdy tuz po nim lecial EXECUTE (SET_SPEED przez
+// forwardSpeedToStm nadpisywal slot przed wysylka). Flush preempcji czysci
+// TYLKO kolejke ruchu — sloty preferencji zawsze dochodza.
+struct PrefSlot {
+  bool    used;
+  uint8_t cmd;
+  uint8_t len;
+  uint8_t payload[9];
+};
+constexpr uint8_t kPrefFirst = 0x09;  // kCmdSetSpeed
+constexpr uint8_t kPrefLast  = 0x10;  // kCmdSetOnOff
+constexpr uint8_t kPrefCount = kPrefLast - kPrefFirst + 1U;
+PrefSlot s_pref[kPrefCount];
 uint32_t s_lastTxMs = 0;
+
+void prefSet(uint8_t cmd, const uint8_t *payload, uint8_t len) {
+  if (cmd < kPrefFirst || cmd > kPrefLast) return;
+  PrefSlot &p = s_pref[cmd - kPrefFirst];
+  memcpy(p.payload, payload, len);
+  p.len = len;
+  p.cmd = cmd;
+  p.used = true;
+}
+
+bool prefPop(PrefSlot &out) {
+  for (uint8_t i = 0U; i < kPrefCount; ++i) {
+    if (s_pref[i].used) {
+      out = s_pref[i];
+      s_pref[i].used = false;
+      return true;
+    }
+  }
+  return false;
+}
 
 uint16_t s_speed = StepperFrames::kSpeedDef;
 uint16_t s_accel = StepperFrames::kAccelDef;
@@ -102,6 +130,10 @@ int32_t s_chunk = StepperFrames::kChunkDef;
 bool s_stmBusy = false;
 int32_t s_stmPos = 0;
 bool s_stmKnown = false;
+// Lokalny "ruch w drodze": od zlecenia MOVE do DONE/STOP/0xB2(busy=0).
+// Bez tego cache busy czekal na STATUS/DONE, a tymczasem fast-path preempcji
+// nie odpalal i drugi EXECUTE ladowal w ruchu bez STOP (gubiony klik).
+bool s_movePending = false;
 // Rama odniesienia z STM32 (truth): jedyna prawda o kalibracji.
 // 0xB4 niesie zero/span/flage; 6-bajtowy 0xB2 odswieza sama flage.
 // Waznosc = dostalismy 0xB4 przynajmniej raz (po starcie prosimy sami).
@@ -115,7 +147,47 @@ bool s_refValid = false;
 uint16_t s_refHomeDeg = 0; // cel powrotu STM32 po resecie (z 0xB4, default 0)
 uint16_t s_refAutoCloseS = 0xFFFF; // auto-zjazd radaru (REF v3; 0xFFFF = brak)
 uint8_t s_refRadarSens = 0; // czulosc OUT radaru (bity 2-3 flags REF)
+bool s_refOnOff = false;    // "plynne wylaczenie" (bit4 flags REF; default OFF)
 uint32_t s_refMs = 0;
+
+// Preferencje z potwierdzeniem (RETRANSMISJA): SET_RADAR / SET_ONOFF siedza
+// w torze priorytetowym, ale ramka moze zginac po drodze (soft-UART / pelny
+// ring RX w STM32 -> NACK, ktory most ignoruje). Retransmisja az REF/STATUS
+// potwierdzi wartosc (albo limit prob) — HMI nie zostaje ze stanem-widmem.
+struct PrefWant {
+  bool     active;
+  bool     val;
+  uint8_t  tries;
+  uint32_t nextMs;
+};
+constexpr uint32_t kPrefRetryMs  = 1500; // odstep miedzy probami
+constexpr uint8_t  kPrefRetryMax = 3;    // lacznie: 1 wysylka + 3 powtorki
+PrefWant s_wantRadar = {false, false, 0, 0};
+PrefWant s_wantOnOff = {false, false, 0, 0};
+
+void prefService(PrefWant &w, bool truth, uint32_t now) {
+  if (!w.active) return;
+  if (truth == w.val) { w.active = false; return; } // potwierdzone REF/STATUS
+  if (static_cast<int32_t>(now - w.nextMs) < 0) return;
+  if (w.tries >= kPrefRetryMax) {
+    w.active = false; // poddaj sie — kolejne REF i tak przywroca prawde
+    LOG_W(kTag, "PREF brak potwierdzenia po %u probach — poddaje",
+          (unsigned)kPrefRetryMax);
+    return;
+  }
+  ++w.tries;
+  w.nextMs = now + kPrefRetryMs;
+  LOG_W(kTag, "PREF retransmisja #%u (val=%u)", (unsigned)w.tries,
+        w.val ? 1U : 0U);
+  uint8_t p[2];
+  if (&w == &s_wantRadar) {
+    const uint8_t len = StepperFrames::encodeSetRadar(w.val, p);
+    prefSet(StepperFrames::kCmdSetRadar, p, len);
+  } else {
+    const uint8_t len = StepperFrames::encodeSetOnOff(w.val, p);
+    prefSet(StepperFrames::kCmdSetOnOff, p, len);
+  }
+}
 bool s_statusPending = false;
 uint32_t s_statusDeadline = 0;
 
@@ -167,7 +239,7 @@ bool queuePop(PendingTx &out) {
 }
 
 // Jedyna funkcja dotykająca soft-UART. Max 1 ramka na wywołanie,
-// nie częściej niż kTxMinGapMs. Kolejnosc: STOP, SET_SPEED, kolejka.
+// nie częściej niż kTxMinGapMs. Kolejnosc: STOP, preferencje, kolejka.
 void pumpTx(uint32_t now) {
   if (now - s_lastTxMs < kTxMinGapMs) return;
   if (s_stopPriority) {
@@ -179,11 +251,13 @@ void pumpTx(uint32_t now) {
     }
     return;
   }
-  if (s_prioPending) {
-    if (STM32data_sendStepperCmd(s_prioPayload, s_prioLen)) {
-      s_prioPending = false;
+  PrefSlot pf;
+  if (prefPop(pf)) {
+    if (STM32data_sendStepperCmd(pf.payload, pf.len)) {
       s_lastTxMs = now;
       ++s_txFrames;
+    } else {
+      prefSet(pf.cmd, pf.payload, pf.len); // oddaj slot — retry za 100 ms
     }
     return;
   }
@@ -362,12 +436,15 @@ void onStmFrame(uint8_t type, const uint8_t *payload, uint16_t len) {
   if (type == StepperFrames::kTypeStatus) {
     if (payload == nullptr || len < 5) return;
     s_stmBusy = payload[0] != 0;
+    if (!s_stmBusy) s_movePending = false; // swieza prawda: idle
     s_stmPos = StepperFrames::rdI32LE(payload + 1);
     s_stmKnown = true;
     if (len >= 6) {
-      // 6-bajtowy STATUS niesie flagi truth w STM32 (bit0 kalibracja, bit1 radar).
+      // 6-bajtowy STATUS niesie flagi truth w STM32 (bit0 kalibracja,
+      // bit1 radar, bit4 "plynne wylaczenie").
       s_refOk = (payload[5] & StepperFrames::kRefFlagCalOk) != 0;
       s_refRadarEn = (payload[5] & StepperFrames::kRefFlagRadarEn) != 0;
+      s_refOnOff = (payload[5] & StepperFrames::kRefFlagOnOff) != 0;
       s_refMs = millis();
     }
     if (s_statusPending) {
@@ -384,6 +461,7 @@ void onStmFrame(uint8_t type, const uint8_t *payload, uint16_t len) {
   } else if (type == StepperFrames::kTypeDone) {
     if (payload == nullptr || len < 4) return;
     s_stmBusy = false;
+    s_movePending = false;
     s_stmPos = StepperFrames::rdI32LE(payload);
     s_stmKnown = true;
     Serial.print("DONE POS=");
@@ -398,6 +476,7 @@ void onStmFrame(uint8_t type, const uint8_t *payload, uint16_t len) {
     s_refSpan = ref.span;
     s_refOk = (ref.flags & StepperFrames::kRefFlagCalOk) != 0;
     s_refRadarEn = (ref.flags & StepperFrames::kRefFlagRadarEn) != 0;
+    s_refOnOff = (ref.flags & StepperFrames::kRefFlagOnOff) != 0;
     s_refTargetDeg = ref.targetDeg; // 0xFFFF = stary STM32 bez pola
     s_refSpeed = ref.speed;         // 0xFFFF = stary STM32 bez pola
     s_refHomeDeg = ref.homeDeg;     // cel powrotu po resecie (len<11 -> 0 jak stare)
@@ -433,18 +512,24 @@ void begin() {
 }
 
 bool issueMoveRel(int32_t steps, uint16_t speed, uint16_t accel) {
-  return tryEnqueueMove(StepperFrames::kCmdMoveRel, steps, speed, accel);
+  const bool ok = tryEnqueueMove(StepperFrames::kCmdMoveRel, steps, speed, accel);
+  if (ok) s_movePending = true;
+  return ok;
 }
 
 bool issueMoveAbs(int32_t pos, uint16_t speed, uint16_t accel) {
-  return tryEnqueueMove(StepperFrames::kCmdMoveAbs, pos, speed, accel);
+  const bool ok = tryEnqueueMove(StepperFrames::kCmdMoveAbs, pos, speed, accel);
+  if (ok) s_movePending = true;
+  return ok;
 }
 
 bool issueMoveDegFlush(uint16_t deg, uint16_t speed, uint16_t accel) {
   uint8_t payload[7];
   const uint8_t len = StepperFrames::encodeDeg(deg, speed, accel, payload);
   if (!lastKnownBusy() && s_qCount == 0 && !s_stopPriority) {
-    return queuePush(payload, len); // fast path: idle, od razu jazda
+    const bool ok = queuePush(payload, len); // fast path: idle, od razu jazda
+    if (ok) s_movePending = true;
+    return ok;
   }
   // Preempcja: porzuc przestarzale chunki, STOP (czysci tez STM32), potem ruch.
   // Kolejka pusta -> queuePush zawsze sie udaje (komenda nie ginie).
@@ -452,7 +537,9 @@ bool issueMoveDegFlush(uint16_t deg, uint16_t speed, uint16_t accel) {
   s_qTail = 0;
   s_qCount = 0;
   s_stopPriority = true;
-  return queuePush(payload, len);
+  const bool ok = queuePush(payload, len);
+  if (ok) s_movePending = true;
+  return ok;
 }
 
 bool issueSetZero() {
@@ -467,49 +554,65 @@ bool issueSetSpan(uint16_t speed, uint16_t accel) {
 }
 
 bool issueSetSpeed(uint16_t speed) {
-  s_prioLen = StepperFrames::encodeSetSpeed(speed, s_prioPayload);
-  s_prioPending = true; // tor priorytetowy — flush kolejki go nie rusza
+  uint8_t p[3];
+  const uint8_t len = StepperFrames::encodeSetSpeed(speed, p);
+  prefSet(StepperFrames::kCmdSetSpeed, p, len);
   return true;
 }
 
 bool issueSetHome(uint16_t deg) {
-  s_prioLen = StepperFrames::encodeSetHome(deg, s_prioPayload);
-  s_prioPending = true; // tor priorytetowy — flush kolejki go nie rusza
+  uint8_t p[3];
+  const uint8_t len = StepperFrames::encodeSetHome(deg, p);
+  prefSet(StepperFrames::kCmdSetHome, p, len);
   return true;
 }
 
 bool issueSetRadar(bool en) {
-  s_prioLen = StepperFrames::encodeSetRadar(en, s_prioPayload);
-  s_prioPending = true; // tor priorytetowy — jak SET_HOME
+  uint8_t p[2];
+  const uint8_t len = StepperFrames::encodeSetRadar(en, p);
+  prefSet(StepperFrames::kCmdSetRadar, p, len);
+  s_wantRadar = {true, en, 0, millis() + kPrefRetryMs}; // potwierdzenie REF
+  return true;
+}
+
+bool issueSetOnOff(bool en) {
+  uint8_t p[2];
+  const uint8_t len = StepperFrames::encodeSetOnOff(en, p);
+  prefSet(StepperFrames::kCmdSetOnOff, p, len);
+  s_wantOnOff = {true, en, 0, millis() + kPrefRetryMs}; // potwierdzenie REF
   return true;
 }
 
 bool issueSetTarget(uint16_t deg) {
-  s_prioLen = StepperFrames::encodeSetTarget(deg, s_prioPayload);
-  s_prioPending = true; // tor priorytetowy — jak SET_HOME
+  uint8_t p[3];
+  const uint8_t len = StepperFrames::encodeSetTarget(deg, p);
+  prefSet(StepperFrames::kCmdSetTarget, p, len);
   return true;
 }
 
 bool issueCalMode(bool en) {
-  s_prioLen = StepperFrames::encodeCalMode(en, s_prioPayload);
-  s_prioPending = true; // tor priorytetowy — bez persistencji (tylko STM32 RAM)
+  uint8_t p[2];
+  const uint8_t len = StepperFrames::encodeCalMode(en, p);
+  prefSet(StepperFrames::kCmdCalMode, p, len);
   return true;
 }
 
 bool issueSetAutoClose(uint16_t seconds) {
-  s_prioLen = StepperFrames::encodeSetAutoClose(seconds, s_prioPayload);
-  s_prioPending = true; // tor priorytetowy — persist + echo po stronie STM32
+  uint8_t p[3];
+  const uint8_t len = StepperFrames::encodeSetAutoClose(seconds, p);
+  prefSet(StepperFrames::kCmdSetAutoClose, p, len);
   return true;
 }
 
 bool issueSetRadarSens(uint8_t code) {
-  s_prioLen = StepperFrames::encodeSetRadarSens(code, s_prioPayload);
-  s_prioPending = true; // tor priorytetowy — persist + aplikacja w STM32
+  uint8_t p[2];
+  const uint8_t len = StepperFrames::encodeSetRadarSens(code, p);
+  prefSet(StepperFrames::kCmdSetRadarSens, p, len);
   return true;
 }
 
-/* Migracja NVS->STM32: dwa frame'y naraz (tor priorytetowy trzyma tylko
- * jeden), wiec ida kolejem FIFO. Wolane raz przy starcie, gdy FIFO puste. */
+/* Migracja NVS->STM32: wolane raz przy starcie, gdy FIFO/kolejki puste.
+ * Idzie kolejem FIFO (idempotentne; kolejny start powtorzy, jesli padlo). */
 bool seedTargetSpeed(uint16_t deg, uint16_t speed) {
   if (s_qCount + 2 > kQueueDepth) return false;
   uint8_t p1[3];
@@ -527,12 +630,18 @@ bool requestRef() {
 }
 
 void requestStop() {
-  // STOP znaczy stop: porzucone chunki z FIFO juz nie pojada (STM32 robi
-  // xQueueReset po swojej stronie). Flaga = niezawodne, nie FIFO.
+  // STOP znaczy stop: porzucone chunki z FIFO juz nie pojada (STM32 czysci
+  // zalegle MOVE po swojej stronie). Flaga = niezawodne, nie FIFO.
   s_qHead = 0;
   s_qTail = 0;
   s_qCount = 0;
   s_stopPriority = true;
+  /* STOP ubija ruch po stronie STM32 (kontrakt: bez DONE), wiec cache BUSY
+   * musi to odzwierciedlic od razu — inaczej HMI zostaje na stale "w ruchu"
+   * i preempcja kolejnych EXECUTE nie odpala. */
+  s_stmBusy = false;
+  s_movePending = false;
+  (void)requestStatus(); // swiezy POS/flags po STOP (0xB2 -> push do HMI)
 }
 
 bool requestStatus() {
@@ -541,12 +650,13 @@ bool requestStatus() {
 }
 
 int32_t lastKnownPos() { return s_stmPos; }
-bool lastKnownBusy() { return s_stmBusy; }
+bool lastKnownBusy() { return s_stmBusy || s_movePending; }
 bool lastKnownValid() { return s_stmKnown; }
 int32_t refZero() { return s_refZero; }
 int32_t refSpan() { return s_refSpan; }
 bool refCalOk() { return s_refOk; }
 bool refRadarEn() { return s_refRadarEn; }
+bool refOnOff() { return s_refOnOff; }
 uint16_t refTargetDeg() { return s_refTargetDeg; }
 uint16_t refSpeed() { return s_refSpeed; }
 bool refValid() { return s_refValid; }
@@ -580,8 +690,12 @@ void update() {
     }
   }
 
-  // 2. Throttled TX do STM32 (max 1 ramka / 100 ms).
-  pumpTx(millis());
+  // 2. Throttled TX do STM32 (max 1 ramka / 100 ms) + retransmisja
+  //    preferencji z potwierdzeniem (radar / plynne wylaczenie).
+  const uint32_t nowMs = millis();
+  prefService(s_wantRadar, s_refRadarEn, nowMs);
+  prefService(s_wantOnOff, s_refOnOff, nowMs);
+  pumpTx(nowMs);
 
   // 3. Timeout STATUS — odpowiedz z cache zamiast wisieć.
   if (s_statusPending && static_cast<int32_t>(millis() - s_statusDeadline) >= 0) {

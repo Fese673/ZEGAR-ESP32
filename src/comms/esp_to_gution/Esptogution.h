@@ -61,8 +61,11 @@ constexpr uint8_t kStepperSubSetTarget = 0x09; // [deg u16 LE] wybrany kat (NVS 
 constexpr uint8_t kStepperSubCalMode = 0x0A;  // [en] wstrzymaj automat radaru na czas kalibracji
 constexpr uint8_t kStepperSubSetAutoClose = 0x0B; // [s u16 LE] czas auto-zjazdu radaru (presety 30/180/600/2700)
 constexpr uint8_t kStepperSubSetRadarSens = 0x0C; // [kod] czulosc OUT radaru 0/1/2
+constexpr uint8_t kStepperSubSetOnOff = 0x0D; // [en] plynne wylaczenie (dim 7-seg)
+constexpr uint8_t kStepperSubSetSpeed = 0x0E; // [speed u16 LE] auto-powrot (flash STM32)
 constexpr uint8_t kStepperFlagCalOk = 0x01;
 constexpr uint8_t kStepperFlagRadarEn = 0x02;
+constexpr uint8_t kStepperFlagOnOff = 0x10; // bit4: plynne wylaczenie (truth STM32)
 constexpr uint8_t kTypeAck = 0xFF;
 
 // Stany synchronizacji – identyczne po obu stronach

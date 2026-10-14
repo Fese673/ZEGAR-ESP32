@@ -63,9 +63,11 @@ constexpr uint8_t kCmdSetTarget = 0x0C;
 constexpr uint8_t kCmdCalMode   = 0x0D;  /* [en]: wstrzymaj automat na czas kalibracji */
 constexpr uint8_t kCmdSetAutoClose = 0x0E; /* [s u16 LE]: czas auto-zjazdu radaru */
 constexpr uint8_t kCmdSetRadarSens = 0x0F; /* [kod]: czulosc OUT radaru 0/1/2 */
+constexpr uint8_t kCmdSetOnOff = 0x10; /* [en]: "plynne wylaczenie" (dim 7-seg) */
 
 constexpr uint8_t kRefFlagCalOk = 0x01;
 constexpr uint8_t kRefFlagRadarEn = 0x02;
+constexpr uint8_t kRefFlagOnOff = 0x10; /* bit4: plynne wylaczenie (STM32 truth) */
 
 constexpr int32_t  kMaxMove   = 32768;
 constexpr uint16_t kSpeedMin  = 1;
@@ -193,9 +195,19 @@ inline uint8_t encodeSetRadarSens(uint8_t code, uint8_t *out2) {
   return 2;
 }
 
+/* Payload SET_ONOFF: [0x10][en] = 2 B. "Plynne wylaczenie" — bramka
+ * premium dimu 7-seg przy zjezdzie (persist we flash STM32, echo REF
+ * bit4). Automat ruchu bez zmian. */
+inline uint8_t encodeSetOnOff(bool en, uint8_t *out2) {
+  out2[0] = kCmdSetOnOff;
+  out2[1] = en ? 1 : 0;
+  return 2;
+}
+
 /* Rama REF 0xB4 v3: [zero i32][span i32][flags][homeDeg u16][targetDeg u16]
  * [speed u16][autoCloseS u16].
- * flags: bit0 = calOk, bit1 = radarEn, bity 2-3 = czulosc OUT radaru.
+ * flags: bit0 = calOk, bit1 = radarEn, bity 2-3 = czulosc OUT radaru,
+ * bit4 = onoff ("plynne wylaczenie").
  * Stary STM32 wysyla 11/15 B — brakujace pola = 0xFFFF (nie adoptuj).
  * 9 B = bez homeDeg (klasyczne zero). */
 struct RefState {
@@ -207,6 +219,7 @@ struct RefState {
   uint16_t speed = 0xFFFF;
   uint16_t autoCloseS = 0xFFFF;
   uint8_t radarSens = 0; // z bitow 2-3 flags (stary STM32 = 0 = SREDNIA)
+  bool onoff = false;    // bit4 flags (stary STM32 = false = OFF)
 };
 
 inline bool parseRef(const uint8_t *p, uint8_t len, RefState &out) {
@@ -215,6 +228,7 @@ inline bool parseRef(const uint8_t *p, uint8_t len, RefState &out) {
   out.span = rdI32LE(p + 4);
   out.flags = p[8];
   out.radarSens = static_cast<uint8_t>((p[8] >> 2) & 0x03U);
+  out.onoff = (p[8] & kRefFlagOnOff) != 0;
   out.homeDeg = (len >= 11)
       ? static_cast<uint16_t>(p[9] | (static_cast<uint16_t>(p[10]) << 8))
       : 0U;

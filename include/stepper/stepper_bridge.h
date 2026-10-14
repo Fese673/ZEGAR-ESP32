@@ -78,6 +78,10 @@ bool issueSetAutoClose(uint16_t seconds);
 // 2=MALA; STM32 waliduje, zapisuje i aplikuje w module, echo w REF.
 // Tor priorytetowy jak wyzej.
 bool issueSetRadarSens(uint8_t code);
+// "Plynne wylaczenie" (Guition, ekran radaru): bramka premium dimu 7-seg
+// przy zjezdzie; STM32 zapisuje (bit3 flags truth) i echo w REF bit4.
+// Tor priorytetowy jak wyzej.
+bool issueSetOnOff(bool en);
 // Jednorazowy seed migracyjny NVS->STM32 (dwa frame'y FIFO).
 // false = kolejka pelna, retry przy nastepnym starcie.
 bool seedTargetSpeed(uint16_t deg, uint16_t speed);
@@ -106,6 +110,7 @@ int32_t refZero();
 int32_t refSpan();
 bool refCalOk();
 bool refRadarEn();  // automat LD2410C z flash STM32 (default OFF)
+bool refOnOff();    // "plynne wylaczenie" z flash STM32 (bit4 REF; default OFF)
 uint16_t refTargetDeg(); // wybrany kat z REF v2 (0xFFFF = stary STM32, brak)
 uint16_t refSpeed();     // predkosc auto-powrotu z REF v2 (0xFFFF = brak)
 bool refValid();

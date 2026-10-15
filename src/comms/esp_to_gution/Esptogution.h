@@ -2,6 +2,9 @@
 
 #include <Arduino.h>
 #include <stdint.h>
+
+#include "WifiProvisioning.h"
+
 namespace EsptoGuition {
 
 constexpr uint8_t kFrameStart = 0xAA;
@@ -66,6 +69,22 @@ constexpr uint8_t kStepperSubSetSpeed = 0x0E; // [speed u16 LE] auto-powrot (fla
 constexpr uint8_t kStepperFlagCalOk = 0x01;
 constexpr uint8_t kStepperFlagRadarEn = 0x02;
 constexpr uint8_t kStepperFlagOnOff = 0x10; // bit4: plynne wylaczenie (truth STM32)
+//
+// 0x11 kTypeConfig: panel "Ustawienia WiFi" na Guitionie -> provisioning
+// ZEGARA (skan, test hasla, zapis + adopcja bez restartu). Lustro po stronie
+// Guitiona: CommunicationProtocol.h kTypeConfig + CommunicationState.cpp.
+//   G -> Z: [sub][args]
+//   Z -> G: [sub|0x80][args]
+constexpr uint8_t kWifiSubScanReq = 0x01; // [] prosba o skan
+constexpr uint8_t kWifiSubSetCred = 0x02; // [len][ssid][len][pass] test + zapis
+constexpr uint8_t kWifiSubInfoReq = 0x03; // [] stan WiFi + zapisany SSID
+constexpr uint8_t kWifiRespScan = 0x81;   // [status][total][index][count]+n*[rssi i8][flags][len][ssid]
+constexpr uint8_t kWifiRespCred = 0x82;   // [code][reason u16 LE][len][ssid]
+constexpr uint8_t kWifiRespInfo = 0x83;   // [wifiOn][btMode][connected][len][ssid]
+constexpr uint8_t kWifiNetOpen = 0x01;    // flaga sieci: otwarta (bez hasla)
+// Paginacja listy: 5 + 3*(3+32) = 110 B < 128 B limitu payloadu ramki.
+constexpr uint8_t kWifiMaxNetworks = 12U;
+constexpr uint8_t kWifiEntriesPerFrame = 3U;
 constexpr uint8_t kTypeAck = 0xFF;
 
 // Stany synchronizacji – identyczne po obu stronach
@@ -124,6 +143,11 @@ void sendRadarStatus(uint8_t presence, uint16_t movDist, uint8_t movEnergy,
 void sendStepperState(bool busy, int32_t posSteps, uint16_t targetDeg,
                       uint16_t speed, uint16_t homeDeg, uint8_t flags,
                       uint16_t autoCloseS);
+// Panel WiFi (0x11): wyniki skanu (paginowane), testu hasla i info.
+void sendWifiScanChunk(uint8_t status, uint8_t total, uint8_t index,
+                       uint8_t count, const WifiProvisioning::Network* entries);
+void sendWifiCredResult(uint8_t code, uint16_t reason, const char* ssid);
+void sendWifiInfo(uint8_t wifiOn, uint8_t btMode, uint8_t connected, const char* ssid);
 uint8_t nextSequence();
 
 } // namespace EsptoGuition

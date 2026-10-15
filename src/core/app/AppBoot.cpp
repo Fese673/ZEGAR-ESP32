@@ -41,6 +41,7 @@
 #include "UI_Draw.h"
 #include "UIState.h"
 #include "WiFiSync.h"
+#include "WifiProvisioning.h"
 namespace AppBoot {
 namespace {
 
@@ -395,6 +396,7 @@ void initComms(RuntimeContext& ctx) {
     drawHomeThrottled();
   });
   WiFiSync::begin(s_wifiSsid.c_str(), s_wifiPass.c_str(), s_ntpServer.c_str());
+  WifiProvisioning::begin(); // cache zapisanego SSID dla panelu WiFi
 
   MQTTSync::configure(s_mqttConfig);
 

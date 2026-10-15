@@ -1,6 +1,7 @@
 #include "Esptogution.h"
 
 #include <atomic>
+#include <string.h>
 
 #include "AppSettings.h"
 #include "Config.h"
@@ -424,6 +425,8 @@ void begin(HardwareSerial &serialPort, uint32_t baudRate, int rxPin, int txPin) 
 void update() {
   ingestSerialBytes();
   broadcastSnapshots(millis());
+  // Panel WiFi: skan/test hasla skonczony w tle -> ramki wynikow do Guitiona.
+  wifiProvisioningPump();
 
   /* Etap 3 boot sync: przez pierwsze 5s po starcie ZEGAR, wysylaj
    * komende jasnosci co 1s. Rozwiazuje race condition ze STM32 boot
@@ -588,6 +591,65 @@ void sendStepperState(bool busy, int32_t posSteps, uint16_t targetDeg,
     buf[12] = static_cast<uint8_t>(autoCloseS & 0xFFU);
     buf[13] = static_cast<uint8_t>((autoCloseS >> 8) & 0xFFU);
     sendRawFrame(kTypeStepperState, nextSequence(), buf, sizeof(buf));
+}
+
+// --- Panel WiFi (0x11 kTypeConfig) ---
+
+void sendWifiScanChunk(uint8_t status, uint8_t total, uint8_t index,
+                       uint8_t count, const WifiProvisioning::Network* entries) {
+    uint8_t buf[5U + kWifiEntriesPerFrame * (3U + 32U)];
+    uint8_t* c = buf;
+    *c++ = kWifiRespScan;
+    *c++ = status;
+    *c++ = total;
+    *c++ = index;
+    *c++ = count;
+    for (uint8_t i = 0U; i < count; ++i) {
+        const WifiProvisioning::Network& n = entries[i];
+        const size_t len = strnlen(n.ssid, 32U);
+        *c++ = static_cast<uint8_t>(n.rssi);
+        *c++ = (n.open != 0U) ? kWifiNetOpen : 0U;
+        *c++ = static_cast<uint8_t>(len);
+        memcpy(c, n.ssid, len);
+        c += len;
+    }
+    sendRawFrame(kTypeConfig, nextSequence(), buf,
+                 static_cast<uint16_t>(c - buf));
+}
+
+void sendWifiCredResult(uint8_t code, uint16_t reason, const char* ssid) {
+    uint8_t buf[5U + 32U];
+    uint8_t* c = buf;
+    *c++ = kWifiRespCred;
+    *c++ = code;
+    *c++ = static_cast<uint8_t>(reason & 0xFFU);
+    *c++ = static_cast<uint8_t>((reason >> 8U) & 0xFFU);
+    const size_t len = (ssid != nullptr) ? strnlen(ssid, 32U) : 0U;
+    *c++ = static_cast<uint8_t>(len);
+    if (len > 0U) {
+        memcpy(c, ssid, len);
+        c += len;
+    }
+    sendRawFrame(kTypeConfig, nextSequence(), buf,
+                 static_cast<uint16_t>(c - buf));
+}
+
+void sendWifiInfo(uint8_t wifiOn, uint8_t btMode, uint8_t connected,
+                  const char* ssid) {
+    uint8_t buf[5U + 32U];
+    uint8_t* c = buf;
+    *c++ = kWifiRespInfo;
+    *c++ = wifiOn;
+    *c++ = btMode;
+    *c++ = connected;
+    const size_t len = (ssid != nullptr) ? strnlen(ssid, 32U) : 0U;
+    *c++ = static_cast<uint8_t>(len);
+    if (len > 0U) {
+        memcpy(c, ssid, len);
+        c += len;
+    }
+    sendRawFrame(kTypeConfig, nextSequence(), buf,
+                 static_cast<uint16_t>(c - buf));
 }
 
 uint8_t nextSequence() {

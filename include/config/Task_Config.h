@@ -78,6 +78,19 @@ constexpr size_t kStackBytes = 8192;
 
 }  // namespace WifiInitTask
 
+namespace WifiProvisionTask {
+
+// Provisioning WiFi (skan / test hasla) — jak WifiInit: usluga setup, nie realtime.
+constexpr BaseType_t kCore = CORE_APP;
+
+// Ta sama polka co WifiInit: nie moze wyprzedzac I2C ani enkodera.
+constexpr UBaseType_t kPriority = 5;
+
+// WiFi.scanNetworks + gniazdo eventow + WiFi.begin potrzebuja zapasu stosu.
+constexpr size_t kStackBytes = 8192;
+
+}  // namespace WifiProvisionTask
+
 namespace MeteoSyncTask {
 
     // Meteo runs on Core 0 as a background network service to avoid contention with the UI loop.
@@ -104,6 +117,7 @@ static_assert(BtI2STask::kCore == CORE_SYSTEM, "BtI2STask must stay on Core 0");
 static_assert(EncoderTask::kCore == CORE_APP, "EncoderTask must stay on Core 1");
 static_assert(I2cWorkerTask::kCore == CORE_APP, "I2cWorkerTask must stay on Core 1");
 static_assert(WifiInitTask::kCore == CORE_APP, "WifiInitTask must stay on Core 1");
+static_assert(WifiProvisionTask::kCore == CORE_APP, "WifiProvisionTask must stay on Core 1");
 static_assert(MeteoSyncTask::kCore == CORE_SYSTEM, "MeteoSyncTask should stay on Core 0");
 
 static_assert(BtI2STask::kPriority > EncoderTask::kPriority,
@@ -124,6 +138,8 @@ static_assert(I2cWorkerTask::kPriority < configMAX_PRIORITIES,
               "I2cWorkerTask priority must fit the FreeRTOS priority range");
 static_assert(WifiInitTask::kPriority < configMAX_PRIORITIES,
               "WifiInitTask priority must fit the FreeRTOS priority range");
+static_assert(WifiProvisionTask::kPriority < configMAX_PRIORITIES,
+              "WifiProvisionTask priority must fit the FreeRTOS priority range");
 static_assert(MeteoSyncTask::kPriority < configMAX_PRIORITIES,
               "MeteoSyncTask priority must fit the FreeRTOS priority range");
 static_assert(BtI2STask::kPriority < configMAX_PRIORITIES,

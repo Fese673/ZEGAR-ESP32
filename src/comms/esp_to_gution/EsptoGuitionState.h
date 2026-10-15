@@ -105,6 +105,12 @@ void handleReceivedMusicEQ(const uint8_t* payload, uint16_t payloadLength);
 void handleReceivedMusicRequest(const uint8_t* payload, uint16_t payloadLength);
 void handleReceivedRadioModeSwitch(const uint8_t* payload, uint16_t payloadLength);
 void handleReceivedStepperCmd(const uint8_t* payload, uint16_t payloadLength);
+// Panel "Ustawienia WiFi" (0x11 kTypeConfig): skan / test hasla / info.
+// Wyniki leca asynchronicznie przez wifiProvisioningPump() (loopTask).
+void handleReceivedConfigCmd(const uint8_t* payload, uint16_t payloadLength);
+// Puls provisioning: gdy w tle skonczyl sie skan/test, wysyla ramki wynikow
+// (0x81/0x82). Wolany z Esptogution::update() — ta sama petla co snapshoty.
+void wifiProvisioningPump();
 // Zbiera stan mostu steppera + echo UI i wysyla ramke 0x3B do Guitiona.
 // Wywolywac z loop (nie z ISR): po odbiorze 0xB2/0xB3/0xB4, po akceptacji
 // komendy i w pelnym syncu po HELLO. Prawda (zero/span/kalibracja) zyje

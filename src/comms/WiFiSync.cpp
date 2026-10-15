@@ -59,6 +59,9 @@ static uint8_t ntpFailureCount = 0;
 static bool sntpConfigured = false;
 static wifi_event_id_t wifiEventHandler = 0;
 static bool wifiEventHandlerInstalled = false;
+// Panel WiFi (provisioning): gdy true, update() jest no-op — test nowych
+// danych (WifiProvisioning) przejmuje wladze nad polaczeniem.
+static std::atomic<bool> s_provisioningPaused{false};
 
 static void ensureTzSet() {
   const char* current = getenv("TZ");
@@ -363,6 +366,9 @@ void startSync() {
 }
 
 void stop() {
+  // Radio OFF (przejscie w BT / restart): provisioning traci sens —
+  // zdejmij pauze, zeby ewentualny test nie zostal "zawieszony" jako busy.
+  s_provisioningPaused.store(false, std::memory_order_release);
   resetSyncState();
   wifiFailureCount = 0;
   ntpFailureCount = 0;
@@ -483,6 +489,12 @@ void update() {
   // ktore zwracalo true natychmiast ze starego zegara, bez pakietu).
   if (s_ntpSyncEvent.exchange(false, std::memory_order_acq_rel)) {
     completeTimeSync(now);
+    return;
+  }
+
+  // Provisioning (test nowych danych WiFi) przejmuje polaczenie: automat
+  // czeka. Swiezy pakiet NTP obsluzony wyzej (nowe lacze moze juz zyc).
+  if (s_provisioningPaused.load(std::memory_order_acquire)) {
     return;
   }
 
@@ -628,6 +640,75 @@ void setPeriodicSyncIntervalMinutes(uint16_t minutes) {
 
 uint16_t getPeriodicSyncIntervalMinutes() {
   return (uint16_t)(periodicSyncIntervalMs / 60000UL);
+}
+
+// --- Provisioning WiFi (panel na Guitionie) ---
+
+bool pauseForProvisioning() {
+  s_provisioningPaused.store(true, std::memory_order_release);
+
+  // Trwajacy wifiInitTask wolalby WiFi.begin() starymi danymi i nadpisal
+  // test. Prosimy go o przerwanie (flaga) i CZEKAMY az skonczy sam —
+  // WiFi.mode() potrafi blokowac 2-8 s, wiec okno jest dluzsze niz w stop().
+  // NIGDY nie ubijamy go sila: kill w srodku inicjalizacji drivera zostawia
+  // WiFi w nieokreslonym stanie (dokladnie ten hazard co ERR_043).
+  s_wifiInitAbort.store(true, std::memory_order_release);
+  unsigned long waitStart = millis();
+  while (wifiBeginTaskHandle.load(std::memory_order_acquire) != NULL &&
+         (millis() - waitStart) < 10000UL) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  const bool stopped = (wifiBeginTaskHandle.load(std::memory_order_acquire) == NULL);
+  s_wifiInitAbort.store(false, std::memory_order_release);
+
+  if (!stopped) {
+    // Nie udalo sie bezpiecznie zatrzymac — oddajemy sterowanie automatowi.
+    s_provisioningPaused.store(false, std::memory_order_release);
+    LOG_W(TAG, "Provisioning pause FAILED (wifiInit busy) action=abort");
+    return false;
+  }
+
+  LOG_I(TAG, "Provisioning pause done");
+  return true;
+}
+
+void adoptProvisionedCredentials(const char* ssid, const char* pass) {
+  copyCredential(ssidCopy, kSsidCopySize, ssid);
+  copyCredential(passCopy, kPassCopySize, pass);
+
+  resetSyncState();
+  wifiFailureCount = 0;
+  ntpFailureCount = 0;
+  syncStartMillis = 0;
+  lastPeriodicSync = millis();
+  sntpConfigured = false; // nowe lacze: skonfiguruj SNTP od nowa
+  s_provisioningPaused.store(false, std::memory_order_release);
+
+  // Lacze juz zyje na nowych danych — nie zlecamy reconnectu, tylko swiezy
+  // NTP (po GOT_IP lwip dociagnie pakiet, completeTimeSync ustawi zegar/RTC).
+  requestTimeSync();
+  LOG_I(TAG, "Provisioned credentials adopted ssid_len=%u", (unsigned)strlen(ssidCopy));
+}
+
+void restoreAfterProvisioning() {
+  resetSyncState();
+  wifiFailureCount = 0;
+  ntpFailureCount = 0;
+  lastPeriodicSync = millis();
+  s_provisioningPaused.store(false, std::memory_order_release);
+
+  // Powrot na stare dane + swiezy sync czasu (zjazd mogl zgubic jeden tick).
+  wifiConnectRequested = true;
+  timeSyncRequested = true;
+  LOG_W(TAG, "Provisioning failed — restoring previous credentials");
+}
+
+uint16_t lastDisconnectReason() {
+  return wifiDisconnectReason.load(std::memory_order_acquire);
+}
+
+bool isProvisioningPaused() {
+  return s_provisioningPaused.load(std::memory_order_acquire);
 }
 
 } // namespace WiFiSync

@@ -52,4 +52,20 @@ bool hasNtpSynced();
 // WiFi status (non-blocking)
 int8_t getRssi();
 
+// --- Provisioning WiFi (panel "Ustawienia WiFi" na Guitionie) ---
+// Automat WiFiSync musi stac podczas testu nowych danych: eventy GOT_IP/
+// DISCONNECTED nie moga w tle wznawiac polaczenia ani liczyc backoffu.
+// Czeka (do 10 s) az trwajacy wifiInitTask skonczy bezpiecznie — NIGDY nie
+// ubija go w srodku WiFi.mode() (uszkodzony driver). false = nie udalo sie
+// wstrzymac; wolajacy ma odpuscic (busy) i nie ruszac lacza.
+bool pauseForProvisioning();
+// Nowe dane dzialaja OD RAZU (bez restartu): kopiuje do ssidCopy/passCopy,
+// wznawia automat na juz ustanowionym lace i wymusza swiezy sync czasu.
+void adoptProvisionedCredentials(const char* ssid, const char* pass);
+// Po nieudanym tescie: wznawia automat i wraca na stare dane + swiezy sync.
+void restoreAfterProvisioning();
+// Ostatni powod rozlaczenia z drivera (np. 15=zle haslo, 201=brak AP).
+uint16_t lastDisconnectReason();
+bool isProvisioningPaused();
+
 }  // namespace WiFiSync

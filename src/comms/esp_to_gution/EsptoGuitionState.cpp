@@ -34,6 +34,7 @@
 #include "UI_Draw.h"
 #include "UIState.h"
 #include "WiFiSync.h"
+#include "WifiProvisioning.h"
 extern uint8_t heapUsageCore0Percent;
 extern uint8_t heapUsageCore1Percent;
 extern uint32_t ramFreeBytes;
@@ -389,7 +390,10 @@ bool buildTimePayload(TimePayload &out) {
   // Use system time (RAM) instead of hitting the I2C bus (RTCService::getEpoch).
   // The system time is already synced with RTC by ClockService.
   const time_t epoch = time(nullptr);
-  if (epoch > 1000000UL) { // Basic sanity check
+  // Prog 2020-09-13: epoch z niezsynchronizowanego ESP startuje od 1970,
+  // a Guition adoptuje ten czas jako swoj zegar (ramka 0x03 co 1 s) —
+  // lepiej pokazac "--" niz "1970" jako "zsynchronizowane".
+  if (epoch > 1600000000UL) {
     out.unixSeconds = static_cast<uint32_t>(epoch);
     out.valid = 1U;
     return true;
@@ -996,6 +1000,94 @@ void handleReceivedStepperCmd(const uint8_t* payload, uint16_t payloadLength) {
     }
     default:
       break;
+  }
+}
+
+// Panel "Ustawienia WiFi" (0x11 kTypeConfig): komendy z Guitiona.
+// Skan i test hasla leca w krotkozyjacych taskach WifiProvisioning (petla
+// glowna pozostaje responsywna); wyniki wysyla wifiProvisioningPump().
+void handleReceivedConfigCmd(const uint8_t* payload, uint16_t payloadLength) {
+  if (payload == nullptr || payloadLength < 1U) return;
+  switch (payload[0]) {
+    case kWifiSubScanReq:
+      if (!WifiProvisioning::requestScan()) {
+        sendWifiScanChunk(WifiProvisioning::kResBusy, 0U, 0U, 0U, nullptr);
+      }
+      break;
+
+    case kWifiSubSetCred: { // [len][ssid][len][pass]
+      if (payloadLength < 3U) {
+        sendWifiCredResult(WifiProvisioning::kResInvalid, 0U, nullptr);
+        return;
+      }
+      const uint8_t ssidLen = payload[1];
+      if (ssidLen == 0U || ssidLen > WifiProvisioning::kSsidLenMax ||
+          payloadLength < static_cast<uint16_t>(2U + ssidLen + 1U)) {
+        sendWifiCredResult(WifiProvisioning::kResInvalid, 0U, nullptr);
+        return;
+      }
+      const uint8_t passLen = payload[2U + ssidLen];
+      if (passLen > WifiProvisioning::kPassLenMax ||
+          payloadLength < static_cast<uint16_t>(3U + ssidLen + passLen)) {
+        sendWifiCredResult(WifiProvisioning::kResInvalid, 0U, nullptr);
+        return;
+      }
+
+      char ssid[WifiProvisioning::kSsidLenMax + 1];
+      char pass[WifiProvisioning::kPassLenMax + 1];
+      memcpy(ssid, payload + 2U, ssidLen);
+      ssid[ssidLen] = '\0';
+      memcpy(pass, payload + 3U + ssidLen, passLen);
+      pass[passLen] = '\0';
+
+      if (!WifiProvisioning::requestTest(ssid, pass)) {
+        sendWifiCredResult(WifiProvisioning::kResBusy, 0U, ssid);
+      }
+      break;
+    }
+
+    case kWifiSubInfoReq: { // [] -> stan WiFi + zapisany SSID
+      uint8_t wifiOn = 0U;
+      uint8_t btMode = 0U;
+      uint8_t connected = 0U;
+      char saved[WifiProvisioning::kSsidLenMax + 1] = {0};
+      WifiProvisioning::requestInfo(wifiOn, btMode, connected, saved,
+                                    sizeof(saved));
+      sendWifiInfo(wifiOn, btMode, connected, saved);
+      break;
+    }
+
+    default:
+      break;
+  }
+}
+
+// Puls provisioning (loopTask): skan/test skonczony -> ramki wynikow.
+void wifiProvisioningPump() {
+  const uint8_t event = WifiProvisioning::poll();
+  if (event == WifiProvisioning::kEventScanReady) {
+    const uint8_t status = WifiProvisioning::scanStatus();
+    const uint8_t total = WifiProvisioning::scanCount();
+    if (status != WifiProvisioning::kResOk || total == 0U) {
+      sendWifiScanChunk(status, total, 0U, 0U, nullptr);
+      return;
+    }
+    const WifiProvisioning::Network* nets = WifiProvisioning::scanNetworks();
+    uint8_t index = 0U;
+    while (index < total) {
+      uint8_t count = static_cast<uint8_t>(total - index);
+      if (count > kWifiEntriesPerFrame) count = kWifiEntriesPerFrame;
+      sendWifiScanChunk(status, total, index, count, nets + index);
+      index = static_cast<uint8_t>(index + count);
+    }
+    LOG_I("WIFIPROV", "scan result sent total=%u", (unsigned)total);
+  } else if (event == WifiProvisioning::kEventTestReady) {
+    sendWifiCredResult(WifiProvisioning::testCode(),
+                       WifiProvisioning::testReason(),
+                       WifiProvisioning::testSsid());
+    // Ikona WiFi na belce Guitiona: natychmiastowy swiezy status (nie czekamy
+    // na 2-sekundowy cykl broadcastSnapshots).
+    sendWifiStatus(nextSequence());
   }
 }
 

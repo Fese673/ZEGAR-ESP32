@@ -103,6 +103,11 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
     handleReceivedStepperCmd(payload, payloadLength);
     sendAck(sequence, kAckOk, type);
     break;
+  // Panel "Ustawienia WiFi": skan / test hasla / info (wynik async w pumpie).
+  case kTypeConfig:
+    handleReceivedConfigCmd(payload, payloadLength);
+    sendAck(sequence, kAckOk, type);
+    break;
   // NOWE: TimeSyncProtocol — ramki Gution→Zegar
   case TimeSync::kTypeAlarmList:
     TimeSync::handleAlarmListSync(payload, payloadLength);
@@ -202,6 +207,17 @@ void sendRawFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
   txBuffer[1 + cobsLen] = 0x00;
 
   const size_t wireLen = cobsLen + 2;
+
+  // Ramki provisioning (0x11): skan leci paczka 4 chunkow pod rzad, a wynik
+  // testu jest krytyczny (panel czeka na timeout). Krotko czekamy na miejsce
+  // w buforze zamiast zrzucac od razu — zywy link oprozni sie w ms.
+  if (type == kTypeConfig) {
+    for (uint8_t attempt = 0U;
+         attempt < 8U && s_serial->availableForWrite() < wireLen; ++attempt) {
+      vTaskDelay(1);
+    }
+  }
+
   if (s_serial->availableForWrite() >= wireLen) {
     s_serial->write(txBuffer, wireLen);
   } else {

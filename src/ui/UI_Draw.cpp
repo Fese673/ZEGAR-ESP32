@@ -29,6 +29,8 @@
 #include "AlarmMelodies.h"
 #include "AlarmRuntime.h"
 #include "UIState.h"
+#include "TimerService.h"
+#include "comms/TimeSyncProtocol.h"
 
 extern LiquidCrystal_I2C lcd;
 
@@ -103,7 +105,8 @@ const int& settingsRotationSec = appSettings.homeOverlaySeconds;
 const int& settingsSyncMinutes = appSettings.ntpSyncMinutes;
 
 const AlarmRuntime::State& alarmRuntime = AlarmRuntime::state();
-const bool& alarmRinging = alarmRuntime.alarmRinging;
+// (alarmRinging: 7-seg nie blankuje juz cyfr — sygnalizacja to blink jasnosci
+//  z STM32, sterowany z AppLoop::serviceSegBlink; LCD ma wlasny wskaznik.)
 const AlarmEntry (&alarms)[AlarmRuntime::kMaxAlarms] = alarmRuntime.alarms;
 const int& alarmsCount = alarmRuntime.alarmsCount;
 
@@ -246,99 +249,77 @@ void initSevenSeg() {
   s_sevenSegReady = true;
 }
 
+static void renderSevenSegStopwatchDigits();
+static void renderSevenSegTimerDigits();
+
+// Zawartosc fizycznego 7-seg (V3.0, "spojny system"):
+//   priorytet 1 — lokalne ekrany ZEGARA widziane przez operatora "tu i teraz"
+//                 (debug sprzetu, podglady edycji czasu/budzika/minutnika),
+//   priorytet 2 — TRYB 7-seg wybrany przyciskami kolowymi na ekranie ZEGAR
+//                 w Guitonie (0=zegar, 1=stoper, 2=minutnik),
+//   priorytet 3 — zwykly zegar.
+// Alarm NIE blankuje juz cyfr (wygladalo to jak awaria wyswietlacza):
+// sygnalizacja to blink JASNOSCI sterowany przez STM32 ramka 0xB5 —
+// zawartosc pozostaje stabilna, a jasnosc pulsuje. Zarowno alarm, jak i
+// tryb 7-seg sa niezalezne od tego, co akurat pokazuje LCD ZEGARA.
 void updateSevenSeg() {
   if (!s_sevenSegReady) {
     return;
   }
 
-  const bool systemTimeValid = RtcSyncService::isSystemTimeValid();
-  const bool clockSeeded = RtcSyncService::isClockSeeded();
-  const bool timerPreviewVisible = (appState == STATE_TIMER && !timerRunning);
-  const bool alarmEditVisible = (appState == STATE_ALARM_EDIT);
-  const unsigned long nowMs = millis();
-
-  static bool alarmBlinkVisible = true;
-  static bool alarmBlinkInitialized = false;
-  static unsigned long alarmBlinkLastToggleMs = 0;
-
-  if (alarmRinging) {
-    if (!alarmBlinkInitialized) {
-      alarmBlinkVisible = true;
-      alarmBlinkLastToggleMs = nowMs;
-      alarmBlinkInitialized = true;
-    } else if (nowMs - alarmBlinkLastToggleMs >= 500UL) {
-      alarmBlinkLastToggleMs = nowMs;
-      alarmBlinkVisible = !alarmBlinkVisible;
-    }
-
-    if (!alarmBlinkVisible) {
-      commitSevenSegFrame(0, 0, 0);
-      return;
-    }
-  } else {
-    alarmBlinkInitialized = false;
-    alarmBlinkVisible = true;
-  }
-
+  // ── Priorytet 1: podglady lokalne (moment; po wyjsciu wraca tryb) ──
   if (appState == STATE_DEBUG_STM32 && stm32Connected) {
     updateSevenSegDebugSTM32();
     return;
   }
-
-  if (!alarmRinging && !timerRunning && !timerPreviewVisible && appState != STATE_SET_TIME && !alarmEditVisible && !systemTimeValid && !clockSeeded) {
+  if (appState == STATE_SET_TIME) {
+    commitSevenSegFrame(swapNibbles(packTwoDigits(g_editS)),
+                        swapNibbles(packTwoDigits(g_editM)),
+                        swapNibbles(packTwoDigits(g_editH)));
     return;
   }
-
-  uint8_t HH, MM, SS;
-
-  if (alarmRinging) {
-    int th, tm, ts;
-    Clock::hms(th, tm, ts);
-    HH = packTwoDigits(th);
-    MM = packTwoDigits(tm);
-    SS = packTwoDigits(ts);
-  } else if (timerRunning) {
-    unsigned long elapsed = (nowMs >= timerStartMillis) ? (nowMs - timerStartMillis) : 0;
-    long remainingMs = (long)timerDurationMs - (long)elapsed;
-    if (remainingMs < 0) remainingMs = 0;
-    int rh = (int)(remainingMs / 3600000L);
-    int rm = (int)((remainingMs % 3600000L) / 60000L);
-    int rs = (int)((remainingMs % 60000L) / 1000L);
-    if (rh > 99) {
-      rh = 99;
-    }
-    HH = packTwoDigits(rh);
-    MM = packTwoDigits(rm);
-    SS = packTwoDigits(rs);
-  } else if (timerPreviewVisible) {
-    HH = packTwoDigits(timerSetHours);
-    MM = packTwoDigits(timerSetMinutes);
-    SS = packTwoDigits(timerSetSeconds);
-  } else if (alarmEditVisible) {
+  if (appState == STATE_ALARM_EDIT) {
     int previewHours = (alarmsCount > 0) ? alarms[0].hour : 7;
     int previewMinutes = (alarmsCount > 0) ? alarms[0].minute : 0;
-
-    if (appState == STATE_ALARM_EDIT && selectedAlarmIndex >= 0 && selectedAlarmIndex < alarmsCount) {
+    if (selectedAlarmIndex >= 0 && selectedAlarmIndex < alarmsCount) {
       previewHours = alarms[selectedAlarmIndex].hour;
       previewMinutes = alarms[selectedAlarmIndex].minute;
     }
-
-    HH = packTwoDigits(previewHours);
-    MM = packTwoDigits(previewMinutes);
-    SS = 0;
-  } else if (appState == STATE_SET_TIME) {
-    HH = packTwoDigits(g_editH);
-    MM = packTwoDigits(g_editM);
-    SS = packTwoDigits(g_editS);
-  } else {
-    int th, tm, ts;
-    Clock::hms(th, tm, ts);
-    HH = packTwoDigits(th);
-    MM = packTwoDigits(tm);
-    SS = packTwoDigits(ts);
+    commitSevenSegFrame(0, swapNibbles(packTwoDigits(previewMinutes)),
+                        swapNibbles(packTwoDigits(previewHours)));
+    return;
+  }
+  if (appState == STATE_TIMER && !timerRunning) {
+    // Ustawianie minutnika na ZEGARZE — podglad wybranego czasu.
+    commitSevenSegFrame(swapNibbles(packTwoDigits(timerSetSeconds)),
+                        swapNibbles(packTwoDigits(timerSetMinutes)),
+                        swapNibbles(packTwoDigits(timerSetHours)));
+    return;
   }
 
-  commitSevenSegFrame(swapNibbles(SS), swapNibbles(MM), swapNibbles(HH));
+  // ── Priorytet 2: tryb wybrany z Guitiona (0x17/0x18) ──
+  const uint8_t segMode = TimeSync::getSegMode();
+  if (segMode == TimeSync::kSegModeStopwatch) {
+    renderSevenSegStopwatchDigits();
+    return;
+  }
+  if (segMode == TimeSync::kSegModeTimer) {
+    renderSevenSegTimerDigits();
+    return;
+  }
+
+  // ── Priorytet 3: zwykly zegar ──
+  const bool systemTimeValid = RtcSyncService::isSystemTimeValid();
+  const bool clockSeeded = RtcSyncService::isClockSeeded();
+  if (!systemTimeValid && !clockSeeded) {
+    // Brak seeda czasu — nie ruszamy wyswietlacza (zero migajacych zer).
+    return;
+  }
+  int th, tm, ts;
+  Clock::hms(th, tm, ts);
+  commitSevenSegFrame(swapNibbles(packTwoDigits(ts)),
+                      swapNibbles(packTwoDigits(tm)),
+                      swapNibbles(packTwoDigits(th)));
 }
 
 void updateSevenSegStoper(int mins, int secs, int centisec) {
@@ -362,6 +343,53 @@ static void updateSevenSegStoperHms(int hours, int mins, int secs) {
   const uint8_t HHb = packTwoDigits(hours);
   const uint8_t MMb = packTwoDigits(mins);
   const uint8_t SSb = packTwoDigits(secs);
+
+  commitSevenSegFrame(swapNibbles(SSb), swapNibbles(MMb), swapNibbles(HHb));
+}
+
+// ── Tryb 7-seg: renderery wybranej zawartosci (priorytet 2) ──────────
+
+// Stoper: < 60 min -> MM:SS,CS; >= 60 min -> HH:MM:SS (spójnie z drawStoper
+// i StopwatchService — ten sam format co na LCD ZEGARA).
+static void renderSevenSegStopwatchDigits() {
+  const uint32_t t = StopwatchService::getElapsedMs();
+  if (StopwatchService::getDisplayMode() == StopwatchDisplayMode::S) {
+    uint32_t hh = t / 3600000UL;
+    if (hh > StopwatchService::kMaxDisplayHours) {
+      hh = StopwatchService::kMaxDisplayHours;
+    }
+    const int mm = (int)((t % 3600000UL) / 60000UL);
+    const int ss = (int)((t % 60000UL) / 1000UL);
+    updateSevenSegStoperHms((int)hh, mm, ss);
+  } else {
+    const int mm = (int)((t / 60000UL) % 100UL);
+    const int ss = (int)((t / 1000UL) % 60UL);
+    const int cs = (int)((t / 10UL) % 100UL);
+    updateSevenSegStoper(mm, ss, cs);
+  }
+}
+
+// Minutnik: RUNNING/PAUSED -> pozostaly czas; RINGING -> 00:00:00 (miga
+// jasnosc z STM32); IDLE -> podglad ustawionego czasu.
+static void renderSevenSegTimerDigits() {
+  const uint8_t st = (uint8_t)TimerService::getState(); // 0=IDLE..3=RINGING
+
+  uint8_t HHb, MMb, SSb;
+  if (st == 1U || st == 2U) { // RUNNING / PAUSED
+    uint32_t rem = TimerService::getRemainingSec();
+    if (rem > 359999UL) rem = 359999UL; // 99:59:59 — spojnie z HH-cap
+    HHb = packTwoDigits((int)(rem / 3600UL));
+    MMb = packTwoDigits((int)((rem % 3600UL) / 60UL));
+    SSb = packTwoDigits((int)(rem % 60UL));
+  } else if (st == 3U) { // RINGING
+    HHb = packTwoDigits(0);
+    MMb = packTwoDigits(0);
+    SSb = packTwoDigits(0);
+  } else { // IDLE — podglad ustawionego czasu
+    HHb = packTwoDigits(timerSetHours);
+    MMb = packTwoDigits(timerSetMinutes);
+    SSb = packTwoDigits(timerSetSeconds);
+  }
 
   commitSevenSegFrame(swapNibbles(SSb), swapNibbles(MMb), swapNibbles(HHb));
 }
@@ -1198,7 +1226,9 @@ void drawTimer() {
 
 // --- Ekran stopera ---
 // Ujednolicone z Gution: < 60 min -> "STOPER (MS)" + MM:SS.CS,
-// >= 60 min -> "STOPER (S)" + HH:MM:SS (bez setnych). 7-seg lustrzany do trybu.
+// >= 60 min -> "STOPER (S)" + HH:MM:SS (bez setnych).
+// 7-seg NIE jest juz lustrem tego ekranu — rzadzi nim tryb wybrany z
+// Guitiona (updateSevenSeg, priorytet 2).
 void drawStoper() {
   LCD_CLEAR();
 
@@ -1222,14 +1252,12 @@ void drawStoper() {
     const int ss = (int)((t % 60000UL) / 1000UL);
 
     snprintf(buf, sizeof(buf), "> %02u:%02d:%02d <", (unsigned)hh, mm, ss);
-    updateSevenSegStoperHms((int)hh, mm, ss);
   } else {
     const int mm = (int)((t / 60000UL) % 100UL);
     const int ss = (int)((t / 1000UL) % 60UL);
     const int cs = (int)((t / 10UL) % 100UL);
 
     snprintf(buf, sizeof(buf), "> %02d:%02d.%02d <", mm, ss, cs);
-    updateSevenSegStoper(mm, ss, cs);
   }
 
   lcdPrintCentered(2, buf);

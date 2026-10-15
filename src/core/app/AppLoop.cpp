@@ -16,6 +16,7 @@
 #include "ClockAlarmService.h"
 #include "comms/esp_to_gution/Esptogution.h"
 #include "comms/esp_to_gution/EsptoGuitionState.h"
+#include "comms/TimeSyncProtocol.h"
 #include "core/events/EventBus.h"
 #include "Encoder.h"
 #include "ENS160AHT21Sensor.h"
@@ -233,8 +234,44 @@ static void onUiRefresh(const Event&) {
 
 static void onStoperTick(const Event&) {
   if (BootIntroService::isActive()) return;
-  if (appState != STATE_STOPER) return;
-  drawStoper();
+  if (appState == STATE_STOPER) {
+    drawStoper();
+    // drawStoper nie jest juz lustrem 7-seg (tryb rzadzi z Guitiona),
+    // wiec odswiezamy wyswietlacz takze na lokalnym ekranie stopera —
+    // inaczej zamarzlby (stoper ORAZ zegar w trybie 0).
+    updateSevenSeg();
+    return;
+  }
+  // Tryb 7-seg = stoper (kolko na Guitonie): setne musza odswiezac sie
+  // co 500 ms takze gdy lokalny ekran ZEGARA pokazuje cos innego.
+  if (TimeSync::getSegMode() == TimeSync::kSegModeStopwatch) {
+    updateSevenSeg();
+  }
+}
+
+// ─── Alarm: blink jasnosci 7-seg przez STM32 (ramka 0xB5) ─────────────
+// Zamiast blankowac cyfry (wygladalo jak awaria), sygnalizujemy alarm
+// pulsowaniem JASNOSCI — robi to STM32 warstwa seg_blink (PWM), a cyfry
+// pozostaja stabilne. Wysylamy przy zmianie stanu + heartbeat co 2 s
+// (STM32 ma TTL 5 s: brak odswiezenia = auto-OFF, np. po resecie ZEGARA).
+
+static void serviceSegBlink() {
+  const bool ringing =
+      AlarmRuntime::state().alarmRinging || TimerService::isRinging();
+  static uint8_t s_lastSent = 0xFFU; // 0xFF = nieznany (wymus pierwsza wysylke)
+  static uint32_t s_lastSendMs = 0U;
+
+  const uint32_t nowMs = millis();
+  const uint8_t want = ringing ? 1U : 0U;
+
+  if (want != s_lastSent) {
+    STM32data_sendSegBlink(want != 0U);
+    s_lastSent = want;
+    s_lastSendMs = nowMs;
+  } else if (want != 0U && (uint32_t)(nowMs - s_lastSendMs) >= 2000UL) {
+    STM32data_sendSegBlink(true); // heartbeat (TTL na STM32 = 5 s)
+    s_lastSendMs = nowMs;
+  }
 }
 
 // ─── Handler: EV_DIAGNOSTICS (2000ms) ─────────────────────────────────
@@ -331,6 +368,7 @@ void runLoop() {
   EsptoGuition::update();
    STM32data_update();  // non-blocking, 50Hz PPG stream
    StepperBridge::update();  // STEPPER_BRIDGE: pompa mostu (idle ~0, max 8 linii + 1 ramka/100ms)
+  serviceSegBlink();   // alarm: blink jasnosci 7-seg (zmiana + heartbeat 2 s)
   ClockAlarmService::serviceAlarmPlayback(BUZZER_PIN, ALARM_DURATION_MS);
   TimerService::servicePlayback(BUZZER_PIN, ALARM_DURATION_MS);
 

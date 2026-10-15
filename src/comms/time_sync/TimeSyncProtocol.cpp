@@ -12,9 +12,13 @@
 #include "comms/esp_to_gution/Esptogution.h"
 #include "StopwatchService.h"
 #include "TimerService.h"
+#include "UI_Draw.h"
 extern volatile bool g_nvsAlarmsDirty;
 
 namespace TimeSync {
+
+// Tryb 7-seg: 0=zegar, 1=stoper, 2=minutnik. Bez NVS (po restarcie zegar).
+static uint8_t s_segMode = kSegModeClock;
 
 // ─── Send: AlarmList ────────────────────────────────────────────────
 void sendAlarmList() {
@@ -224,6 +228,32 @@ void handleStopwatchCmd(const uint8_t* payload, uint16_t len) {
       return;
   }
   sendStopwatchState();
+}
+
+// ─── Tryb 7-seg (0x17/0x18) ──────────────────────────────────────────
+// Guition wybiera, co ma byc na fizycznym 7-seg (przyciski kolowe przy
+// kartach STOPER/MINUTNIK). ZEGAR jest wlascicielem: przyjmuje, rysuje
+// od razu i odsyla echo. Bez persistencji — po restarcie zawsze zegar.
+
+uint8_t getSegMode() {
+  return s_segMode;
+}
+
+void sendSegModeState() {
+  uint8_t buf[1] = { s_segMode };
+  EsptoGuition::sendRawFrame(kTypeSegModeState, EsptoGuition::nextSequence(), buf, 1);
+}
+
+bool handleSegModeCmd(const uint8_t* payload, uint16_t len) {
+  if (payload == nullptr || len < 1) return false;
+  const uint8_t mode = payload[0];
+  if (mode > kSegModeTimer) return false; // 0/1/2 — inne odrzucamy (NACK)
+  s_segMode = mode;
+  // Natychmiast na 7-seg (nie czekamy na tick 1 s / 500 ms).
+  updateSevenSeg();
+  // Echo = potwierdzenie dla Guitiona (przyciski odzwierciedlaja PRAWDE).
+  sendSegModeState();
+  return true;
 }
 
 // ─── Handle: AlarmAction (Gution -> Zegar) ──────────────────────────

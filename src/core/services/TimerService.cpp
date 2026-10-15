@@ -9,6 +9,7 @@
 extern bool timerRunning;
 extern unsigned long timerStartMillis;
 extern unsigned long timerDurationMs;
+extern void updateSevenSeg(); // natychmiastowy redraw 7-seg przy RINGING
 
 namespace TimerService {
 namespace {
@@ -118,6 +119,10 @@ void tick(uint8_t buzzerPin) {
       );
     }
     TimeSync::sendTimerState();
+    // Od razu 00:00:00 na 7-seg (tryb minutnika). Bez tego przy braku seeda
+    // czasu ostatnia sekunda moglaby zostac na wyswietlaczu z migajaca
+    // jasnoscia. updateSevenSeg sam respektuje tryb/podglady.
+    updateSevenSeg();
   }
 }
 

@@ -49,6 +49,12 @@ void STM32data_update();
 /*--- Wyślij komendę jasności 7-seg do STM32 (COBS frame 0xB0). ---*/
 void STM32data_sendBrightness(uint8_t percent);
 
+/*--- Alarm: blink jasności 7-seg (COBS frame 0xB5, payload=[en]).
+ * STM32 pulsuje PWM (500 ms) między jasnością bazową a ~2%; TTL 5 s bez
+ * odświeżenia = auto-OFF (heartbeat: ZEGAR wysyła co 2 s podczas dzwonienia).
+ * Wysyłane 3 kopie dla niezawodności (jak brightness). ---*/
+void STM32data_sendSegBlink(bool en);
+
 /*--- STEPPER_BRIDGE: hook + nadawca ramek steppera (0xB1). ---
  * Hook dostaje NIEZNANE dispatcherowi typy ramek (0xB2/0xB3/DONE/STATUS
  * steppera). Wołany synchronicznie z STM32data_update() — ma być szybki

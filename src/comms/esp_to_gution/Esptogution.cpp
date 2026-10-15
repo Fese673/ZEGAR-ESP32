@@ -375,6 +375,7 @@ void broadcastSnapshots(unsigned long nowMs) {
     TimeSync::sendAlarmList();
     TimeSync::sendTimerState();
     TimeSync::sendStopwatchState();
+    TimeSync::sendSegModeState();
     buildWeatherPayload(s_lastSentWeather, nowMs);
     buildOutdoorWeatherPayload(s_lastSentOutdoorWeather, nowMs);
     buildPmsPayload(s_lastSentPms, nowMs);

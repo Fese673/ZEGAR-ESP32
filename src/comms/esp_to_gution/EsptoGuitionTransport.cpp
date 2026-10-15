@@ -63,6 +63,8 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
     // o rame odniesienia (boot-REF STM32 mogl przyjsc przed naszym hookiem).
     EsptoGuition::pushStepperState();
     EsptoGuition::requestStepperRef();
+    // Tryb 7-seg: po restarcie ZEGARA Guition gasi oba kolka (zawsze zegar).
+    TimeSync::sendSegModeState();
     break;
   case kTypeRequest:
     if (payloadLength >= 1) {
@@ -72,6 +74,9 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
         EsptoGuition::sendSystemResources(sequence);
       } else if (payload[0] == TimeSync::kTypeAlarmList) {
         TimeSync::sendAlarmList();
+      } else if (payload[0] == TimeSync::kTypeSegModeState) {
+        // Wejscie na ekran ZEGAR w Guitonie — swiezy tryb bez czekania.
+        TimeSync::sendSegModeState();
       }
     }
     break;
@@ -128,6 +133,13 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
   case TimeSync::kTypeStopwatchCmd:
     TimeSync::handleStopwatchCmd(payload, payloadLength);
     sendAck(sequence, kAckOk, type);
+    break;
+  // Tryb 7-seg: kolka przy kartach STOPER/MINUTNIK (0x17 -> echo 0x18).
+  case TimeSync::kTypeSegModeCmd:
+    sendAck(sequence,
+            TimeSync::handleSegModeCmd(payload, payloadLength) ? kAckOk
+                                                               : kAckBadLength,
+            type);
     break;
   default:
     sendAck(sequence, kAckBadType, type);

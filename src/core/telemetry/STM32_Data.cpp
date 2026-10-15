@@ -73,6 +73,9 @@ static constexpr uint8_t kTypeBrightness = 0xB0;
 // include/stepper/stepper_frames.h). 0xB2/0xB3 lecą w drugą stronę
 // i lądują w hooku poniżej — istniejące typy nietknięte.
 static constexpr uint8_t kTypeStepperCmd = 0xB1;
+// 0xB5 ZEGAR->STM32: blink jasnosci 7-seg (alarm). Payload=[en 0/1].
+// Kontrakt po stronie STM32: FRAME_TYPE_SEG_BLINK (frame_protocol.h).
+static constexpr uint8_t kTypeSegBlink  = 0xB5;
 static STM32StepperHook_t s_stepperHook = nullptr;  // STEPPER_BRIDGE
 
 static constexpr uint16_t kMaxPayload   = 128;
@@ -425,6 +428,16 @@ void STM32data_sendBrightness(uint8_t percent)
      * ten sam PWM, wiec duplikaty sa nieszkodliwe. */
     for (int i = 0; i < 3; ++i) {
         sendFrame(kTypeBrightness, &payload, 1U);
+    }
+}
+
+void STM32data_sendSegBlink(bool en)
+{
+    uint8_t payload = en ? 1U : 0U;
+    /* 3 kopie jak brightness — STM32 idempotentnie ustawia ten sam stan
+     * blinku (odbior bez zmian tylko odswieza TTL). */
+    for (int i = 0; i < 3; ++i) {
+        sendFrame(kTypeSegBlink, &payload, 1U);
     }
 }
 

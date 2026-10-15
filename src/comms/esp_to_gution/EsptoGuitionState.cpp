@@ -594,20 +594,31 @@ void setPendingSevenSegBrightness(uint8_t value) {
 void musicSettingsFlush() {
     music_settings_flush();
     if (!s_settingsDirty) return;
-    s_settingsDirty = false;
+
     Preferences prefs;
-    prefs.begin("zegar", false);
-    prefs.putBool("buzzerEnabled", s_pendingSettings.buzzerEnabled);
-    prefs.putBool("mqttEnabled", s_pendingSettings.mqttEnabled);
-    prefs.putBool("touchTest", s_pendingSettings.touchTestEnabled);
-    prefs.putBool("menuMusic", s_pendingSettings.backgroundMusicEnabled);
-    prefs.putBool("pmsEnabled", s_pendingSettings.pmsEnabled);
+    if (!prefs.begin("zegar", false)) return; /* zostaw dirty -> retry w kolejnym cyklu */
+
+    /* Flaga dirty czyszczona DOPIERO po potwierdzonych zapisach — wczesniej
+     * byla zerowana przed zapisem, wiec pojedynczy blad NVS cicho gubil
+     * ustawienia z Guitiona (UI pokazywalo nowe, ZEGAR wracal do starych). */
+    bool ok = true;
+    ok = (prefs.putBool("buzzerEnabled", s_pendingSettings.buzzerEnabled) != 0) && ok;
+    ok = (prefs.putBool("mqttEnabled", s_pendingSettings.mqttEnabled) != 0) && ok;
+    ok = (prefs.putBool("touchTest", s_pendingSettings.touchTestEnabled) != 0) && ok;
+    ok = (prefs.putBool("menuMusic", s_pendingSettings.backgroundMusicEnabled) != 0) && ok;
+    ok = (prefs.putBool("pmsEnabled", s_pendingSettings.pmsEnabled) != 0) && ok;
     /* Melodia: zapis DWOMA kluczami (id + indeks) jak AlarmMelodyPrefs —
      * bez tego loadIndex() czytalby stary "alarmMelodyId" po zmianie z Guitiona. */
     AlarmMelodyPrefs::saveSelection(prefs, s_pendingSettings.alarmMelodyIndex);
     /* Etap 2: jasnosc 7-seg (0..100). */
-    prefs.putUChar("segBrightness", s_pendingSettings.sevenSegBrightness);
+    ok = (prefs.putUChar("segBrightness", s_pendingSettings.sevenSegBrightness) != 0) && ok;
     prefs.end();
+
+    if (ok) {
+        s_settingsDirty = false;
+    } else {
+        LOG_W("SETTINGS", "NVS flush incomplete - retry next cycle");
+    }
 }
 
 // --- Silnik ekranu (Guition -> ZEGAR -> STM32): forward, nie ksiegowosc ---

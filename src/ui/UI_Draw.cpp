@@ -262,6 +262,11 @@ static void renderSevenSegTimerDigits();
 // sygnalizacja to blink JASNOSCI sterowany przez STM32 ramka 0xB5 —
 // zawartosc pozostaje stabilna, a jasnosc pulsuje. Zarowno alarm, jak i
 // tryb 7-seg sa niezalezne od tego, co akurat pokazuje LCD ZEGARA.
+// Rytm: tryb 1 (stoper) odswieza AppLoop::serviceSevenSegFast() z pelna
+// rozdzielczoscia wyswietlacza — co centysek w MM:SS,CS (10 ms), co
+// sekunde w HH:MM:SS; reszta 1 Hz (tickClock) + natychmiastowe redrawy
+// po zdarzeniach. Wszystko po lokalnym SPI — strumien UART do Guitiona
+// pozostaje na 100 ms.
 void updateSevenSeg() {
   if (!s_sevenSegReady) {
     return;

@@ -230,6 +230,7 @@ static void wifiInitTask(void* param) {
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
+  WiFi.setSleep(false);
   LOG_I(TAG, "WiFi init task mode=STA done=true");
   RAM_CHECKPOINT("WIFI_DRIVER_ON");
 

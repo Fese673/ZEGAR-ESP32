@@ -8,6 +8,7 @@
 #include "ClockService.h"
 #include "NetworkOrchestrator.h"
 #include "StatsManager.h"
+#include "UI_Draw.h"
 namespace RadioModeSwitch {
 void clearRTCTime();
 }
@@ -117,6 +118,12 @@ void requestModeSwitch(uint32_t modeFlag,
       (unsigned int)rtc_state.hours,
       (unsigned int)rtc_state.minutes,
       (unsigned int)rtc_state.seconds);
+
+  // Uzytkownik ma widziec ZAMIAR, zanim petla zamarznie na czas teardownu
+  // (stop MQTT/WiFi do ~8 s) — bez tego ekran wyglada jak zawieszony w
+  // losowym miejscu. Ekran przejscia istnial od dawna, ale nikt go nie
+  // wolal (audyt: jedyne wystapienie to definicja).
+  drawModeTransition();
 
   statsManager.saveStats();
   NetworkOrchestrator::quiesceForModeSwitch(nextMode);

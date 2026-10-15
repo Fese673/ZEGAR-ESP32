@@ -1,5 +1,19 @@
 # Archiwum Błędów - ZEGAR-ESP32
 ---
+### [ID: ERR_062] | COMMS_MQTT_TLS_HANDSHAKE_TIMEOUT | IMPACT: HIGH
+**Files:** `[src/comms/MQTTSync.cpp, src/comms/WiFiSync.cpp]`
+
+**PROBLEM:** ESP32 nigdy nie łączył się z HiveMQ (port 8883). Log: `[E][WiFiClientSecure.cpp:144] connect(): start_ssl_client: -1` → `Connection failed rc=-2 wifi=UP elapsed_ms=2400 failures=5/6 backoff_ms=16221/35824`, każdy pomiar tylko `Publish queued state=offline` — dane nie docierały do brokera (i dalej do bridge'a → Firebase). Test z PC do tego samego brokera: TCP 84 ms, TLS handshake 168 ms (RSA-2048, łańcuch LE), więc serwer i sieć są sprawne.
+
+**CAUSE:** `MQTTSync::applyConnectionBudget()` ustawiał `wifiClientSecure.setHandshakeTimeout(2)` → budżet 2000 ms. W arduino-esp32 2.0.17 (build z `C:\PROJEKTY\pio-home`, platform 6.13.0) pętla `mbedtls_ssl_handshake` w `ssl_client.cpp` ma cichy `if (millis()-start > handshake_timeout) return -1;` — to jedyna ścieżka zwracająca -1 bez własnego logu (błąd certu logowałby `Failed to verify peer certificate!`, timeout TCP `select returned due to timeout` — obu brak w logu). `elapsed_ms=2400` ≈ DNS+TCP (~400 ms) + 2000 ms timeoutu. Rzeczywisty handshake z ESP32 trwał >2 s (latencja radia/modem sleep), więc connect był przerywany **zawsze** przed zakończeniem. Heap (~49 KB free w trakcie), cert ISRG Root X1 i czas RTC były poprawne — nie one były przyczyną.
+
+**LOGIC_CHANGE:**
+- `MQTTSync.cpp:92`: `MQTT_TLS_HANDSHAKE_TIMEOUT_SEC` **2 → 10** (normalny handshake trwa <1 s; 10 s daje zapas na retransmisje).
+- `MQTTSync.cpp:90`: `MQTT_CONNECT_BUDGET_MS` **4500 → 20000** — bez tego nawet udane, wolne połączenie (6-12 s) byłoby rozłączane zaraz po zestawieniu przez check budżetu; connect i tak biegnie w osobnym tasku (`mqttConn`), więc UI nie zamarza.
+- `WiFiSync.cpp` `wifiInitTask()`: dodano `WiFi.setSleep(false)` — wyłączenie modem sleep (urządzenie stacjonarne, zasilanie sieciowe); eliminuje opóźnienia DTIM w RTT, które pchały handshake TLS/NTP/MQTT w okolice timeoutów.
+
+**VERIFICATION:** `python build_zegar.py` → SUCCESS (RAM 24.0%, Flash 69.6%). Oczekiwane na urządzeniu: `[MQTT][I] Connected elapsed_ms=...` i `[MQTT][I] Published bytes=...` zamiast `start_ssl_client: -1` / `Publish queued state=offline`; mostek `mqtt_firebase_bridge.py` zacznie odbierać `sensors/device1/data` (subskrybuje `sensors/#` — zgodne, client ID `raspberry-pi-bridge` ≠ `ESP32_CLOCK`, brak kolizji sesji).
+---
 ### [ID: ERR_061] | LCD_UTF8_GARBAGE | IMPACT: MEDIUM
 **Files:** `[include/display/lcdtext.h, include/display/LCDMirror.h, src/ui/UI_Draw.cpp]`
 

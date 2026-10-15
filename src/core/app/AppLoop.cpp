@@ -35,6 +35,7 @@
 #include "SafeCracker.h"
 #include "StatsManager.h"
 #include "STM32_Data.h"
+#include "StopwatchService.h"
 #include "stepper_bridge.h"  // STEPPER_BRIDGE (1/1 pump): most PC<->STM32
 #include "SystemResourcesService.h"
 #include "TANK-GAMES/TankGame.h"
@@ -236,15 +237,10 @@ static void onStoperTick(const Event&) {
   if (BootIntroService::isActive()) return;
   if (appState == STATE_STOPER) {
     drawStoper();
-    // drawStoper nie jest juz lustrem 7-seg (tryb rzadzi z Guitiona),
-    // wiec odswiezamy wyswietlacz takze na lokalnym ekranie stopera —
-    // inaczej zamarzlby (stoper ORAZ zegar w trybie 0).
-    updateSevenSeg();
-    return;
-  }
-  // Tryb 7-seg = stoper (kolko na Guitonie): setne musza odswiezac sie
-  // co 500 ms takze gdy lokalny ekran ZEGARA pokazuje cos innego.
-  if (TimeSync::getSegMode() == TimeSync::kSegModeStopwatch) {
+    // LCD 20x4 (dodatek) rysujemy 2 Hz. 7-seg tu TYLKO dla trybu 0:
+    // tickClock celowo pomija STATE_STOPER, a drawStoper nie jest juz
+    // lustrem 7-seg. Tryb 1 (stoper) odswieza serviceSevenSegFast()
+    // z rozdzielczoscia wyswietlacza (centysek).
     updateSevenSeg();
   }
 }
@@ -272,6 +268,34 @@ static void serviceSegBlink() {
     STM32data_sendSegBlink(true); // heartbeat (TTL na STM32 = 5 s)
     s_lastSendMs = nowMs;
   }
+}
+
+// ─── 7-seg: plynne odswiezanie stopera (jak Guition, ale lokalnie) ────
+// Guition rysuje stoper WLASNYM timerem LVGL co 20 ms (stopwatch_ui:
+// "Phase 2: Display — ZAWSZE lokalny") i tylko koryguje dryf ze
+// strumienia stanu 100 ms. Fizyczny 7-seg jest sterowany LOKALNIE przez
+// ZEGAR (SPI -> shift-registry; STM32 dostaje tylko linie BLANK/PWM),
+// wiec nie ma tu ZADNEJ komunikacji do nadwyrezenia — UART do Guitiona
+// zostaje na 100 ms bez zmian, a zapis klatki to ~7 us SPI.
+// Bramka jest inteligentna: zapisujemy tylko gdy zmienia sie WIDOCZNA
+// wartosc — co centysek w trybie MM:SS,CS (10 ms), a w trybie HH:MM:SS
+// tylko co sekunde. Pauza/IDLE = zero zbednych zapisow (stamp stoi),
+// a wartosc koncowa jest zawsze poprawna, bo stamp to dokladnie to,
+// co widac na wyswietlaczu (obciecie, nie zaokraglenie).
+static void serviceSevenSegFast() {
+  if (BootIntroService::isActive()) return;
+  if (TimeSync::getSegMode() != TimeSync::kSegModeStopwatch) return;
+
+  const uint32_t elapsedMs = StopwatchService::getElapsedMs();
+  const uint32_t stamp =
+      (StopwatchService::getDisplayMode() == StopwatchDisplayMode::S)
+          ? (elapsedMs / 1000UL)   // HH:MM:SS — zmiana raz na sekunde
+          : (elapsedMs / 10UL);    // MM:SS,CS — zmiana co centysek
+
+  static uint32_t s_lastStamp = 0xFFFFFFFFUL;
+  if (stamp == s_lastStamp) return;
+  s_lastStamp = stamp;
+  updateSevenSeg();
 }
 
 // ─── Handler: EV_DIAGNOSTICS (2000ms) ─────────────────────────────────
@@ -368,7 +392,8 @@ void runLoop() {
   EsptoGuition::update();
    STM32data_update();  // non-blocking, 50Hz PPG stream
    StepperBridge::update();  // STEPPER_BRIDGE: pompa mostu (idle ~0, max 8 linii + 1 ramka/100ms)
-  serviceSegBlink();   // alarm: blink jasnosci 7-seg (zmiana + heartbeat 2 s)
+   serviceSegBlink();   // alarm: blink jasnosci 7-seg (zmiana + heartbeat 2 s)
+   serviceSevenSegFast(); // 7-seg: tryb stoper co 100 ms (rytm jak do Guitiona)
   ClockAlarmService::serviceAlarmPlayback(BUZZER_PIN, ALARM_DURATION_MS);
   TimerService::servicePlayback(BUZZER_PIN, ALARM_DURATION_MS);
 

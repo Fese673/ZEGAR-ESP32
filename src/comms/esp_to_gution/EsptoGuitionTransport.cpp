@@ -65,6 +65,11 @@ void handleFrame(uint8_t type, uint8_t sequence, const uint8_t *payload,
     EsptoGuition::requestStepperRef();
     // Tryb 7-seg: po restarcie ZEGARA Guition gasi oba kolka (zawsze zegar).
     TimeSync::sendSegModeState();
+    // Resync po restarcie ZEGARA (Guition wysyla HELLO po wykryciu nowego
+    // bootId): stoper bez tego wisial zamrozony do 300 s, a blokada edycji
+    // alarmow zostawala na stale.
+    TimeSync::sendStopwatchState();
+    TimeSync::sendEditLockState();
     break;
   case kTypeRequest:
     if (payloadLength >= 1) {

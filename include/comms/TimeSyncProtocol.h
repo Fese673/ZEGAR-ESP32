@@ -24,6 +24,10 @@ constexpr uint8_t kSegModeTimer    = 2;  // odliczanie minutnika
 void sendAlarmList();
 void sendTimerState();
 void sendEditLock(bool locked);
+// Biezacy stan blokady edycji (g_alarmEditActive) — dla pelnego pushu po
+// HELLO i cyklicznego safety-refresh; samonaprawa zablokowanego klocka
+// po restarcie ZEGARA lub zgubionej ramce 0x13.
+void sendEditLockState();
 void sendStopwatchState();
 void sendSegModeState();
 

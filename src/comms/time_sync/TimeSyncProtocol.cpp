@@ -4,6 +4,7 @@
 
 #include "AlarmMelodies.h"
 #include "AlarmRuntime.h"
+#include "AppLog.h"
 #include "AppRuntime.h"
 #include "AppSettings.h"
 #include "AppState.h"
@@ -76,7 +77,12 @@ static bool alarmCoreFieldsMatch(const AlarmEntry& lhs, const AlarmEntry& rhs) {
 
 void handleAlarmListSync(const uint8_t* payload, uint16_t len) {
   if (payload == nullptr || len < 1) return;
-  if (g_alarmEditActive) return;
+  if (g_alarmEditActive) {
+    // Cicha ignorancja rozjezdzala UI z prawda (Guition juz zaktualizowal
+    // cache i pokazywal nowy stan). Odsylamy biezaca liste — revert do prawdy.
+    sendAlarmList();
+    return;
+  }
 
   uint8_t count = payload[0];
   if (count > AlarmRuntime::kMaxAlarms) {
@@ -85,6 +91,18 @@ void handleAlarmListSync(const uint8_t* payload, uint16_t len) {
 
   const uint16_t requiredLen = static_cast<uint16_t>(1 + (count * 7));
   if (len < requiredLen) return;
+
+  // Walidacja CALOSCI przed jakimkolwiek zapisem (atomowo: albo cala lista,
+  // albo zadna). Bledne godziny/minute nie moga utrwalic alarmu, ktory nigdy
+  // nie zadzwoni — to cicha utrata funkcji bezpieczenstwa.
+  for (int i = 0; i < count; ++i) {
+    const uint8_t* p = payload + 1 + (i * 7);
+    if (p[0] > 23U || p[1] > 59U) {
+      LOG_W("TSYNC", "alarm list entry %d invalid h=%u m=%u - reject", i, p[0], p[1]);
+      sendAlarmList();  // revert do prawdy
+      return;
+    }
+  }
 
   auto& st = AlarmRuntime::mutableState();
   AlarmEntry previous[AlarmRuntime::kMaxAlarms] = {};
@@ -100,8 +118,8 @@ void handleAlarmListSync(const uint8_t* payload, uint16_t len) {
     next.hour = p[0];
     next.minute = p[1];
     next.enabled = p[2] != 0;
-    next.dayMask = p[3];
-    next.flags = p[4];
+    next.dayMask = p[3] & 0x7FU;   // bity 0-6 = dni tygodnia (jak ClockAlarmService)
+    next.flags = p[4] & 0x01U;     // whitelist: bit0 = singleShot (inne nieznane)
     next.lastTriggerDay = UINT16_MAX;
 
     for (int j = 0; j < previousCount; ++j) {
@@ -133,19 +151,32 @@ void handleSetAlarm(const uint8_t* payload, uint16_t len) {
   // Format: [index(1)] [hour(1)] [min(1)] [enabled(1)] [dayMask(1)] [flags(1)]
   if (len < 6) return;
 
-  // Odrzuć jeśli użytkownik edytuje alarm enkoderem
-  if (g_alarmEditActive) return;
+  // Odrzuć jeśli użytkownik edytuje alarm enkoderem (revert listy do prawdy,
+  // nie cicha ignorancja — inaczej HMI pokazuje stan, ktory nie istnieje).
+  if (g_alarmEditActive) {
+    sendAlarmList();
+    return;
+  }
 
   int idx = payload[0];
   if (idx < 0 || idx >= AlarmRuntime::kMaxAlarms) return;
+
+  // Walidacja zakresow: godzina >23 utrwalilaby alarm, ktory NIGDY nie
+  // zadzwoni (cicha utrata funkcji), a dowolne bity dayMask/flags moglyby
+  // go trwale wylaczyc po pierwszym odpaleniu.
+  if (payload[1] > 23U || payload[2] > 59U) {
+    LOG_W("TSYNC", "set alarm invalid h=%u m=%u - reject", payload[1], payload[2]);
+    sendAlarmList();
+    return;
+  }
 
   auto& st = AlarmRuntime::mutableState();
   AlarmEntry& a = st.alarms[idx];
   a.hour = payload[1];
   a.minute = payload[2];
   a.enabled = payload[3] != 0;
-  a.dayMask = payload[4];
-  a.flags = payload[5];
+  a.dayMask = payload[4] & 0x7FU;
+  a.flags = payload[5] & 0x01U;
   a.lastTriggerDay = UINT16_MAX;
 
   // Jeśli to nowy alarm (index >= count) zwiększ licznik
@@ -242,6 +273,14 @@ uint8_t getSegMode() {
 void sendSegModeState() {
   uint8_t buf[1] = { s_segMode };
   EsptoGuition::sendRawFrame(kTypeSegModeState, EsptoGuition::nextSequence(), buf, 1);
+}
+
+// Stan blokady edycji alarmow jako ramka 0x13 (ta sama, ktora UI wysyla przy
+// wejsciu/wyjsciu z sesji enkodera). Uzywana w pelnym pushu po HELLO i w
+// safety-refresh — inaczej zgubione 0x13 (albo restart ZEGARA w trakcie
+// edycji) zostawialo Guition zablokowany bezterminowo.
+void sendEditLockState() {
+  sendEditLock(g_alarmEditActive);
 }
 
 bool handleSegModeCmd(const uint8_t* payload, uint16_t len) {

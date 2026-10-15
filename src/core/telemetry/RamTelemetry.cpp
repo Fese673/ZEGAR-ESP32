@@ -130,8 +130,14 @@ Snapshot snapshot() {
   Snapshot values;
   values.freeHeap = ESP.getFreeHeap();
   values.totalHeap = ESP.getHeapSize();
-  values.largestFreeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  values.dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
+  // O(1): heap_caps_get_largest_free_block() chodzi po liscie wolnych
+  // blokow z mutexami (>10 ms CPU-lock przy sfragmentowanej stercie) i jest
+  // wolany z loopTask co 5 s — dokladnie ten wzorzec, ktorego projekt
+  // zakazuje w SystemResourcesService. getMaxAllocHeap ma te sama semantyke.
+  values.largestFreeBlock = ESP.getMaxAllocHeap();
+  // Aproksymacja DMA bez O(N) (wzorzec SystemResourcesService: wiekszosc
+  // wolnego RAMu wewnetrznego na ESP32 jest DMA-capable).
+  values.dmaFree = values.freeHeap;
   values.minFreeHeap = ESP.getMinFreeHeap();
 
   if (values.freeHeap > 0U) {

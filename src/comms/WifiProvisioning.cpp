@@ -148,17 +148,29 @@ bool saveCredentialsToNvs(const char* ssid, const char* pass) {
     LOG_E(TAG, "NVS open failed");
     return false;
   }
+  // Rollback: przy nieudanym drugim zapisie NVS nie moze zostac w stanie
+  // "nowy SSID + stare haslo" — po restarcie urzadzenie nie wstanie w sieci,
+  // a uzytkownik nie ma jak tego naprawic bez panelu. Zapamietujemy stare
+  // wartosci i przywracamy je przy bledzie (best-effort — NVS moze byc pelny).
+  const bool hadSsid = prefs.isKey("wifiSsid");
+  const bool hadPass = prefs.isKey("wifiPass");
+  const String prevSsid = hadSsid ? prefs.getString("wifiSsid", "") : String();
+  const String prevPass = hadPass ? prefs.getString("wifiPass", "") : String();
+
   const size_t wSsid = prefs.putString("wifiSsid", ssid);
   const size_t wPass = prefs.putString("wifiPass", pass);
-  prefs.end();
 
   // putString("") zwraca 0 (dlugosc pustego stringa) — sieci otwarte maja
   // puste haslo, wiec zero jest POPRAWNE gdy haslo jest puste.
   const bool passOk = (pass[0] == '\0') || (wPass > 0);
   if (wSsid == 0 || !passOk) {
-    LOG_E(TAG, "NVS write failed ssid=%u pass=%u", (unsigned)wSsid, (unsigned)wPass);
+    if (hadSsid) prefs.putString("wifiSsid", prevSsid); else prefs.remove("wifiSsid");
+    if (hadPass) prefs.putString("wifiPass", prevPass); else prefs.remove("wifiPass");
+    prefs.end();
+    LOG_E(TAG, "NVS write failed ssid=%u pass=%u (rollback)", (unsigned)wSsid, (unsigned)wPass);
     return false;
   }
+  prefs.end();
 
   portENTER_CRITICAL(&s_savedMux);
   strncpy(s_savedSsid, ssid, kSsidLenMax);

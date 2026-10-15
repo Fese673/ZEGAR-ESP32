@@ -27,7 +27,7 @@ extern "C" bool btInUse() {
 namespace {
 
 constexpr char TAG[] = "BT";
-constexpr char kSinkName[] = "ESP32-BASS";
+constexpr char kSinkName[] = "T I C K I N G • B O M B";
 
 constexpr int kSampleRateHz = 44100;
 constexpr int kBitsPerSample = 16;

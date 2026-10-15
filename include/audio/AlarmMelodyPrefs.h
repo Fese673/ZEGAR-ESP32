@@ -4,6 +4,8 @@
 namespace AlarmMelodyPrefs {
 
 int loadIndex(Preferences& prefs);
-void saveSelection(Preferences& prefs, int melodyIndex);
+// Zwraca true tylko gdy OBA klucze zapisaly sie poprawnie (retry po stronie
+// wolajacego zamiast cichej utraty wyboru melodii).
+bool saveSelection(Preferences& prefs, int melodyIndex);
 
 }  // namespace AlarmMelodyPrefs

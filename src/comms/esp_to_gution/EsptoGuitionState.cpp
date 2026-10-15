@@ -595,8 +595,21 @@ void musicSettingsFlush() {
     music_settings_flush();
     if (!s_settingsDirty) return;
 
+    /* Flush jest wolany co ~200 ms z broadcastu snapshotow. Przy trwale
+     * awaryjnym NVS nie wolno katowac flasha i logu 5 zapisami na cykl —
+     * retry z backoffem 2 s, flaga dirty zostaje do skutku. */
+    static uint32_t s_flushRetryAfterMs = 0U;
+    const uint32_t nowMs = millis();
+    if (s_flushRetryAfterMs != 0U &&
+        (int32_t)(nowMs - s_flushRetryAfterMs) < 0) {
+        return;
+    }
+
     Preferences prefs;
-    if (!prefs.begin("zegar", false)) return; /* zostaw dirty -> retry w kolejnym cyklu */
+    if (!prefs.begin("zegar", false)) {
+        s_flushRetryAfterMs = nowMs + 2000U;
+        return; /* zostaw dirty -> retry po backoffie */
+    }
 
     /* Flaga dirty czyszczona DOPIERO po potwierdzonych zapisach — wczesniej
      * byla zerowana przed zapisem, wiec pojedynczy blad NVS cicho gubil
@@ -608,16 +621,20 @@ void musicSettingsFlush() {
     ok = (prefs.putBool("menuMusic", s_pendingSettings.backgroundMusicEnabled) != 0) && ok;
     ok = (prefs.putBool("pmsEnabled", s_pendingSettings.pmsEnabled) != 0) && ok;
     /* Melodia: zapis DWOMA kluczami (id + indeks) jak AlarmMelodyPrefs —
-     * bez tego loadIndex() czytalby stary "alarmMelodyId" po zmianie z Guitiona. */
-    AlarmMelodyPrefs::saveSelection(prefs, s_pendingSettings.alarmMelodyIndex);
+     * bez tego loadIndex() czytalby stary "alarmMelodyId" po zmianie z Guitiona.
+     * saveSelection zwraca teraz wynik — melodia jest czescia tej samej
+     * gwarancji co reszta (bez tego jej blad cicho czyscil flage dirty). */
+    ok = AlarmMelodyPrefs::saveSelection(prefs, s_pendingSettings.alarmMelodyIndex) && ok;
     /* Etap 2: jasnosc 7-seg (0..100). */
     ok = (prefs.putUChar("segBrightness", s_pendingSettings.sevenSegBrightness) != 0) && ok;
     prefs.end();
 
     if (ok) {
         s_settingsDirty = false;
+        s_flushRetryAfterMs = 0U;
     } else {
-        LOG_W("SETTINGS", "NVS flush incomplete - retry next cycle");
+        s_flushRetryAfterMs = nowMs + 2000U;
+        LOG_W("SETTINGS", "NVS flush incomplete - retry in 2s");
     }
 }
 
